@@ -1,0 +1,21 @@
+[Desktop Entry]
+Type=Application
+Name=TuxDisplay
+Comment=Use an iPad browser as a real extended monitor
+Exec=tuxdisplay gui
+Icon=tuxdisplay
+Terminal=false
+Categories=Network;RemoteAccess;
+Keywords=iPad;display;monitor;USB;Wayland;VNC;noVNC;
+StartupNotify=true
+
+
+Actions=Start;Close;
+
+[Desktop Action Start]
+Name=Start display
+Exec=tuxdisplay start
+
+[Desktop Action Close]
+Name=Close connection
+Exec=tuxdisplay stop

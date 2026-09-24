@@ -1,0 +1,498 @@
+#!/usr/bin/python3
+"""Expose a real GNOME Wayland virtual monitor to a browser."""
+
+from __future__ import annotations
+
+import hmac
+import json
+import os
+from pathlib import Path
+import secrets
+import signal
+import sys
+import threading
+from http import HTTPStatus
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.cookies import SimpleCookie
+from typing import Any
+
+import gi
+
+gi.require_version("Gst", "1.0")
+gi.require_version("GstApp", "1.0")
+from gi.repository import Gio, GLib, Gst  # type: ignore  # noqa: E402
+
+
+REMOTE_DEST = "org.gnome.Mutter.RemoteDesktop"
+REMOTE_ROOT = "/org/gnome/Mutter/RemoteDesktop"
+REMOTE_ROOT_IFACE = "org.gnome.Mutter.RemoteDesktop"
+REMOTE_SESSION_IFACE = "org.gnome.Mutter.RemoteDesktop.Session"
+CAST_DEST = "org.gnome.Mutter.ScreenCast"
+CAST_ROOT = "/org/gnome/Mutter/ScreenCast"
+CAST_ROOT_IFACE = "org.gnome.Mutter.ScreenCast"
+CAST_SESSION_IFACE = "org.gnome.Mutter.ScreenCast.Session"
+CAST_STREAM_IFACE = "org.gnome.Mutter.ScreenCast.Stream"
+PROPERTIES_IFACE = "org.freedesktop.DBus.Properties"
+
+
+def unpack(value: Any) -> Any:
+    while hasattr(value, "unpack"):
+        value = value.unpack()
+    return value
+
+
+def read_config() -> tuple[int, int, int]:
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    values = {"RESOLUTION": "1920x1080", "WEB_PORT": "6080"}
+    path = config_home / "tuxdisplay" / "config"
+    if path.exists():
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if "=" not in line or line.lstrip().startswith("#"):
+                continue
+            key, value = line.split("=", 1)
+            if key.strip() in values:
+                values[key.strip()] = value.strip()
+    try:
+        width, height = (int(part) for part in values["RESOLUTION"].split("x", 1))
+        port = int(values["WEB_PORT"])
+    except (ValueError, TypeError):
+        return 1920, 1080, 6080
+    if not (320 <= width <= 8192 and 240 <= height <= 8192):
+        width, height = 1920, 1080
+    if not 1024 <= port <= 65535:
+        port = 6080
+    return width, height, port
+
+
+def ensure_pin() -> str:
+    config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+    directory = config_home / "tuxdisplay"
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    path = directory / "password"
+    try:
+        pin = path.read_text(encoding="utf-8").strip()
+    except OSError:
+        pin = ""
+    if len(pin) != 6 or not pin.isdigit():
+        pin = f"{secrets.randbelow(1_000_000):06d}"
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(pin + "\n", encoding="utf-8")
+        temporary.chmod(0o600)
+        temporary.replace(path)
+    return pin
+
+
+class TuxDisplayServer(ThreadingHTTPServer):
+    daemon_threads = True
+    allow_reuse_address = True
+
+    def __init__(self, address: tuple[str, int], app: "WaylandDisplay") -> None:
+        self.app = app
+        super().__init__(address, RequestHandler)
+
+
+class RequestHandler(BaseHTTPRequestHandler):
+    server: TuxDisplayServer
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, fmt: str, *args: object) -> None:
+        print(f"http: {self.address_string()} {fmt % args}", file=sys.stderr)
+
+    def send_bytes(self, status: int, content_type: str, data: bytes, headers: dict[str, str] | None = None) -> None:
+        self.send_response(status)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(data)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("X-Content-Type-Options", "nosniff")
+        self.send_header("Referrer-Policy", "no-referrer")
+        if headers:
+            for key, value in headers.items():
+                self.send_header(key, value)
+        self.end_headers()
+        self.wfile.write(data)
+
+    def authenticated(self) -> bool:
+        raw = self.headers.get("Cookie", "")
+        cookie = SimpleCookie()
+        try:
+            cookie.load(raw)
+        except Exception:
+            return False
+        item = cookie.get("tuxdisplay")
+        return bool(item and hmac.compare_digest(item.value, self.server.app.token))
+
+    def json_body(self) -> dict[str, Any] | None:
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            return None
+        if not 0 < length <= 8192:
+            return None
+        try:
+            value = json.loads(self.rfile.read(length))
+        except (json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    def do_GET(self) -> None:  # noqa: N802
+        path = self.path.split("?", 1)[0]
+        if path in ("/", "/index.html"):
+            self.send_bytes(
+                HTTPStatus.OK,
+                "text/html; charset=utf-8",
+                self.server.app.viewer_html,
+                {
+                    "Content-Security-Policy": "default-src 'self'; img-src 'self'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'",
+                },
+            )
+            return
+        if path == "/health":
+            self.send_bytes(HTTPStatus.OK, "text/plain; charset=utf-8", b"ok\n")
+            return
+        if not self.authenticated():
+            self.send_bytes(HTTPStatus.UNAUTHORIZED, "application/json", b'{"error":"PIN required"}')
+            return
+        if path == "/status":
+            body = json.dumps(
+                {
+                    "mode": "GNOME Wayland extended monitor",
+                    "width": self.server.app.width,
+                    "height": self.server.app.height,
+                    "monitor": "Meta-0",
+                }
+            ).encode()
+            self.send_bytes(HTTPStatus.OK, "application/json", body)
+            return
+        if path == "/stream.mjpg":
+            self.stream_mjpeg()
+            return
+        self.send_bytes(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"Not found\n")
+
+    def do_POST(self) -> None:  # noqa: N802
+        path = self.path.split("?", 1)[0]
+        body = self.json_body()
+        if body is None:
+            self.send_bytes(HTTPStatus.BAD_REQUEST, "application/json", b'{"error":"Invalid request"}')
+            return
+        if path == "/auth":
+            candidate = str(body.get("pin", ""))
+            if not hmac.compare_digest(candidate, self.server.app.pin):
+                self.send_bytes(HTTPStatus.FORBIDDEN, "application/json", b'{"error":"Incorrect PIN"}')
+                return
+            self.send_bytes(
+                HTTPStatus.OK,
+                "application/json",
+                b'{"ok":true}',
+                {"Set-Cookie": f"tuxdisplay={self.server.app.token}; Path=/; HttpOnly; SameSite=Strict"},
+            )
+            return
+        if not self.authenticated():
+            self.send_bytes(HTTPStatus.UNAUTHORIZED, "application/json", b'{"error":"PIN required"}')
+            return
+        if path == "/input":
+            try:
+                self.server.app.handle_input(body)
+            except (ValueError, TypeError, GLib.Error) as error:
+                self.send_bytes(HTTPStatus.BAD_REQUEST, "application/json", json.dumps({"error": str(error)}).encode())
+                return
+            self.send_bytes(HTTPStatus.OK, "application/json", b'{"ok":true}')
+            return
+        self.send_bytes(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"Not found\n")
+
+    def stream_mjpeg(self) -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+        self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        generation = -1
+        self.server.app.client_opened()
+        try:
+            while True:
+                with self.server.app.frame_ready:
+                    self.server.app.frame_ready.wait_for(
+                        lambda: self.server.app.frame_generation != generation or self.server.app.stopping,
+                        timeout=15,
+                    )
+                    if self.server.app.stopping:
+                        return
+                    frame = self.server.app.frame
+                    generation = self.server.app.frame_generation
+                if not frame:
+                    continue
+                self.wfile.write(b"--frame\r\nContent-Type: image/jpeg\r\nContent-Length: ")
+                self.wfile.write(str(len(frame)).encode("ascii"))
+                self.wfile.write(b"\r\n\r\n")
+                self.wfile.write(frame)
+                self.wfile.write(b"\r\n")
+                self.wfile.flush()
+        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+            return
+        finally:
+            self.server.app.client_closed()
+
+
+class WaylandDisplay:
+    def __init__(self) -> None:
+        self.width, self.height, self.port = read_config()
+        self.pin = ensure_pin()
+        self.token = secrets.token_urlsafe(32)
+        self.frame = b""
+        self.frame_generation = 0
+        self.frame_ready = threading.Condition()
+        self.stopping = False
+        self.active_streams = 0
+        self.client_lock = threading.Lock()
+        self.pipeline: Gst.Pipeline | None = None
+        self.remote_session = ""
+        self.stream_path = ""
+        self.mapping_id = ""
+        self.node_id: int | None = None
+        self.loop = GLib.MainLoop()
+        self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+        viewer = Path("/usr/share/tuxdisplay/wayland-viewer.html")
+        if not viewer.exists():
+            viewer = Path(__file__).resolve().parents[2] / "share/tuxdisplay/wayland-viewer.html"
+        self.viewer_html = viewer.read_bytes()
+
+    def call(self, destination: str, path: str, interface: str, method: str, parameters: GLib.Variant | None = None, reply: GLib.VariantType | None = None) -> GLib.Variant:
+        return self.bus.call_sync(destination, path, interface, method, parameters, reply, Gio.DBusCallFlags.NONE, 10_000, None)
+
+    def get_property(self, destination: str, path: str, interface: str, name: str) -> Any:
+        value = self.call(
+            destination,
+            path,
+            PROPERTIES_IFACE,
+            "Get",
+            GLib.Variant("(ss)", (interface, name)),
+            GLib.VariantType("(v)"),
+        ).unpack()[0]
+        return unpack(value)
+
+    def create_monitor(self) -> None:
+        self.remote_session = self.call(REMOTE_DEST, REMOTE_ROOT, REMOTE_ROOT_IFACE, "CreateSession").unpack()[0]
+        session_id = self.get_property(REMOTE_DEST, self.remote_session, REMOTE_SESSION_IFACE, "SessionId")
+        cast_session = self.call(
+            CAST_DEST,
+            CAST_ROOT,
+            CAST_ROOT_IFACE,
+            "CreateSession",
+            GLib.Variant("(a{sv})", ({"remote-desktop-session-id": GLib.Variant("s", session_id)},)),
+        ).unpack()[0]
+        self.stream_path = ""
+        mode = {
+            "size": GLib.Variant("(uu)", (self.width, self.height)),
+            "refresh-rate": GLib.Variant("d", 60.0),
+            "is-preferred": GLib.Variant("b", True),
+        }
+        cast_stream = self.call(
+            CAST_DEST,
+            cast_session,
+            CAST_SESSION_IFACE,
+            "RecordVirtual",
+            GLib.Variant(
+                "(a{sv})",
+                (
+                    {
+                        "cursor-mode": GLib.Variant("u", 1),
+                        "is-platform": GLib.Variant("b", True),
+                        "modes": GLib.Variant("aa{sv}", [mode]),
+                    },
+                ),
+            ),
+        ).unpack()[0]
+        self.stream_path = cast_stream
+        parameters = self.get_property(CAST_DEST, cast_stream, CAST_STREAM_IFACE, "Parameters")
+        self.mapping_id = unpack(parameters.get("mapping-id", ""))
+        if not self.mapping_id:
+            raise RuntimeError("Mutter did not provide an input mapping for the virtual monitor")
+
+        wait_loop = GLib.MainLoop()
+
+        def stream_added(_connection: Gio.DBusConnection, _sender: str, _path: str, _interface: str, _signal: str, values: GLib.Variant) -> None:
+            self.node_id = int(values.unpack()[0])
+            wait_loop.quit()
+
+        self.bus.signal_subscribe(CAST_DEST, CAST_STREAM_IFACE, "PipeWireStreamAdded", cast_stream, None, Gio.DBusSignalFlags.NONE, stream_added)
+        self.call(REMOTE_DEST, self.remote_session, REMOTE_SESSION_IFACE, "Start")
+
+        def timed_out() -> bool:
+            wait_loop.quit()
+            return GLib.SOURCE_REMOVE
+
+        timeout_id = GLib.timeout_add_seconds(10, timed_out)
+        wait_loop.run()
+        GLib.source_remove(timeout_id)
+        if self.node_id is None:
+            raise RuntimeError("Timed out waiting for Mutter's PipeWire stream")
+
+    def start_pipeline(self) -> None:
+        Gst.init(None)
+        description = (
+            f"pipewiresrc path={self.node_id} do-timestamp=true "
+            f"! video/x-raw,format=BGRx,width={self.width},height={self.height} "
+            "! queue max-size-buffers=1 leaky=downstream "
+            "! videorate drop-only=true max-rate=30 "
+            "! videoconvert "
+            "! jpegenc quality=76 "
+            "! appsink name=sink emit-signals=true max-buffers=1 drop=true sync=false"
+        )
+        pipeline = Gst.parse_launch(description)
+        if not isinstance(pipeline, Gst.Pipeline):
+            raise RuntimeError("Could not create the video pipeline")
+        self.pipeline = pipeline
+        sink = pipeline.get_by_name("sink")
+        sink.connect("new-sample", self.on_sample)
+        messages = pipeline.get_bus()
+        messages.add_signal_watch()
+        messages.connect("message", self.on_pipeline_message)
+        result = pipeline.set_state(Gst.State.PLAYING)
+        if result == Gst.StateChangeReturn.FAILURE:
+            raise RuntimeError("PipeWire video pipeline could not start")
+
+    def on_sample(self, sink: Any) -> Gst.FlowReturn:
+        sample = sink.emit("pull-sample")
+        if sample is None:
+            return Gst.FlowReturn.ERROR
+        buffer = sample.get_buffer()
+        ok, info = buffer.map(Gst.MapFlags.READ)
+        if not ok:
+            return Gst.FlowReturn.ERROR
+        try:
+            data = bytes(info.data)
+        finally:
+            buffer.unmap(info)
+        with self.frame_ready:
+            self.frame = data
+            self.frame_generation += 1
+            self.frame_ready.notify_all()
+        return Gst.FlowReturn.OK
+
+    def on_pipeline_message(self, _bus: Gst.Bus, message: Gst.Message) -> None:
+        if message.type == Gst.MessageType.ERROR:
+            error, detail = message.parse_error()
+            print(f"TuxDisplay video error: {error.message}; {detail}", file=sys.stderr)
+            self.loop.quit()
+
+    def remote_input(self, method: str, signature: str, values: tuple[Any, ...]) -> None:
+        self.call(REMOTE_DEST, self.remote_session, REMOTE_SESSION_IFACE, method, GLib.Variant(signature, values))
+
+    def handle_input(self, event: dict[str, Any]) -> None:
+        kind = str(event.get("type", ""))
+        x = min(float(self.width), max(0.0, float(event.get("x", 0))))
+        y = min(float(self.height), max(0.0, float(event.get("y", 0))))
+        if kind == "motion":
+            self.remote_input("NotifyPointerMotionAbsolute", "(sdd)", (self.stream_path, x, y))
+        elif kind == "button":
+            button_map = {0: 272, 1: 274, 2: 273}
+            button = button_map.get(int(event.get("button", -1)))
+            if button is None:
+                raise ValueError("Unsupported pointer button")
+            self.remote_input("NotifyPointerMotionAbsolute", "(sdd)", (self.stream_path, x, y))
+            self.remote_input("NotifyPointerButton", "(ib)", (button, bool(event.get("down"))))
+        elif kind == "wheel":
+            dx = max(-120.0, min(120.0, float(event.get("dx", 0)))) / 10.0
+            dy = max(-120.0, min(120.0, float(event.get("dy", 0)))) / 10.0
+            self.remote_input("NotifyPointerAxis", "(ddu)", (dx, dy, 0))
+        elif kind in ("touch_down", "touch_move"):
+            slot = int(event.get("slot", 0))
+            if not 0 <= slot <= 31:
+                raise ValueError("Invalid touch slot")
+            method = "NotifyTouchDown" if kind == "touch_down" else "NotifyTouchMotion"
+            self.remote_input(method, "(sudd)", (self.stream_path, slot, x, y))
+        elif kind == "touch_up":
+            slot = int(event.get("slot", 0))
+            if not 0 <= slot <= 31:
+                raise ValueError("Invalid touch slot")
+            self.remote_input("NotifyTouchUp", "(u)", (slot,))
+        elif kind == "key":
+            keysym = int(event.get("keysym", 0))
+            if not 0 < keysym <= 0x11FFFFFF:
+                raise ValueError("Invalid key symbol")
+            self.remote_input("NotifyKeyboardKeysym", "(ub)", (keysym, bool(event.get("down"))))
+        else:
+            raise ValueError("Unsupported input event")
+
+    def start_http(self) -> None:
+        self.write_client_state()
+        self.http = TuxDisplayServer(("0.0.0.0", self.port), self)
+        self.http_thread = threading.Thread(target=self.http.serve_forever, name="tuxdisplay-http", daemon=True)
+        self.http_thread.start()
+
+    def write_client_state(self) -> None:
+        state_home = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+        directory = state_home / "tuxdisplay"
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        path = directory / "clients.json"
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"active_streams": self.active_streams}) + "\n", encoding="utf-8")
+        temporary.chmod(0o600)
+        temporary.replace(path)
+
+    def client_opened(self) -> None:
+        with self.client_lock:
+            self.active_streams += 1
+            self.write_client_state()
+
+    def client_closed(self) -> None:
+        with self.client_lock:
+            self.active_streams = max(0, self.active_streams - 1)
+            self.write_client_state()
+
+    def write_mode(self) -> None:
+        state_home = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+        directory = state_home / "tuxdisplay"
+        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        (directory / "mode").write_text("wayland\n", encoding="utf-8")
+
+    def stop(self) -> None:
+        if self.stopping:
+            return
+        self.stopping = True
+        with self.client_lock:
+            self.active_streams = 0
+            self.write_client_state()
+        with self.frame_ready:
+            self.frame_ready.notify_all()
+        if hasattr(self, "http"):
+            shutdown = threading.Thread(target=self.http.shutdown, name="tuxdisplay-http-stop", daemon=True)
+            shutdown.start()
+            shutdown.join(timeout=2)
+            self.http.server_close()
+        if self.remote_session:
+            try:
+                self.call(REMOTE_DEST, self.remote_session, REMOTE_SESSION_IFACE, "Stop")
+            except GLib.Error:
+                pass
+        if self.pipeline is not None:
+            self.pipeline.set_state(Gst.State.NULL)
+
+    def run(self) -> None:
+        try:
+            self.create_monitor()
+            self.start_pipeline()
+            self.start_http()
+            self.write_mode()
+            print(f"TuxDisplay native monitor {self.width}x{self.height} at http://0.0.0.0:{self.port}/", flush=True)
+
+            def quit_loop(_signum: int, _frame: object) -> None:
+                self.loop.quit()
+
+            signal.signal(signal.SIGTERM, quit_loop)
+            signal.signal(signal.SIGINT, quit_loop)
+            self.loop.run()
+        finally:
+            self.stop()
+
+
+def main() -> int:
+    try:
+        WaylandDisplay().run()
+    except (GLib.Error, RuntimeError, OSError) as error:
+        print(f"TuxDisplay could not create a GNOME Wayland monitor: {error}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

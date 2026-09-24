@@ -1,0 +1,151 @@
+#!/bin/sh
+set -eu
+
+# GNOME ScreenCast/RemoteDesktop creates a compositor-owned virtual output.
+# Keep the original Xvfb/noVNC workspace for other desktops.
+if [ "${TUXDISPLAY_FORCE_X11:-0}" != "1" ]; then
+    case "${XDG_CURRENT_DESKTOP:-}:${XDG_SESSION_TYPE:-}" in
+        *GNOME*:wayland|*gnome*:wayland)
+            exec /usr/lib/tuxdisplay/tuxdisplay-wayland
+            ;;
+    esac
+fi
+
+td_config_home=${XDG_CONFIG_HOME:-"$HOME/.config"}
+td_state_home=${XDG_STATE_HOME:-"$HOME/.local/state"}
+td_config_dir="$td_config_home/tuxdisplay"
+td_state_dir="$td_state_home/tuxdisplay"
+td_config_file="$td_config_dir/config"
+td_password_file="$td_config_dir/password"
+td_rfb_password_file="$td_config_dir/password.rfb"
+td_xauthority="$td_config_dir/Xauthority"
+
+mkdir -p "$td_config_dir" "$td_state_dir"
+chmod 700 "$td_config_dir" "$td_state_dir"
+printf '%s\n' x11 >"$td_state_dir/mode"
+
+if [ ! -f "$td_config_file" ]; then
+    /usr/bin/tuxdisplay url >/dev/null
+fi
+
+td_read_config() {
+    td_key=$1
+    td_fallback=$2
+    td_value=$(sed -n "s/^${td_key}=//p" "$td_config_file" 2>/dev/null | tail -n 1)
+    if [ -n "$td_value" ]; then
+        printf '%s' "$td_value"
+    else
+        printf '%s' "$td_fallback"
+    fi
+}
+
+td_resolution=$(td_read_config RESOLUTION 1920x1080)
+td_display_number=$(td_read_config DISPLAY_NUMBER 48)
+td_web_port=$(td_read_config WEB_PORT 6080)
+td_vnc_port=$(td_read_config VNC_PORT 5900)
+
+case "$td_resolution" in
+    *[!0-9x]*|*x*x*|x*|*x) td_resolution=1920x1080 ;;
+esac
+case "$td_display_number" in *[!0-9]*|'') td_display_number=48 ;; esac
+case "$td_web_port" in *[!0-9]*|'') td_web_port=6080 ;; esac
+case "$td_vnc_port" in *[!0-9]*|'') td_vnc_port=5900 ;; esac
+
+if [ ! -s "$td_password_file" ] || [ ! -s "$td_rfb_password_file" ]; then
+    TUXDISPLAY_SESSION=1 /usr/bin/tuxdisplay password --reset >/dev/null
+fi
+
+td_cookie=$(mcookie)
+touch "$td_xauthority"
+chmod 600 "$td_xauthority"
+xauth -f "$td_xauthority" remove ":$td_display_number" >/dev/null 2>&1 || true
+xauth -f "$td_xauthority" add ":$td_display_number" . "$td_cookie"
+
+export DISPLAY=":$td_display_number"
+export XAUTHORITY="$td_xauthority"
+unset WAYLAND_DISPLAY WAYLAND_SOCKET
+export XDG_SESSION_TYPE=x11
+export GDK_BACKEND=x11
+export QT_QPA_PLATFORM=xcb
+export MOZ_ENABLE_WAYLAND=0
+
+td_xvfb_log="$td_state_dir/xvfb.log"
+td_desktop_log="$td_state_dir/desktop.log"
+td_vnc_log="$td_state_dir/x11vnc.log"
+td_web_log="$td_state_dir/websockify.log"
+
+Xvfb "$DISPLAY" -screen 0 "${td_resolution}x24" -nolisten tcp -noreset -auth "$td_xauthority" >"$td_xvfb_log" 2>&1 &
+td_xvfb_pid=$!
+
+td_cleanup() {
+    trap - EXIT INT TERM HUP
+    for td_pid in ${td_web_pid:-} ${td_vnc_pid:-} ${td_tint_pid:-} ${td_openbox_pid:-} ${td_xvfb_pid:-}; do
+        if [ -n "$td_pid" ]; then
+            kill "$td_pid" >/dev/null 2>&1 || true
+        fi
+    done
+    wait >/dev/null 2>&1 || true
+}
+trap td_cleanup EXIT INT TERM HUP
+
+td_ready=0
+td_count=0
+while [ "$td_count" -lt 100 ]; do
+    if xdpyinfo -display "$DISPLAY" >/dev/null 2>&1; then
+        td_ready=1
+        break
+    fi
+    if ! kill -0 "$td_xvfb_pid" >/dev/null 2>&1; then
+        break
+    fi
+    td_count=$((td_count + 1))
+    sleep 0.05
+done
+if [ "$td_ready" -ne 1 ]; then
+    echo "TuxDisplay: Xvfb did not become ready; see $td_xvfb_log" >&2
+    exit 1
+fi
+
+xsetroot -solid '#111827' >/dev/null 2>&1 || true
+openbox --config-file /usr/share/tuxdisplay/openbox/rc.xml >"$td_desktop_log" 2>&1 &
+td_openbox_pid=$!
+tint2 -c /usr/share/tuxdisplay/tint2/tint2rc >>"$td_desktop_log" 2>&1 &
+td_tint_pid=$!
+
+/usr/bin/xterm -title "TuxDisplay" -geometry 86x25+90+90 -e /usr/lib/tuxdisplay/tuxdisplay-welcome >>"$td_desktop_log" 2>&1 &
+
+x11vnc \
+    -display "$DISPLAY" \
+    -rfbport "$td_vnc_port" \
+    -rfbauth "$td_rfb_password_file" \
+    -localhost \
+    -forever \
+    -shared \
+    -xkb \
+    -noxrecord >"$td_vnc_log" 2>&1 &
+td_vnc_pid=$!
+
+td_count=0
+while [ "$td_count" -lt 100 ]; do
+    if python3 - "$td_vnc_port" <<'PY'
+import socket
+import sys
+
+with socket.socket() as sock:
+    sock.settimeout(0.05)
+    raise SystemExit(0 if sock.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)
+PY
+    then
+        break
+    fi
+    if ! kill -0 "$td_vnc_pid" >/dev/null 2>&1; then
+        echo "TuxDisplay: x11vnc stopped unexpectedly; see $td_vnc_log" >&2
+        exit 1
+    fi
+    td_count=$((td_count + 1))
+    sleep 0.05
+done
+
+websockify --web /usr/share/tuxdisplay/web "0.0.0.0:$td_web_port" "127.0.0.1:$td_vnc_port" >"$td_web_log" 2>&1 &
+td_web_pid=$!
+wait "$td_web_pid"

@@ -1,0 +1,15 @@
+[Unit]
+Description=TuxDisplay USB CDC ECM gadget network
+Documentation=file:///usr/share/doc/tuxdisplay/README.md
+ConditionPathExists=/sys/class/udc
+After=local-fs.target
+Before=network.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/tuxdisplay-usb setup
+ExecStop=/usr/sbin/tuxdisplay-usb teardown
+
+[Install]
+WantedBy=multi-user.target

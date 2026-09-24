@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<openbox_menu xmlns="http://openbox.org/3.4/menu">
+  <menu id="root-menu" label="TuxDisplay">
+    <item label="Terminal"><action name="Execute"><command>xterm</command></action></item>
+    <item label="Firefox (separate instance)"><action name="Execute"><command>firefox --new-instance --no-remote</command></action></item>
+    <item label="Chromium (separate profile)"><action name="Execute"><command>chromium --user-data-dir=$HOME/.cache/tuxdisplay-chromium</command></action></item>
+    <item label="LibreOffice"><action name="Execute"><command>libreoffice --norestore --nodefault</command></action></item>
+    <separator/>
+    <item label="Maximize active window"><action name="ToggleMaximize"/></item>
+    <menu id="client-list-menu"/>
+  </menu>
+</openbox_menu>

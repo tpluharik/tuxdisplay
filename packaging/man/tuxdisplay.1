@@ -1,0 +1,51 @@
+.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.3.0" "User Commands"
+.SH NAME
+tuxdisplay \- use an iPad browser as a secondary Linux monitor
+.SH SYNOPSIS
+.B tuxdisplay
+.RI [ command ]
+.SH DESCRIPTION
+.B TuxDisplay
+creates a compositor-owned virtual monitor in a GNOME Wayland session and publishes it to an authenticated browser viewer. Windows can be dragged between the physical display and the iPad. A GTK manager and tray indicator show disconnected, running, and connected states. Other desktops use an isolated X11/noVNC workspace as a fallback.
+.SH COMMANDS
+.TP
+.B start, stop, restart
+Control the per-user display service.
+.TP
+.B status
+Show service state, display mode, browser URL, and access PIN.
+.TP
+.B url
+Print the preferred iPad URL.
+.TP
+.B password [--reset]
+Show or regenerate the six-digit access PIN.
+.TP
+.B launch APPLICATION [ARGUMENT ...]
+Start an application in the current desktop. In X11 fallback mode, start it in the isolated workspace.
+.TP
+.B usb connect|disconnect|status
+Detect and manage iPad USB tethering or a supported USB gadget connection.
+.TP
+.B tray
+Run the GNOME tray indicator with start, USB connect, and close-connection actions.
+.TP
+.B doctor
+Check display mode, dependencies, networking, and USB gadget capability.
+.TP
+.B gui
+Open the standalone GTK manager. This is the default when no command is given.
+.SH FILES
+.TP
+.I ~/.config/tuxdisplay/config
+Resolution and port settings.
+.TP
+.I ~/.config/tuxdisplay/password
+Generated access PIN. The file is readable only by its user.
+.TP
+.I ~/.local/state/tuxdisplay/
+Service state and application logs.
+.SH SECURITY
+The web listener is available on all interfaces and uses PIN authentication. Traffic is ordinary HTTP. Use it only on a trusted USB or private LAN link and do not expose port 6080 to the public Internet.
+.SH SEE ALSO
+.BR tuxdisplay-usb (8)

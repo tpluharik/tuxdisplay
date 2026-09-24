@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=TuxDisplay Tray
+Comment=Show TuxDisplay connection status and controls
+Exec=tuxdisplay tray
+Icon=tuxdisplay
+Terminal=false
+OnlyShowIn=GNOME;Unity;
+X-GNOME-Autostart-enabled=true
+X-GNOME-Autostart-Delay=2

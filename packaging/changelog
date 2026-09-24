@@ -1,0 +1,60 @@
+tuxdisplay (0.3.0) unstable; urgency=medium
+
+  * Add a standalone GTK manager with an automatically started tray indicator.
+  * Show disconnected, running, and actively connected tray states.
+  * Add tray and manager actions to close the display connection.
+  * Detect trusted iPads and ipheth addresses for USB cable connections.
+  * Guide iPad tethering and retain device-port USB gadget support.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Thu, 24 Sep 2026 15:30:00 +0200
+
+tuxdisplay (0.2.4) unstable; urgency=medium
+
+  * Pin the GNOME virtual monitor to the configured display mode.
+  * Stop the user service cleanly using the daemon interrupt path.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Thu, 24 Sep 2026 14:45:00 +0200
+
+tuxdisplay (0.2.3) unstable; urgency=medium
+
+  * Fix frozen display by sending absolute pointer and touch input to the
+    ScreenCast object path required by Mutter.
+  * Bound service shutdown so upgrades cannot leave a stale stream process.
+
+ -- TuxDisplay contributors <tpluharik@users.noreply.github.com>  Thu, 24 Sep 2026 15:00:00 +0200
+
+tuxdisplay (0.2.2) unstable; urgency=medium
+
+  * Use native or WebKit fullscreen APIs when the browser supports them.
+  * Add an immersive iPad fallback and Home Screen guidance for Safari.
+
+ -- TuxDisplay contributors <tpluharik@users.noreply.github.com>  Thu, 24 Sep 2026 14:48:00 +0200
+
+tuxdisplay (0.2.1) unstable; urgency=medium
+
+  * Allow normal keyboard entry in the PIN field on iPad Safari.
+  * Add an on-screen numeric keypad for touch-only PIN entry.
+
+ -- TuxDisplay contributors <tpluharik@users.noreply.github.com>  Thu, 24 Sep 2026 14:35:00 +0200
+
+tuxdisplay (0.2.0) unstable; urgency=medium
+
+  * Create a compositor-owned virtual monitor on GNOME Wayland.
+  * Add an authenticated touch, pointer, keyboard, and MJPEG browser client.
+  * Keep the original Xvfb/noVNC workspace as a non-GNOME fallback.
+
+ -- TuxDisplay contributors <tpluharik@users.noreply.github.com>  Thu, 24 Sep 2026 14:20:00 +0200
+
+tuxdisplay (0.1.1) unstable; urgency=medium
+
+  * Fix startup on GNOME Wayland by isolating the virtual X11 environment.
+  * Preserve diagnostic x11vnc output in the user state log.
+
+ -- TuxDisplay contributors <tpluharik@users.noreply.github.com>  Thu, 24 Sep 2026 13:35:00 +0200
+
+tuxdisplay (0.1.0) unstable; urgency=medium
+
+  * Initial release with virtual X display, noVNC browser client, GTK manager,
+    iPad USB tether support, and optional CDC ECM gadget networking.
+
+ -- TuxDisplay contributors <tpluharik@users.noreply.github.com>  Thu, 24 Sep 2026 00:00:00 +0200

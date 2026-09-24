@@ -1,0 +1,18 @@
+#!/bin/sh
+
+clear
+printf '%s\n' \
+    '╭────────────────────────────────────────────────────────────────────╮' \
+    '│                         TuxDisplay                                 │' \
+    '│                                                                    │' \
+    '│  This terminal and every app started here appear on the iPad.     │' \
+    '│                                                                    │' \
+    '│  Try:  firefox --new-instance                                     │' \
+    '│        libreoffice --norestore                                    │' \
+    '│                                                                    │' \
+    '│  Right-click the desktop for the application menu.                │' \
+    '╰────────────────────────────────────────────────────────────────────╯' \
+    ''
+
+td_shell=${SHELL:-/bin/sh}
+exec "$td_shell"

@@ -1,0 +1,10 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE service-group SYSTEM "avahi-service.dtd">
+<service-group>
+  <name replace-wildcards="yes">TuxDisplay on %h</name>
+  <service>
+    <type>_http._tcp</type>
+    <port>6080</port>
+    <txt-record>path=/vnc.html?autoconnect=true&amp;resize=scale&amp;reconnect=true&amp;show_dot=true&amp;path=websockify</txt-record>
+  </service>
+</service-group>

@@ -1,0 +1,906 @@
+#!/usr/bin/python3
+"""TuxDisplay command line and GTK manager."""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+from pathlib import Path
+import re
+import secrets
+import shlex
+import socket
+import subprocess
+import sys
+import threading
+import time
+from typing import Sequence
+
+
+APP_NAME = "TuxDisplay"
+SERVICE = "tuxdisplay.service"
+USB_GADGET_ADDRESS = "10.55.0.1"
+DEFAULTS = {
+    "RESOLUTION": "1920x1080",
+    "DISPLAY_NUMBER": "48",
+    "WEB_PORT": "6080",
+    "VNC_PORT": "5900",
+}
+RESOLUTIONS = (
+    "1024x768",
+    "1280x800",
+    "1366x768",
+    "1920x1080",
+    "2048x1536",
+    "2160x1620",
+)
+
+
+def config_dir() -> Path:
+    return Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config")) / "tuxdisplay"
+
+
+def state_dir() -> Path:
+    return Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state")) / "tuxdisplay"
+
+
+def config_file() -> Path:
+    return config_dir() / "config"
+
+
+def ensure_config() -> dict[str, str]:
+    directory = config_dir()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    state_dir().mkdir(mode=0o700, parents=True, exist_ok=True)
+    values = dict(DEFAULTS)
+    path = config_file()
+    if path.exists():
+        for raw_line in path.read_text(encoding="utf-8").splitlines():
+            if "=" not in raw_line or raw_line.lstrip().startswith("#"):
+                continue
+            key, value = raw_line.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+            if key in values:
+                values[key] = value
+    else:
+        save_config(values)
+    return validate_config(values)
+
+
+def validate_config(values: dict[str, str]) -> dict[str, str]:
+    result = dict(DEFAULTS)
+    if re.fullmatch(r"[0-9]{3,5}x[0-9]{3,5}", values.get("RESOLUTION", "")):
+        result["RESOLUTION"] = values["RESOLUTION"]
+    for key, low, high in (
+        ("DISPLAY_NUMBER", 1, 99),
+        ("WEB_PORT", 1024, 65535),
+        ("VNC_PORT", 1024, 65535),
+    ):
+        try:
+            number = int(values.get(key, ""))
+        except ValueError:
+            continue
+        if low <= number <= high:
+            result[key] = str(number)
+    return result
+
+
+def save_config(values: dict[str, str]) -> None:
+    directory = config_dir()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    validated = validate_config(values)
+    content = "".join(f"{key}={validated[key]}\n" for key in DEFAULTS)
+    path = config_file()
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(content, encoding="utf-8")
+    temporary.chmod(0o600)
+    temporary.replace(path)
+
+
+def systemctl(*arguments: str, check: bool = False) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["systemctl", "--user", *arguments],
+        check=check,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+
+def is_active() -> bool:
+    try:
+        return systemctl("is-active", "--quiet", SERVICE).returncode == 0
+    except FileNotFoundError:
+        return False
+
+
+def client_state_file() -> Path:
+    return state_dir() / "clients.json"
+
+
+def connection_state() -> str:
+    """Return disconnected, running, or connected for the UI and tray."""
+    if not is_active():
+        return "disconnected"
+    try:
+        payload = json.loads(client_state_file().read_text(encoding="utf-8"))
+        if int(payload.get("active_streams", 0)) > 0:
+            return "connected"
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        pass
+    return "running"
+
+
+def service_action(action: str) -> int:
+    ensure_config()
+    try:
+        result = systemctl(action, SERVICE)
+    except FileNotFoundError:
+        print("systemctl was not found; TuxDisplay requires a systemd user session.", file=sys.stderr)
+        return 1
+    if result.returncode:
+        detail = result.stderr.strip() or result.stdout.strip() or "unknown systemd error"
+        print(f"Could not {action} TuxDisplay: {detail}", file=sys.stderr)
+    return result.returncode
+
+
+def network_addresses() -> list[tuple[str, str]]:
+    try:
+        result = subprocess.run(
+            ["ip", "-j", "-4", "address", "show", "up"],
+            check=True,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+        )
+        payload = json.loads(result.stdout)
+    except (FileNotFoundError, subprocess.CalledProcessError, json.JSONDecodeError):
+        return []
+    addresses: list[tuple[str, str]] = []
+    for interface in payload:
+        name = interface.get("ifname", "")
+        if name == "lo":
+            continue
+        for address in interface.get("addr_info", []):
+            local = address.get("local", "")
+            if address.get("family") == "inet" and local and not local.startswith("127."):
+                addresses.append((name, local))
+    return addresses
+
+
+def interface_driver(interface: str) -> str:
+    try:
+        return (Path("/sys/class/net") / interface / "device" / "driver").resolve(strict=True).name
+    except OSError:
+        return ""
+
+
+def is_usb_network(interface: str, address: str) -> bool:
+    return address == USB_GADGET_ADDRESS or interface.startswith("usb") or interface_driver(interface) == "ipheth"
+
+
+def usb_network_addresses() -> list[tuple[str, str]]:
+    return [(interface, address) for interface, address in network_addresses() if is_usb_network(interface, address)]
+
+
+def usb_device_ids() -> list[str]:
+    try:
+        result = subprocess.run(
+            ["idevice_id", "-l"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+
+
+def usb_status() -> tuple[str, str, str | None]:
+    addresses = usb_network_addresses()
+    if addresses:
+        interface, address = addresses[0]
+        kind = "USB gadget" if address == USB_GADGET_ADDRESS else "iPad USB tethering"
+        return "ready", f"{kind} ready on {interface}", f"http://{address}:{ensure_config()['WEB_PORT']}/"
+    if usb_device_ids():
+        return "cable", "iPad cable detected and trusted; enable Personal Hotspot on the iPad", None
+    udc_path = Path("/sys/class/udc")
+    if udc_path.is_dir() and any(udc_path.iterdir()):
+        return "gadget", "Device-capable USB port available", None
+    return "absent", "No iPad USB network detected", None
+
+
+def usb_connect(wait_seconds: int = 12) -> tuple[int, str]:
+    status, _message, url = usb_status()
+    if status == "ready" and url:
+        result = 0 if is_active() else service_action("start")
+        return result, f"USB connection ready: {url}" if result == 0 else "USB is ready, but the display could not start."
+
+    if status == "cable":
+        try:
+            validated = subprocess.run(
+                ["idevicepair", "validate"],
+                check=False,
+                text=True,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=8,
+            )
+            if validated.returncode:
+                subprocess.run(["idevicepair", "pair"], check=False, timeout=30)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+        interfaces = Path("/sys/class/net").iterdir() if Path("/sys/class/net").is_dir() else ()
+        for interface in (item.name for item in interfaces if interface_driver(item.name) == "ipheth"):
+            try:
+                subprocess.run(
+                    ["nmcli", "device", "connect", interface],
+                    check=False,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=8,
+                )
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
+        for _attempt in range(max(1, wait_seconds)):
+            addresses = usb_network_addresses()
+            if addresses:
+                address = addresses[0][1]
+                result = 0 if is_active() else service_action("start")
+                return result, f"USB connection ready: http://{address}:{ensure_config()['WEB_PORT']}/"
+            time.sleep(1)
+        return 4, "The iPad is trusted. Enable Settings → Personal Hotspot → Allow Others to Join, then press Connect USB again."
+
+    if status == "gadget":
+        try:
+            result = subprocess.run(["pkexec", "/usr/sbin/tuxdisplay-usb", "setup"], check=False)
+        except FileNotFoundError:
+            return 1, "pkexec is unavailable, so USB gadget networking could not be configured."
+        if result.returncode:
+            return result.returncode, "USB gadget setup was cancelled or failed."
+        display_result = 0 if is_active() else service_action("start")
+        return display_result, f"USB connection ready: http://{USB_GADGET_ADDRESS}:{ensure_config()['WEB_PORT']}/"
+
+    return 4, "Connect and trust the iPad with a USB cable, then enable Personal Hotspot on the iPad."
+
+
+def usb_disconnect() -> tuple[int, str]:
+    display_result = 0 if not is_active() else service_action("stop")
+    if any(address == USB_GADGET_ADDRESS for _interface, address in usb_network_addresses()):
+        try:
+            subprocess.run(["pkexec", "/usr/sbin/tuxdisplay-usb", "teardown"], check=False)
+        except FileNotFoundError:
+            pass
+    return display_result, "USB display connection closed." if display_result == 0 else "The display connection could not be closed."
+
+
+def client_path() -> str:
+    return "/"
+
+
+def urls() -> list[tuple[str, str]]:
+    port = ensure_config()["WEB_PORT"]
+    path = client_path()
+    items: list[tuple[str, str]] = []
+    seen: set[str] = set()
+
+    def add(label: str, host: str) -> None:
+        url = f"http://{host}:{port}{path}"
+        if url not in seen:
+            seen.add(url)
+            items.append((label, url))
+
+    addresses = network_addresses()
+    for interface, address in addresses:
+        if is_usb_network(interface, address):
+            add("USB cable" if address != USB_GADGET_ADDRESS else "USB gadget", address)
+    hostname = socket.gethostname().split(".", 1)[0]
+    if hostname:
+        add("Bonjour", f"{hostname}.local")
+    for interface, address in addresses:
+        add(interface, address)
+    add("This computer", "127.0.0.1")
+    return items
+
+
+def preferred_url() -> str:
+    return urls()[0][1]
+
+
+def password_path() -> Path:
+    return config_dir() / "password"
+
+
+def read_password() -> str:
+    path = password_path()
+    if not path.exists():
+        return "Not created yet — start TuxDisplay"
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except OSError:
+        return "Unavailable"
+
+
+def reset_password() -> int:
+    directory = config_dir()
+    directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    pin = f"{secrets.randbelow(1_000_000):06d}"
+    path = password_path()
+    temporary = path.with_suffix(".tmp")
+    temporary.write_text(pin + "\n", encoding="utf-8")
+    temporary.chmod(0o600)
+    temporary.replace(path)
+    rfb = directory / "password.rfb"
+    try:
+        subprocess.run(
+            ["x11vnc", "-storepasswd", pin, str(rfb)],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except (FileNotFoundError, subprocess.CalledProcessError) as error:
+        print(f"PIN was created, but the fallback VNC password file could not be written: {error}", file=sys.stderr)
+        return 1
+    rfb.chmod(0o600)
+    if is_active() and os.environ.get("TUXDISPLAY_SESSION") != "1":
+        service_action("restart")
+    print(pin)
+    return 0
+
+
+def launch(command: Sequence[str]) -> int:
+    if not command:
+        print("Specify an application, for example: tuxdisplay launch xterm", file=sys.stderr)
+        return 2
+    if not is_active() and service_action("start"):
+        return 1
+    configuration = ensure_config()
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+    native_wayland = os.environ.get("XDG_SESSION_TYPE") == "wayland" and "gnome" in desktop
+    if native_wayland:
+        log_path = state_dir() / "applications.log"
+        try:
+            with log_path.open("a", encoding="utf-8") as log:
+                subprocess.Popen(
+                    list(command),
+                    env=os.environ.copy(),
+                    stdin=subprocess.DEVNULL,
+                    stdout=log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+        except FileNotFoundError:
+            print(f"Application not found: {command[0]}", file=sys.stderr)
+            return 127
+        print(f"Launched in the GNOME desktop: {shlex.join(command)}")
+        return 0
+    environment = os.environ.copy()
+    environment["DISPLAY"] = f":{configuration['DISPLAY_NUMBER']}"
+    environment["XAUTHORITY"] = str(config_dir() / "Xauthority")
+    environment.pop("WAYLAND_DISPLAY", None)
+    environment.pop("WAYLAND_SOCKET", None)
+    environment["XDG_SESSION_TYPE"] = "x11"
+    environment["GDK_BACKEND"] = "x11"
+    environment["QT_QPA_PLATFORM"] = "xcb"
+    environment["MOZ_ENABLE_WAYLAND"] = "0"
+    for _attempt in range(50):
+        ready = subprocess.run(
+            ["xdpyinfo", "-display", environment["DISPLAY"]],
+            env=environment,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if ready.returncode == 0:
+            break
+        time.sleep(0.1)
+    else:
+        print("The virtual display did not become ready in time.", file=sys.stderr)
+        return 1
+    log_path = state_dir() / "applications.log"
+    try:
+        with log_path.open("a", encoding="utf-8") as log:
+            subprocess.Popen(
+                list(command),
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+    except FileNotFoundError:
+        print(f"Application not found: {command[0]}", file=sys.stderr)
+        return 127
+    print(f"Launched on DISPLAY={environment['DISPLAY']}: {shlex.join(command)}")
+    return 0
+
+
+def doctor() -> int:
+    desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
+    native_wayland = os.environ.get("XDG_SESSION_TYPE") == "wayland" and "gnome" in desktop
+    if native_wayland:
+        commands = ("systemctl", "gst-inspect-1.0", "ip")
+    else:
+        commands = ("systemctl", "Xvfb", "x11vnc", "websockify", "openbox", "tint2", "ip")
+    missing = [name for name in commands if not shutil_which(name)]
+    print(f"Display mode: {'native GNOME Wayland monitor' if native_wayland else 'portable X11 workspace'}")
+    print(f"Service: {'running' if is_active() else 'stopped'}")
+    print(f"Resolution: {ensure_config()['RESOLUTION']}")
+    print(f"Browser URL: {preferred_url()}")
+    udc_path = Path("/sys/class/udc")
+    controllers = list(udc_path.iterdir()) if udc_path.is_dir() else []
+    if controllers:
+        print("USB gadget capability: available (" + ", ".join(item.name for item in controllers) + ")")
+    else:
+        print("USB gadget capability: not detected; use tethering, Wi-Fi, or Ethernet")
+    if missing:
+        print("Missing required commands: " + ", ".join(missing))
+        return 1
+    print("Runtime dependencies: OK")
+    return 0
+
+
+def shutil_which(command: str) -> str | None:
+    path = os.environ.get("PATH", os.defpath)
+    for directory in path.split(os.pathsep):
+        candidate = Path(directory) / command
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
+
+
+def run_gui() -> int:
+    try:
+        import gi
+
+        gi.require_version("Gtk", "4.0")
+        gi.require_version("Gdk", "4.0")
+        from gi.repository import Gdk, Gio, GLib, Gtk  # type: ignore
+    except (ImportError, ValueError) as error:
+        print(f"GTK 4 is unavailable: {error}", file=sys.stderr)
+        return 1
+
+    class ManagerWindow(Gtk.ApplicationWindow):
+        def __init__(self, application: Gtk.Application) -> None:
+            super().__init__(application=application, title=APP_NAME)
+            self.set_default_size(700, 620)
+            self.set_resizable(True)
+
+            outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
+            outer.set_margin_top(28)
+            outer.set_margin_bottom(28)
+            outer.set_margin_start(32)
+            outer.set_margin_end(32)
+            scroller = Gtk.ScrolledWindow()
+            scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            scroller.set_child(outer)
+            self.set_child(scroller)
+
+            title = Gtk.Label(label="TuxDisplay")
+            title.add_css_class("title-1")
+            title.set_halign(Gtk.Align.START)
+            outer.append(title)
+
+            subtitle = Gtk.Label(label="Use an iPad as a real extended monitor on GNOME Wayland")
+            subtitle.add_css_class("dim-label")
+            subtitle.set_halign(Gtk.Align.START)
+            outer.append(subtitle)
+
+            self.status = Gtk.Label()
+            self.status.set_halign(Gtk.Align.START)
+            self.status.add_css_class("title-3")
+            outer.append(self.status)
+
+            grid = Gtk.Grid(column_spacing=14, row_spacing=12)
+            outer.append(grid)
+
+            url_label = Gtk.Label(label="iPad URL")
+            url_label.set_halign(Gtk.Align.END)
+            grid.attach(url_label, 0, 0, 1, 1)
+            self.url_entry = Gtk.Entry()
+            self.url_entry.set_editable(False)
+            self.url_entry.set_hexpand(True)
+            grid.attach(self.url_entry, 1, 0, 1, 1)
+
+            pin_label = Gtk.Label(label="Access PIN")
+            pin_label.set_halign(Gtk.Align.END)
+            grid.attach(pin_label, 0, 1, 1, 1)
+            self.pin_entry = Gtk.Entry()
+            self.pin_entry.set_editable(False)
+            self.pin_entry.set_visibility(True)
+            grid.attach(self.pin_entry, 1, 1, 1, 1)
+
+            resolution_label = Gtk.Label(label="Resolution")
+            resolution_label.set_halign(Gtk.Align.END)
+            grid.attach(resolution_label, 0, 2, 1, 1)
+            self.resolution = Gtk.DropDown.new_from_strings(list(RESOLUTIONS))
+            current = ensure_config()["RESOLUTION"]
+            self.resolution.set_selected(RESOLUTIONS.index(current) if current in RESOLUTIONS else 3)
+            self.resolution.connect("notify::selected", self.on_resolution_changed)
+            grid.attach(self.resolution, 1, 2, 1, 1)
+
+            usb_label = Gtk.Label(label="USB cable")
+            usb_label.set_halign(Gtk.Align.END)
+            grid.attach(usb_label, 0, 3, 1, 1)
+            self.usb_status_label = Gtk.Label()
+            self.usb_status_label.set_halign(Gtk.Align.START)
+            self.usb_status_label.set_wrap(True)
+            grid.attach(self.usb_status_label, 1, 3, 1, 1)
+
+            controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            outer.append(controls)
+            self.start_button = Gtk.Button(label="Start display")
+            self.start_button.add_css_class("suggested-action")
+            self.start_button.connect("clicked", self.on_start)
+            controls.append(self.start_button)
+            self.usb_button = Gtk.Button(label="Connect USB")
+            self.usb_button.connect("clicked", self.on_usb)
+            controls.append(self.usb_button)
+            self.stop_button = Gtk.Button(label="Close connection")
+            self.stop_button.connect("clicked", self.on_stop)
+            controls.append(self.stop_button)
+            copy_button = Gtk.Button(label="Copy URL")
+            copy_button.connect("clicked", self.on_copy)
+            controls.append(copy_button)
+            preview_button = Gtk.Button(label="Open preview")
+            preview_button.connect("clicked", self.on_preview)
+            controls.append(preview_button)
+
+            separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
+            outer.append(separator)
+
+            app_title = Gtk.Label(label="Launch an app in the current desktop")
+            app_title.add_css_class("title-4")
+            app_title.set_halign(Gtk.Align.START)
+            outer.append(app_title)
+            launch_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            outer.append(launch_row)
+            self.command_entry = Gtk.Entry()
+            self.command_entry.set_placeholder_text("xterm, firefox --new-instance, libreoffice …")
+            self.command_entry.set_hexpand(True)
+            self.command_entry.connect("activate", self.on_launch)
+            launch_row.append(self.command_entry)
+            launch_button = Gtk.Button(label="Launch")
+            launch_button.connect("clicked", self.on_launch)
+            launch_row.append(launch_button)
+
+            usb_note = Gtk.Label(
+                label=(
+                    "For a normal laptop USB port, connect and trust the iPad, then enable "
+                    "Settings → Personal Hotspot → Allow Others to Join. TuxDisplay will prefer the cable address automatically."
+                )
+            )
+            usb_note.set_wrap(True)
+            usb_note.set_halign(Gtk.Align.START)
+            usb_note.add_css_class("dim-label")
+            outer.append(usb_note)
+
+            self.message = Gtk.Label()
+            self.message.set_wrap(True)
+            self.message.set_halign(Gtk.Align.START)
+            outer.append(self.message)
+            self.refresh()
+            GLib.timeout_add_seconds(2, self.refresh)
+
+        def show_message(self, text: str) -> None:
+            self.message.set_label(text)
+
+        def refresh(self) -> bool:
+            state = connection_state()
+            labels = {
+                "connected": "● Connected — iPad is viewing the monitor",
+                "running": "● Running — waiting for iPad",
+                "disconnected": "○ Disconnected",
+            }
+            self.status.set_label(labels[state])
+            self.status.remove_css_class("success")
+            self.status.remove_css_class("warning")
+            if state == "connected":
+                self.status.add_css_class("success")
+            elif state == "running":
+                self.status.add_css_class("warning")
+            usb_kind, usb_message, usb_url = usb_status()
+            self.usb_status_label.set_label(usb_message)
+            self.usb_button.set_label("Use USB address" if usb_kind == "ready" else "Connect USB")
+            self.url_entry.set_text(usb_url or preferred_url())
+            self.pin_entry.set_text(read_password())
+            self.start_button.set_sensitive(state == "disconnected")
+            self.stop_button.set_sensitive(state != "disconnected")
+            return True
+
+        def on_start(self, _button: Gtk.Button) -> None:
+            result = service_action("start")
+            self.show_message("Display started. Open the URL on the iPad." if result == 0 else "The display could not start. Run ‘tuxdisplay status’ for details.")
+            self.refresh()
+
+        def on_stop(self, _button: Gtk.Button) -> None:
+            result = service_action("stop")
+            self.show_message("Display stopped." if result == 0 else "The display could not be stopped.")
+            self.refresh()
+
+        def on_usb(self, _button: Gtk.Button) -> None:
+            self.usb_button.set_sensitive(False)
+            self.show_message("Checking the USB cable…")
+
+            def finished(result: int, message: str) -> bool:
+                self.usb_button.set_sensitive(True)
+                self.show_message(message)
+                self.refresh()
+                return GLib.SOURCE_REMOVE
+
+            def worker() -> None:
+                result, message = usb_connect()
+                GLib.idle_add(finished, result, message)
+
+            threading.Thread(target=worker, name="tuxdisplay-usb-connect", daemon=True).start()
+
+        def on_copy(self, _button: Gtk.Button) -> None:
+            display = Gdk.Display.get_default()
+            if display:
+                display.get_clipboard().set(self.url_entry.get_text())
+                self.show_message("URL copied.")
+
+        def on_preview(self, _button: Gtk.Button) -> None:
+            try:
+                Gio.AppInfo.launch_default_for_uri(self.url_entry.get_text(), None)
+                self.show_message("Opened a local preview in your browser.")
+            except GLib.Error as error:
+                self.show_message(f"Could not open the browser: {error.message}")
+
+        def on_launch(self, _widget: Gtk.Widget) -> None:
+            try:
+                command = shlex.split(self.command_entry.get_text())
+            except ValueError as error:
+                self.show_message(f"Invalid command: {error}")
+                return
+            if not command:
+                self.show_message("Enter an application command first.")
+                return
+            result = launch(command)
+            self.show_message("Application launched. Drag its window to the iPad monitor." if result == 0 else "The application could not be launched.")
+
+        def on_resolution_changed(self, dropdown: Gtk.DropDown, _parameter: object) -> None:
+            selected = dropdown.get_selected()
+            if selected >= len(RESOLUTIONS):
+                return
+            configuration = ensure_config()
+            if configuration["RESOLUTION"] == RESOLUTIONS[selected]:
+                return
+            configuration["RESOLUTION"] = RESOLUTIONS[selected]
+            save_config(configuration)
+            if is_active():
+                service_action("restart")
+                self.show_message("Resolution changed and the display restarted.")
+
+    class ManagerApplication(Gtk.Application):
+        def __init__(self) -> None:
+            super().__init__(application_id="io.github.tuxdisplay.Manager")
+
+        def do_activate(self) -> None:
+            try:
+                subprocess.Popen(
+                    ["tuxdisplay", "tray"],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            except OSError:
+                pass
+            window = self.props.active_window
+            if window is None:
+                window = ManagerWindow(self)
+            window.present()
+
+    css = b"""
+        .success { color: #2ec27e; }
+        .warning { color: #f6c344; }
+        entry { min-height: 34px; }
+        button { min-height: 34px; }
+    """
+    provider = Gtk.CssProvider()
+    provider.load_from_data(css.decode("utf-8"))
+    display = Gdk.Display.get_default()
+    if display:
+        Gtk.StyleContext.add_provider_for_display(display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    try:
+        return ManagerApplication().run([])
+    except KeyboardInterrupt:
+        return 0
+
+
+def run_tray() -> int:
+    try:
+        import fcntl
+        import gi
+
+        gi.require_version("Gtk", "3.0")
+        gi.require_version("AyatanaAppIndicator3", "0.1")
+        from gi.repository import AyatanaAppIndicator3, GLib, Gtk  # type: ignore
+    except (ImportError, ValueError) as error:
+        print(f"Tray support is unavailable: {error}", file=sys.stderr)
+        return 1
+
+    state_dir().mkdir(mode=0o700, parents=True, exist_ok=True)
+    lock_handle = (state_dir() / "tray.lock").open("w", encoding="utf-8")
+    try:
+        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return 0
+
+    indicator = AyatanaAppIndicator3.Indicator.new(
+        "tuxdisplay",
+        "tuxdisplay-disconnected",
+        AyatanaAppIndicator3.IndicatorCategory.APPLICATION_STATUS,
+    )
+    indicator.set_status(AyatanaAppIndicator3.IndicatorStatus.ACTIVE)
+    indicator.set_title("TuxDisplay")
+
+    menu = Gtk.Menu()
+    status_item = Gtk.MenuItem(label="Disconnected")
+    status_item.set_sensitive(False)
+    menu.append(status_item)
+    menu.append(Gtk.SeparatorMenuItem())
+
+    open_item = Gtk.MenuItem(label="Open TuxDisplay")
+    menu.append(open_item)
+    start_item = Gtk.MenuItem(label="Start display")
+    menu.append(start_item)
+    usb_item = Gtk.MenuItem(label="Connect with USB cable")
+    menu.append(usb_item)
+    close_item = Gtk.MenuItem(label="Close connection")
+    menu.append(close_item)
+    menu.append(Gtk.SeparatorMenuItem())
+    quit_item = Gtk.MenuItem(label="Quit tray icon")
+    menu.append(quit_item)
+    menu.show_all()
+    indicator.set_menu(menu)
+
+    def notify(message: str) -> None:
+        try:
+            subprocess.Popen(
+                ["notify-send", "TuxDisplay", message],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except OSError:
+            pass
+
+    def refresh() -> bool:
+        state = connection_state()
+        details = {
+            "connected": ("tuxdisplay-connected", "Connected — iPad is viewing"),
+            "running": ("tuxdisplay-running", "Running — waiting for iPad"),
+            "disconnected": ("tuxdisplay-disconnected", "Disconnected — display stopped"),
+        }
+        icon, label = details[state]
+        indicator.set_icon_full(icon, label)
+        status_item.set_label(label)
+        start_item.set_sensitive(state == "disconnected")
+        close_item.set_sensitive(state != "disconnected")
+        return GLib.SOURCE_CONTINUE
+
+    def open_manager(_item: Gtk.MenuItem) -> None:
+        try:
+            subprocess.Popen(["tuxdisplay", "gui"], start_new_session=True)
+        except OSError as error:
+            notify(f"Could not open the manager: {error}")
+
+    def start_display(_item: Gtk.MenuItem) -> None:
+        result = service_action("start")
+        notify("Display started." if result == 0 else "The display could not start.")
+        refresh()
+
+    def connect_usb(_item: Gtk.MenuItem) -> None:
+        usb_item.set_sensitive(False)
+
+        def worker() -> None:
+            _result, message = usb_connect()
+            GLib.idle_add(notify, message)
+            GLib.idle_add(usb_item.set_sensitive, True)
+            GLib.idle_add(refresh)
+
+        threading.Thread(target=worker, name="tuxdisplay-tray-usb", daemon=True).start()
+
+    def close_connection(_item: Gtk.MenuItem) -> None:
+        result = service_action("stop")
+        notify("Connection closed." if result == 0 else "The connection could not be closed.")
+        refresh()
+
+    open_item.connect("activate", open_manager)
+    start_item.connect("activate", start_display)
+    usb_item.connect("activate", connect_usb)
+    close_item.connect("activate", close_connection)
+    quit_item.connect("activate", lambda _item: Gtk.main_quit())
+    refresh()
+    GLib.timeout_add_seconds(2, refresh)
+    try:
+        Gtk.main()
+    except KeyboardInterrupt:
+        pass
+    lock_handle.close()
+    return 0
+
+
+def print_status() -> int:
+    running = is_active()
+    print(f"TuxDisplay is {'running' if running else 'stopped'}.")
+    mode_path = state_dir() / "mode"
+    try:
+        mode = mode_path.read_text(encoding="utf-8").strip()
+    except OSError:
+        mode = "unknown"
+    labels = {"wayland": "native GNOME Wayland extended monitor", "x11": "portable X11 workspace"}
+    print(f"Mode: {labels.get(mode, mode)}")
+    print(f"URL: {preferred_url()}")
+    print(f"PIN: {read_password()}")
+    if not running:
+        try:
+            result = systemctl("status", SERVICE)
+            if result.returncode and result.stderr.strip():
+                print(result.stderr.strip(), file=sys.stderr)
+        except FileNotFoundError:
+            pass
+    return 0 if running else 3
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(description="Use an iPad browser as a secondary Linux workspace.")
+    subparsers = parser.add_subparsers(dest="command")
+    for command in ("start", "stop", "restart", "status", "url", "doctor", "gui", "tray"):
+        subparsers.add_parser(command)
+    usb_parser = subparsers.add_parser("usb")
+    usb_parser.add_argument("action", choices=("connect", "disconnect", "status"), nargs="?", default="status")
+    password_parser = subparsers.add_parser("password")
+    password_parser.add_argument("--reset", action="store_true", help="generate a new six-digit access PIN")
+    launch_parser = subparsers.add_parser("launch")
+    launch_parser.add_argument("application", nargs=argparse.REMAINDER)
+    return parser
+
+
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = build_parser()
+    arguments = parser.parse_args(argv)
+    command = arguments.command or "gui"
+    if command in {"start", "stop", "restart"}:
+        return service_action(command)
+    if command == "status":
+        return print_status()
+    if command == "url":
+        print(preferred_url())
+        return 0
+    if command == "password":
+        if arguments.reset:
+            return reset_password()
+        print(read_password())
+        return 0
+    if command == "launch":
+        return launch(arguments.application)
+    if command == "doctor":
+        return doctor()
+    if command == "usb":
+        if arguments.action == "connect":
+            result, message = usb_connect()
+        elif arguments.action == "disconnect":
+            result, message = usb_disconnect()
+        else:
+            status, message, url = usb_status()
+            result = 0 if status == "ready" else 4
+            if url:
+                message = f"{message}: {url}"
+        print(message)
+        return result
+    if command == "tray":
+        return run_tray()
+    if command == "gui":
+        return run_gui()
+    parser.error(f"unknown command: {command}")
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

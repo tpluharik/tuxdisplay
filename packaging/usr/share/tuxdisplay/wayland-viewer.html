@@ -1,0 +1,237 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="theme-color" content="#020617">
+  <title>TuxDisplay</title>
+  <style>
+    :root { color-scheme: dark; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    * { box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: #020617; }
+    body { color: #e2e8f0; overscroll-behavior: none; }
+    #login { position: fixed; inset: 0; display: grid; place-items: center; padding: 24px; background: radial-gradient(circle at top, #172554, #020617 58%); z-index: 3; }
+    .card { width: min(420px, 100%); padding: 30px; border: 1px solid #334155; border-radius: 22px; background: rgba(15, 23, 42, .94); box-shadow: 0 25px 80px #0008; }
+    h1 { margin: 0 0 8px; font-size: 30px; }
+    p { color: #94a3b8; line-height: 1.5; }
+    input, button { min-height: 48px; border-radius: 12px; font: inherit; }
+    #pin { width: 100%; margin: 12px 0 8px; padding: 0 16px; border: 1px solid #475569; color: white; background: #0f172a; font-size: 23px; text-align: center; letter-spacing: .25em; }
+    #keypad { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 8px 0 12px; }
+    #keypad button { padding: 0; background: #1e293b; font-size: 21px; touch-action: manipulation; -webkit-appearance: none; }
+    #keypad button:active { background: #334155; }
+    button { border: 0; padding: 0 18px; color: white; background: #2563eb; font-weight: 650; }
+    #connect { width: 100%; }
+    #error { min-height: 1.4em; margin: 10px 0 0; color: #fda4af; }
+    #desktop { display: none; width: 100%; height: 100%; }
+    #screenWrap { position: fixed; inset: 0 0 calc(58px + env(safe-area-inset-bottom)) 0; display: grid; place-items: center; background: #000; touch-action: none; }
+    #screen { width: 100%; height: 100%; object-fit: contain; user-select: none; -webkit-user-drag: none; outline: none; }
+    #toolbar { position: fixed; inset: auto 0 0 0; height: calc(58px + env(safe-area-inset-bottom)); padding: 6px 12px env(safe-area-inset-bottom); display: flex; align-items: center; gap: 9px; background: #0f172af2; border-top: 1px solid #334155; }
+    #toolbar button { min-height: 40px; background: #1e293b; }
+    #keyboard { width: 120px; min-height: 40px; padding: 0 12px; border: 1px solid #475569; border-radius: 10px; color: white; background: #111827; }
+    #label { margin-right: auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: #cbd5e1; }
+    #dot { display: inline-block; width: 9px; height: 9px; margin-right: 7px; border-radius: 50%; background: #22c55e; }
+    #fullscreenHint { position: fixed; left: 50%; bottom: calc(72px + env(safe-area-inset-bottom)); z-index: 5; width: min(560px, calc(100% - 32px)); padding: 12px 16px; border: 1px solid #475569; border-radius: 12px; color: #e2e8f0; background: #0f172af2; text-align: center; opacity: 0; transform: translate(-50%, 12px); pointer-events: none; transition: opacity .2s, transform .2s; }
+    #fullscreenHint.show { opacity: 1; transform: translate(-50%, 0); }
+    body.immersive #screenWrap { inset: 0; }
+    body.immersive #toolbar { inset: auto 10px calc(10px + env(safe-area-inset-bottom)) auto; width: auto; height: auto; padding: 0; border: 0; background: transparent; z-index: 4; }
+    body.immersive #label, body.immersive #keyboard { display: none; }
+    body.immersive #fullscreen { min-height: 36px; padding: 0 12px; opacity: .48; background: #0f172a; }
+    body.immersive #fullscreenHint { bottom: calc(58px + env(safe-area-inset-bottom)); }
+    @media (max-width: 650px) { #label .details { display: none; } #toolbar button { padding: 0 11px; } #keyboard { width: 96px; } }
+  </style>
+</head>
+<body>
+  <section id="login">
+    <form class="card" id="loginForm">
+      <h1>TuxDisplay</h1>
+      <p>Enter the six-digit access PIN shown by the TuxDisplay app on your computer.</p>
+      <input id="pin" type="password" inputmode="numeric" pattern="[0-9]{6}" maxlength="6" autocomplete="one-time-code" aria-label="Access PIN" required>
+      <div id="keypad" aria-label="PIN keypad">
+        <button type="button" data-digit="1">1</button><button type="button" data-digit="2">2</button><button type="button" data-digit="3">3</button>
+        <button type="button" data-digit="4">4</button><button type="button" data-digit="5">5</button><button type="button" data-digit="6">6</button>
+        <button type="button" data-digit="7">7</button><button type="button" data-digit="8">8</button><button type="button" data-digit="9">9</button>
+        <button type="button" data-action="clear">Clear</button><button type="button" data-digit="0">0</button><button type="button" data-action="backspace" aria-label="Backspace">⌫</button>
+      </div>
+      <button id="connect" type="submit">Connect to second monitor</button>
+      <div id="error" role="alert"></div>
+    </form>
+  </section>
+  <div id="fullscreenHint" role="status">Expanded view enabled. For true Safari fullscreen: tap Share, choose Add to Home Screen, then open TuxDisplay from its Home Screen icon.</div>
+  <main id="desktop">
+    <div id="screenWrap">
+      <img id="screen" alt="TuxDisplay extended monitor" draggable="false">
+    </div>
+    <div id="toolbar">
+      <span id="label"><span id="dot"></span><strong>Extended monitor</strong> <span class="details" id="details"></span></span>
+      <input id="keyboard" type="text" enterkeyhint="done" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Tap to type" aria-label="Keyboard input">
+      <button id="fullscreen" type="button">Full screen</button>
+    </div>
+  </main>
+  <script>
+    const login = document.querySelector('#login');
+    const desktop = document.querySelector('#desktop');
+    const form = document.querySelector('#loginForm');
+    const pin = document.querySelector('#pin');
+    const keypad = document.querySelector('#keypad');
+    const errorBox = document.querySelector('#error');
+    const screen = document.querySelector('#screen');
+    const screenWrap = document.querySelector('#screenWrap');
+    const keyboard = document.querySelector('#keyboard');
+    let displayWidth = 1280, displayHeight = 720;
+    let motionPending = null, motionBusy = false;
+    const touchSlots = new Map();
+    const downKeys = new Set();
+
+    async function api(path, body) {
+      const options = body === undefined ? {} : { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(body) };
+      return fetch(path, options);
+    }
+    async function enter() {
+      const response = await api('/status');
+      if (!response.ok) return false;
+      const status = await response.json();
+      displayWidth = status.width; displayHeight = status.height;
+      document.querySelector('#details').textContent = ` · ${displayWidth}×${displayHeight} · ${status.monitor}`;
+      login.style.display = 'none'; desktop.style.display = 'block';
+      screen.src = '/stream.mjpg?t=' + Date.now();
+      return true;
+    }
+    keypad.addEventListener('click', event => {
+      const button = event.target.closest('button');
+      if (!button) return;
+      if (button.dataset.digit && pin.value.length < 6) pin.value += button.dataset.digit;
+      if (button.dataset.action === 'backspace') pin.value = pin.value.slice(0, -1);
+      if (button.dataset.action === 'clear') pin.value = '';
+      errorBox.textContent = '';
+      if (pin.value.length === 6) document.querySelector('#connect').focus();
+    });
+    form.addEventListener('submit', async event => {
+      event.preventDefault(); errorBox.textContent = '';
+      const response = await api('/auth', {pin: pin.value});
+      if (response.ok) { pin.value = ''; await enter(); }
+      else { errorBox.textContent = response.status === 403 ? 'That PIN is incorrect.' : 'Could not connect to TuxDisplay.'; pin.select(); }
+    });
+    enter().catch(() => {});
+
+    function coords(event) {
+      const r = screen.getBoundingClientRect();
+      const scale = Math.min(r.width / displayWidth, r.height / displayHeight);
+      const shownWidth = displayWidth * scale, shownHeight = displayHeight * scale;
+      const left = r.left + (r.width - shownWidth) / 2, top = r.top + (r.height - shownHeight) / 2;
+      return {
+        x: Math.max(0, Math.min(displayWidth, (event.clientX - left) / scale)),
+        y: Math.max(0, Math.min(displayHeight, (event.clientY - top) / scale))
+      };
+    }
+    function send(body) { return api('/input', body).catch(() => {}); }
+    function queueMotion(body) {
+      motionPending = body;
+      if (motionBusy) return;
+      motionBusy = true;
+      requestAnimationFrame(async () => {
+        const next = motionPending; motionPending = null;
+        if (next) await send(next);
+        motionBusy = false;
+        if (motionPending) queueMotion(motionPending);
+      });
+    }
+    function slotFor(pointerId) {
+      if (touchSlots.has(pointerId)) return touchSlots.get(pointerId);
+      for (let slot = 0; slot < 10; slot++) if (![...touchSlots.values()].includes(slot)) { touchSlots.set(pointerId, slot); return slot; }
+      return 0;
+    }
+    screenWrap.addEventListener('pointerdown', event => {
+      event.preventDefault(); screenWrap.setPointerCapture(event.pointerId);
+      const p = coords(event);
+      if (event.pointerType === 'touch') send({type:'touch_down', slot:slotFor(event.pointerId), ...p});
+      else send({type:'button', button:event.button, down:true, ...p});
+    });
+    screenWrap.addEventListener('pointermove', event => {
+      event.preventDefault(); const p = coords(event);
+      if (event.pointerType === 'touch') {
+        if (touchSlots.has(event.pointerId)) queueMotion({type:'touch_move', slot:touchSlots.get(event.pointerId), ...p});
+      } else queueMotion({type:'motion', ...p});
+    });
+    function pointerUp(event) {
+      event.preventDefault(); const p = coords(event);
+      if (event.pointerType === 'touch') { const slot = touchSlots.get(event.pointerId); if (slot !== undefined) { send({type:'touch_up', slot, ...p}); touchSlots.delete(event.pointerId); } }
+      else send({type:'button', button:event.button, down:false, ...p});
+    }
+    screenWrap.addEventListener('pointerup', pointerUp);
+    screenWrap.addEventListener('pointercancel', pointerUp);
+    screenWrap.addEventListener('contextmenu', event => event.preventDefault());
+    screenWrap.addEventListener('wheel', event => { event.preventDefault(); send({type:'wheel', dx:event.deltaX, dy:event.deltaY}); }, {passive:false});
+
+    const named = {
+      Backspace:0xff08, Tab:0xff09, Enter:0xff0d, Escape:0xff1b, Home:0xff50,
+      ArrowLeft:0xff51, ArrowUp:0xff52, ArrowRight:0xff53, ArrowDown:0xff54,
+      PageUp:0xff55, PageDown:0xff56, End:0xff57, Insert:0xff63, Delete:0xffff,
+      Shift:0xffe1, Control:0xffe3, CapsLock:0xffe5, Alt:0xffe9, Meta:0xffeb,
+      F1:0xffbe, F2:0xffbf, F3:0xffc0, F4:0xffc1, F5:0xffc2, F6:0xffc3,
+      F7:0xffc4, F8:0xffc5, F9:0xffc6, F10:0xffc7, F11:0xffc8, F12:0xffc9
+    };
+    function keysym(key) {
+      if (named[key]) return named[key];
+      const points = [...key];
+      if (points.length !== 1) return 0;
+      const value = points[0].codePointAt(0);
+      return value <= 0xff ? value : (0x01000000 | value);
+    }
+    function keyEvent(event, down, releaseImmediately=false) {
+      const symbol = keysym(event.key); if (!symbol) return false;
+      event.preventDefault();
+      send({type:'key', keysym:symbol, down});
+      if (releaseImmediately) send({type:'key', keysym:symbol, down:false});
+      if (down) downKeys.add(symbol); else downKeys.delete(symbol);
+      return true;
+    }
+    function viewerActive() { return desktop.style.display === 'block'; }
+    window.addEventListener('keydown', event => { if (viewerActive() && event.target !== keyboard) keyEvent(event, true); });
+    window.addEventListener('keyup', event => { if (viewerActive() && event.target !== keyboard) keyEvent(event, false); });
+    window.addEventListener('blur', () => { for (const symbol of downKeys) send({type:'key', keysym:symbol, down:false}); downKeys.clear(); });
+    keyboard.addEventListener('keydown', event => { if (named[event.key]) keyEvent(event, true, true); });
+    keyboard.addEventListener('beforeinput', event => {
+      let value = event.data;
+      if (event.inputType === 'deleteContentBackward') value = '\b';
+      if (!value) return;
+      event.preventDefault();
+      for (const char of value) { const symbol = char === '\b' ? named.Backspace : keysym(char); send({type:'key', keysym:symbol, down:true}); send({type:'key', keysym:symbol, down:false}); }
+      keyboard.value = '';
+    });
+    const fullscreenButton = document.querySelector('#fullscreen');
+    const fullscreenHint = document.querySelector('#fullscreenHint');
+    let immersive = false, hintTimer = 0;
+    function setImmersive(enabled, explain=false) {
+      immersive = enabled;
+      document.body.classList.toggle('immersive', enabled);
+      fullscreenButton.textContent = enabled ? 'Show controls' : 'Full screen';
+      if (explain && enabled && !navigator.standalone && !window.matchMedia('(display-mode: standalone)').matches) {
+        fullscreenHint.classList.add('show');
+        clearTimeout(hintTimer);
+        hintTimer = setTimeout(() => fullscreenHint.classList.remove('show'), 6500);
+      } else if (!enabled) fullscreenHint.classList.remove('show');
+    }
+    function fullscreenElement() { return document.fullscreenElement || document.webkitFullscreenElement; }
+    fullscreenButton.addEventListener('click', async () => {
+      if (fullscreenElement()) {
+        const exit = document.exitFullscreen || document.webkitExitFullscreen;
+        if (exit) await exit.call(document);
+        setImmersive(false);
+        return;
+      }
+      if (immersive) { setImmersive(false); return; }
+      const root = document.documentElement;
+      const request = root.requestFullscreen || root.webkitRequestFullscreen;
+      if (request) {
+        try { await request.call(root); if (fullscreenElement()) { setImmersive(true); return; } } catch (error) { console.debug('Native fullscreen unavailable', error); }
+      }
+      setImmersive(true, true);
+    });
+    document.addEventListener('fullscreenchange', () => { if (!fullscreenElement()) setImmersive(false); });
+    document.addEventListener('webkitfullscreenchange', () => { if (!fullscreenElement()) setImmersive(false); });
+    screen.addEventListener('error', () => { setTimeout(() => { screen.src = '/stream.mjpg?t=' + Date.now(); }, 1500); });
+  </script>
+</body>
+</html>

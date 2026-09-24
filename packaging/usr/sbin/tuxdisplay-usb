@@ -1,0 +1,121 @@
+#!/bin/sh
+set -eu
+
+td_gadget=/sys/kernel/config/usb_gadget/tuxdisplay
+td_runtime=/run/tuxdisplay
+td_network=10.55.0.1/24
+td_dnsmasq_pid="$td_runtime/dnsmasq.pid"
+
+td_require_root() {
+    if [ "$(id -u)" -ne 0 ]; then
+        echo "This command must run as root (use sudo or the systemd service)." >&2
+        exit 1
+    fi
+}
+
+td_interface() {
+    if [ -r "$td_gadget/functions/ecm.usb0/ifname" ]; then
+        cat "$td_gadget/functions/ecm.usb0/ifname"
+    else
+        printf '%s' usb0
+    fi
+}
+
+td_setup() {
+    td_require_root
+    modprobe libcomposite
+    if ! mountpoint -q /sys/kernel/config; then
+        mount -t configfs configfs /sys/kernel/config
+    fi
+
+    set -- /sys/class/udc/*
+    if [ ! -e "$1" ]; then
+        echo "No USB Device Controller was found. This USB port is probably host-only." >&2
+        echo "Use iPad tethering, Wi-Fi, or an Ethernet adapter instead." >&2
+        exit 2
+    fi
+    td_udc=$(basename "$1")
+
+    mkdir -p "$td_gadget"
+    printf '%s' 0x1d6b > "$td_gadget/idVendor"
+    printf '%s' 0x0104 > "$td_gadget/idProduct"
+    printf '%s' 0x0200 > "$td_gadget/bcdUSB"
+    printf '%s' 0x0100 > "$td_gadget/bcdDevice"
+
+    mkdir -p "$td_gadget/strings/0x409"
+    td_serial=$(cut -c1-16 /etc/machine-id 2>/dev/null || printf '%s' tuxdisplay)
+    printf '%s' "$td_serial" > "$td_gadget/strings/0x409/serialnumber"
+    printf '%s' TuxDisplay > "$td_gadget/strings/0x409/manufacturer"
+    printf '%s' 'TuxDisplay USB Network' > "$td_gadget/strings/0x409/product"
+
+    mkdir -p "$td_gadget/configs/c.1/strings/0x409"
+    printf '%s' 'CDC ECM network' > "$td_gadget/configs/c.1/strings/0x409/configuration"
+    printf '%s' 250 > "$td_gadget/configs/c.1/MaxPower"
+    mkdir -p "$td_gadget/functions/ecm.usb0"
+    if [ ! -e "$td_gadget/configs/c.1/ecm.usb0" ]; then
+        ln -s "$td_gadget/functions/ecm.usb0" "$td_gadget/configs/c.1/ecm.usb0"
+    fi
+    if [ ! -s "$td_gadget/UDC" ]; then
+        printf '%s' "$td_udc" > "$td_gadget/UDC"
+    fi
+
+    td_iface=$(td_interface)
+    td_count=0
+    while [ "$td_count" -lt 50 ] && [ ! -e "/sys/class/net/$td_iface" ]; do
+        td_count=$((td_count + 1))
+        sleep 0.1
+    done
+    if [ ! -e "/sys/class/net/$td_iface" ]; then
+        echo "USB gadget was created, but network interface $td_iface did not appear." >&2
+        exit 1
+    fi
+
+    ip address replace "$td_network" dev "$td_iface"
+    ip link set "$td_iface" up
+    mkdir -p "$td_runtime"
+    if [ -s "$td_dnsmasq_pid" ]; then
+        td_old_pid=$(cat "$td_dnsmasq_pid")
+        kill "$td_old_pid" >/dev/null 2>&1 || true
+    fi
+    dnsmasq \
+        --interface="$td_iface" \
+        --bind-interfaces \
+        --except-interface=lo \
+        --port=0 \
+        --dhcp-range=10.55.0.2,10.55.0.20,255.255.255.0,12h \
+        --dhcp-option=3 \
+        --dhcp-option=6 \
+        --pid-file="$td_dnsmasq_pid"
+    echo "TuxDisplay USB network is ready at http://10.55.0.1:6080/"
+}
+
+td_teardown() {
+    td_require_root
+    if [ -s "$td_dnsmasq_pid" ]; then
+        td_pid=$(cat "$td_dnsmasq_pid")
+        kill "$td_pid" >/dev/null 2>&1 || true
+        rm -f "$td_dnsmasq_pid"
+    fi
+    if [ ! -d "$td_gadget" ]; then
+        exit 0
+    fi
+    td_iface=$(td_interface)
+    if [ -e "/sys/class/net/$td_iface" ]; then
+        ip address del "$td_network" dev "$td_iface" >/dev/null 2>&1 || true
+    fi
+    printf '' > "$td_gadget/UDC"
+    if [ -L "$td_gadget/configs/c.1/ecm.usb0" ]; then
+        unlink "$td_gadget/configs/c.1/ecm.usb0"
+    fi
+    rmdir "$td_gadget/functions/ecm.usb0" >/dev/null 2>&1 || true
+    rmdir "$td_gadget/configs/c.1/strings/0x409" >/dev/null 2>&1 || true
+    rmdir "$td_gadget/configs/c.1" >/dev/null 2>&1 || true
+    rmdir "$td_gadget/strings/0x409" >/dev/null 2>&1 || true
+    rmdir "$td_gadget" >/dev/null 2>&1 || true
+}
+
+case "${1:-}" in
+    setup) td_setup ;;
+    teardown) td_teardown ;;
+    *) echo "Usage: tuxdisplay-usb setup|teardown" >&2; exit 2 ;;
+esac
