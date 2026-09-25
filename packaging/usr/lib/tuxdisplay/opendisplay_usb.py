@@ -162,7 +162,7 @@ def list_usb_devices() -> list[dict[str, Any]]:
             connection,
             {
                 "MessageType": "ListDevices",
-                "ClientVersionString": "tuxdisplay-0.4.4",
+                "ClientVersionString": "tuxdisplay-0.4.5",
                 "ProgName": "tuxdisplay",
                 "kLibUSBMuxVersion": 3,
             },
@@ -190,7 +190,7 @@ def connect_usb_device(device_id: int, port: int = OPENDISPLAY_PORT) -> socket.s
             connection,
             {
                 "MessageType": "Connect",
-                "ClientVersionString": "tuxdisplay-0.4.4",
+                "ClientVersionString": "tuxdisplay-0.4.5",
                 "ProgName": "tuxdisplay",
                 "DeviceID": int(device_id),
                 # usbmuxd's plist protocol carries the TCP port in network order.
@@ -285,6 +285,7 @@ class OpenDisplayUSB:
         self.video_generation = 0
         self.last_video_submitted = 0.0
         self.last_video_sent = 0.0
+        self.queued_video_since_stats = 0
         self.bad_stats_reports = 0
         self.last_recovery = 0.0
         self.dropped_frames = 0
@@ -328,6 +329,7 @@ class OpenDisplayUSB:
                     return
                 self.waiting_for_idr = False
             generation = self.video_generation
+            self.queued_video_since_stats += 1
             self._queue_video_locked((generation, normalized, captured_ms))
 
     def _queue_video_locked(self, item: tuple[int, bytes, int]) -> None:
@@ -415,13 +417,18 @@ class OpenDisplayUSB:
         now = time.monotonic()
         try:
             receiver_fps = float(message.get("fps", 0))
-            stalls = int(message.get("stalls", 0))
             lost = int(message.get("curLost", 0))
         except (TypeError, ValueError, OverflowError):
             return True
         with self.video_state_lock:
-            source_active = now - self.last_video_submitted < 6.0
-        unhealthy = lost > 0 or stalls >= 3 or (source_active and receiver_fps < max(1.0, self.frames_per_second * 0.25))
+            queued_frames = self.queued_video_since_stats
+            self.queued_video_since_stats = 0
+        # OpenDisplay's `stalls` field counts decoder starvation while a
+        # damage-driven desktop is quiet; it is not evidence of a broken USB
+        # session. Only compare FPS when the sender actually queued at least
+        # two seconds of frames during the reporting window.
+        source_active = queued_frames >= max(3, self.frames_per_second * 2)
+        unhealthy = lost > 0 or (source_active and receiver_fps < max(1.0, self.frames_per_second * 0.25))
         if not unhealthy:
             self.bad_stats_reports = 0
             return True
@@ -472,6 +479,8 @@ class OpenDisplayUSB:
             raise ConnectionError(f"OpenDisplay protocol {receiver_version} is too old")
         self.session_failed.clear()
         self.bad_stats_reports = 0
+        with self.video_state_lock:
+            self.queued_video_since_stats = 0
         self._reset_video_stream(prime_cached=True)
         with self.connection_lock:
             self.connection = connection
@@ -490,6 +499,7 @@ class OpenDisplayUSB:
         writer = threading.Thread(target=self._writer, name="tuxdisplay-opendisplay-writer", daemon=True)
         writer.start()
         self.on_connected(True, serial)
+        print("TuxDisplay OpenDisplay USB connected", file=sys.stderr, flush=True)
         self.on_control(hello)
         connection.settimeout(0.5)
         last_received = time.monotonic()
@@ -526,6 +536,7 @@ class OpenDisplayUSB:
         finally:
             self.session_failed.set()
             writer.join(timeout=2)
+            print("TuxDisplay OpenDisplay USB disconnected", file=sys.stderr, flush=True)
 
     def _run(self) -> None:
         last_status = ""

@@ -21,6 +21,15 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.5" date="2026-09-25">
+      <description>
+        <ul>
+          <li>Prevent false watchdog reconnects on quiet and low-FPS desktops.</li>
+          <li>Base recovery on real loss or measured active-stream performance.</li>
+          <li>Log USB session boundaries for connection diagnostics.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.4" date="2026-09-25">
       <description>
         <ul>

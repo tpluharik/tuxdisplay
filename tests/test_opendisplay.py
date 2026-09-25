@@ -7,7 +7,6 @@ import importlib.util
 import json
 from pathlib import Path
 import struct
-import time
 import unittest
 from unittest import mock
 
@@ -103,7 +102,7 @@ class OpenDisplayProtocolTests(unittest.TestCase):
         with self.assertRaisesRegex(ConnectionError, "invalid protocol version"):
             sender._run_session(FakeConnection(packet), "test")
 
-    def test_receiver_stalls_request_idr_then_reconnect(self) -> None:
+    def test_receiver_loss_requests_idr_then_reconnect(self) -> None:
         recoveries = []
         sender = MODULE.OpenDisplayUSB(
             1920,
@@ -113,14 +112,43 @@ class OpenDisplayProtocolTests(unittest.TestCase):
             lambda _connected, _status: None,
             lambda: recoveries.append("idr"),
         )
-        sender.last_video_submitted = time.monotonic()
-
-        self.assertTrue(sender._handle_stats({"fps": 0, "stalls": 4, "curLost": 0}))
+        self.assertTrue(sender._handle_stats({"fps": 0, "stalls": 4, "curLost": 1}))
         self.assertEqual(recoveries, ["idr"])
         sender.last_recovery -= 9
-        self.assertTrue(sender._handle_stats({"fps": 0, "stalls": 4, "curLost": 0}))
-        self.assertFalse(sender._handle_stats({"fps": 0, "stalls": 4, "curLost": 0}))
+        self.assertTrue(sender._handle_stats({"fps": 0, "stalls": 4, "curLost": 1}))
+        self.assertFalse(sender._handle_stats({"fps": 0, "stalls": 4, "curLost": 1}))
         self.assertTrue(sender.session_failed.is_set())
+
+    def test_stall_counter_does_not_reconnect_a_healthy_stream(self) -> None:
+        recoveries = []
+        sender = MODULE.OpenDisplayUSB(
+            1920,
+            1080,
+            15,
+            lambda _message: None,
+            lambda _connected, _status: None,
+            lambda: recoveries.append("idr"),
+        )
+        sender.queued_video_since_stats = 75
+
+        self.assertTrue(sender._handle_stats({"fps": 14, "stalls": 99, "curLost": 0}))
+        self.assertEqual(sender.bad_stats_reports, 0)
+        self.assertEqual(recoveries, [])
+
+    def test_quiet_damage_driven_desktop_is_not_a_failed_stream(self) -> None:
+        recoveries = []
+        sender = MODULE.OpenDisplayUSB(
+            1920,
+            1080,
+            30,
+            lambda _message: None,
+            lambda _connected, _status: None,
+            lambda: recoveries.append("idr"),
+        )
+
+        self.assertTrue(sender._handle_stats({"fps": 0, "stalls": 20, "curLost": 0}))
+        self.assertEqual(sender.bad_stats_reports, 0)
+        self.assertEqual(recoveries, [])
 
     def test_connection_loop_tries_every_attached_apple_device(self) -> None:
         attempts = []

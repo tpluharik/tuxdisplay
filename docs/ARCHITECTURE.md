@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.4. The project has two display backends and three receiver paths. Only the GNOME Wayland backend extends the user's current desktop.
+This document describes TuxDisplay 0.4.5. The project has two display backends and three receiver paths. Only the GNOME Wayland backend extends the user's current desktop.
 
 ## GNOME Wayland data flow
 
@@ -41,7 +41,7 @@ TuxDisplay speaks the public OpenDisplay protocol version 3. It asks usbmuxd to 
 
 The OpenDisplay transport is not IP networking. It does not require an address, DHCP, Personal Hotspot, Wi-Fi, or the optional USB gadget service.
 
-TuxDisplay checks every attached Apple USB device, validates the receiver hello, and retries with a bounded backoff. Receiver telemetry drives staged recovery: first request a fresh IDR, then rebuild the cable session if decoding does not recover.
+TuxDisplay checks every attached Apple USB device, validates the receiver hello, and retries with a bounded backoff. Receiver telemetry drives staged recovery: first request a fresh IDR, then rebuild the cable session if real packet loss or active-stream underperformance persists. OpenDisplay's decoder-starvation counter is retained for diagnostics but does not trigger recovery because quiet damage-driven desktops can raise it during a healthy session.
 
 ### Input safety
 

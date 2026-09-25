@@ -1,3 +1,14 @@
+tuxdisplay (0.4.5) unstable; urgency=critical
+
+  * Stop treating OpenDisplay's decoder-starvation counter as proof of a failed
+    USB session; it is expected to rise on damage-driven or low-FPS desktops.
+  * Compare receiver FPS only when the sender queued enough frames to establish
+    that the desktop was actively producing video.
+  * Retain staged recovery for real packet loss and sustained active-stream
+    underperformance, and log USB session boundaries for diagnosis.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Fri, 25 Sep 2026 12:00:00 +0200
+
 tuxdisplay (0.4.4) unstable; urgency=critical
 
   * Accept the frame rate negotiated by Mutter and PipeWire instead of placing

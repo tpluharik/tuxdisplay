@@ -2,7 +2,7 @@
 set -eu
 
 td_project_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-td_version=0.4.4
+td_version=0.4.5
 td_build_dir="$td_project_dir/build"
 td_package_root="$td_build_dir/tuxdisplay_${td_version}_all"
 td_output_dir="$td_project_dir/dist"
