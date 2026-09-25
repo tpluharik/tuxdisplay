@@ -262,6 +262,7 @@ class WaylandDisplay:
         self.opendisp_generation = 0
         self.receiver_stats: dict[str, Any] = {}
         self.last_video_at = 0.0
+        self.last_capture_timestamp = -1
         self.opendisp_pointer = OpenDisplayPointerTranslator()
         self.pipeline: Gst.Pipeline | None = None
         self.opendisp: OpenDisplayUSB | None = None
@@ -361,8 +362,8 @@ class WaylandDisplay:
         Gst.init(None)
         description = (
             f"pipewiresrc path={self.node_id} do-timestamp=true "
-            f"! video/x-raw,format=BGRx,width={self.width},height={self.height},framerate={self.frames_per_second}/1 "
-            "! queue max-size-buffers=1 leaky=downstream "
+            f"! video/x-raw,format=BGRx,width={self.width},height={self.height} "
+            "! queue name=capture_queue max-size-buffers=1 leaky=downstream "
             "! videoconvert ! video/x-raw,format=I420 "
             "! tee name=displaytee "
             "displaytee. ! queue max-size-buffers=1 leaky=downstream "
@@ -380,6 +381,11 @@ class WaylandDisplay:
         if not isinstance(pipeline, Gst.Pipeline):
             raise RuntimeError("Could not create the video pipeline")
         self.pipeline = pipeline
+        capture_queue = pipeline.get_by_name("capture_queue")
+        capture_pad = capture_queue.get_static_pad("src") if capture_queue is not None else None
+        if capture_pad is None:
+            raise RuntimeError("Could not attach the video frame-rate limiter")
+        capture_pad.add_probe(Gst.PadProbeType.BUFFER, self.limit_frame_rate)
         jpeg_sink = pipeline.get_by_name("jpeg_sink")
         jpeg_sink.connect("new-sample", self.on_sample)
         h264_sink = pipeline.get_by_name("h264_sink")
@@ -389,9 +395,33 @@ class WaylandDisplay:
         messages.connect("message", self.on_pipeline_message)
         result = pipeline.set_state(Gst.State.PLAYING)
         if result == Gst.StateChangeReturn.FAILURE:
-            raise RuntimeError("PipeWire video pipeline could not start")
+            failure = messages.timed_pop_filtered(Gst.SECOND, Gst.MessageType.ERROR)
+            detail = ""
+            if failure is not None:
+                error, debug = failure.parse_error()
+                detail = f": {error.message}; {debug}"
+            pipeline.set_state(Gst.State.NULL)
+            self.pipeline = None
+            raise RuntimeError(f"PipeWire video pipeline could not start{detail}")
 
-    def start_opendisplay(self) -> None:
+    def limit_frame_rate(self, _pad: Gst.Pad, info: Gst.PadProbeInfo) -> Gst.PadProbeReturn:
+        """Drop excess capture buffers without delaying the first frame."""
+        buffer = info.get_buffer()
+        if buffer is None:
+            return Gst.PadProbeReturn.OK
+        timestamp = int(buffer.pts)
+        if timestamp == Gst.CLOCK_TIME_NONE:
+            timestamp = time.monotonic_ns()
+        interval = 1_000_000_000 // self.frames_per_second
+        tolerance = min(1_000_000, interval // 10)
+        if self.last_capture_timestamp >= 0:
+            elapsed = timestamp - self.last_capture_timestamp
+            if 0 <= elapsed < interval - tolerance:
+                return Gst.PadProbeReturn.DROP
+        self.last_capture_timestamp = timestamp
+        return Gst.PadProbeReturn.OK
+
+    def prepare_opendisplay(self) -> None:
         self.opendisp = OpenDisplayUSB(
             width=self.width,
             height=self.height,
@@ -400,6 +430,10 @@ class WaylandDisplay:
             on_connected=self.set_opendisplay_connected,
             request_keyframe=self.force_keyframe,
         )
+
+    def start_opendisplay(self) -> None:
+        if self.opendisp is None:
+            self.prepare_opendisplay()
         self.opendisp.start()
 
     def force_keyframe(self) -> None:
@@ -726,8 +760,9 @@ class WaylandDisplay:
         try:
             self.write_client_state()
             self.create_monitor()
-            self.start_opendisplay()
+            self.prepare_opendisplay()
             self.start_pipeline()
+            self.start_opendisplay()
             self.start_http()
             self.write_mode()
             print(

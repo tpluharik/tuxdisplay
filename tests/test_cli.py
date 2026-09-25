@@ -91,9 +91,19 @@ class TuxDisplayTests(unittest.TestCase):
         text = daemon.read_text(encoding='utf-8')
         self.assertIn('pipewiresrc path={self.node_id}', text)
         self.assertNotIn('videorate', text)
-        self.assertIn('framerate={self.frames_per_second}/1', text)
+        self.assertNotIn('framerate={self.frames_per_second}/1', text)
+        self.assertIn('queue name=capture_queue', text)
+        self.assertIn('capture_pad.add_probe(Gst.PadProbeType.BUFFER, self.limit_frame_rate)', text)
+        self.assertIn('return Gst.PadProbeReturn.DROP', text)
         self.assertIn('valve name=jpeg_valve drop=false', text)
         self.assertIn('key-int-max={self.frames_per_second}', text)
+
+    def test_wayland_pipeline_starts_before_usb_transport(self) -> None:
+        daemon = SCRIPT.parents[1] / 'lib' / 'tuxdisplay' / 'tuxdisplay-wayland'
+        text = daemon.read_text(encoding='utf-8')
+        run = text[text.index('    def run(self) -> None:') :]
+        self.assertLess(run.index('self.prepare_opendisplay()'), run.index('self.start_pipeline()'))
+        self.assertLess(run.index('self.start_pipeline()'), run.index('self.start_opendisplay()'))
 
     def test_browser_recovers_or_reauthenticates_after_service_restart(self) -> None:
         viewer = SCRIPT.parents[1] / "share" / "tuxdisplay" / "wayland-viewer.html"

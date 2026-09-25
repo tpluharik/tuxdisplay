@@ -1,3 +1,14 @@
+tuxdisplay (0.4.4) unstable; urgency=critical
+
+  * Accept the frame rate negotiated by Mutter and PipeWire instead of placing
+    a conflicting fixed-rate constraint on the source stream.
+  * Limit capture with a non-buffering pad probe so 15/30/60 FPS selection does
+    not delay the first damage-driven frame.
+  * Start and validate the video pipeline before opening the USB transport, and
+    include the underlying GStreamer error when pipeline startup fails.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Fri, 25 Sep 2026 11:45:00 +0200
+
 tuxdisplay (0.4.3) unstable; urgency=high
 
   * Keep Mutter, PipeWire, H.264, and OpenDisplay on one configurable frame

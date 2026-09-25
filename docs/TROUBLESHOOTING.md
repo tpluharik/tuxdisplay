@@ -14,24 +14,24 @@ The first three commands are safe to paste into a bug report. Review logs before
 
 ## Do not run 0.4.0 on GNOME Wayland
 
-TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. Upgrade to 0.4.3 or newer:
+TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. TuxDisplay 0.4.3 could reject GNOME's negotiated PipeWire rate and repeatedly fail pipeline startup. Upgrade to 0.4.4 or newer:
 
 ~~~sh
-sudo apt install ./tuxdisplay_0.4.3_all.deb
+sudo apt install ./tuxdisplay_0.4.4_all.deb
 tuxdisplay restart
 ~~~
 
-Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 adds fresh-IDR gating, receiver-health recovery, frame-rate consistency, and bounded shutdown.
+Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate and limits frames without buffering the first image.
 
 ## OpenDisplay shows a black screen
 
 1. Confirm `tuxdisplay status` reports GNOME Wayland mode and a running service.
-2. Confirm the package version is at least 0.4.3.
+2. Confirm the package version is at least 0.4.4.
 3. Move the pointer or a window onto `Meta-0` to create screen damage.
 4. Close and reopen OpenDisplay so the sender performs a new handshake.
 5. Run `tuxdisplay restart` if the app does not reconnect.
 
-If a new connection remains black on 0.4.3, capture the user-service log. The log should show a valid OpenDisplay hello, an active H.264 stream, and receiver-health statistics.
+If a new connection remains black on 0.4.4, capture the user-service log. The log should show a valid OpenDisplay hello, an active H.264 stream, and receiver-health statistics.
 
 ## The image freezes after changing resolution
 

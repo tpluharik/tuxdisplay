@@ -12,7 +12,7 @@ The Debian package also includes:
 - an optional USB Ethernet gadget helper for hardware with a device-capable USB controller.
 
 > [!IMPORTANT]
-> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.1 replaced that path with guarded pointer events, 0.4.2 fixed the static first-frame black screen, and 0.4.3 adds bounded shutdown and automatic stream recovery. Install 0.4.3 or newer.
+> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can also fail to start when GNOME supplies a different PipeWire frame rate than requested. Install 0.4.4 or newer.
 
 ## Documentation
 
@@ -53,7 +53,7 @@ Download the current `.deb` and `SHA256SUMS` from [GitHub Releases](https://gith
 
 ~~~sh
 sha256sum --ignore-missing --check SHA256SUMS
-sudo apt install ./tuxdisplay_0.4.3_all.deb
+sudo apt install ./tuxdisplay_0.4.4_all.deb
 ~~~
 
 The checksum file can include packages from several releases. The checksum for the package being installed must report `OK`.
@@ -147,7 +147,7 @@ WEB_PORT=6080
 VNC_PORT=5900
 ~~~
 
-`FPS` accepts `15`, `30`, or `60` and controls the virtual monitor, encoder, and advertised OpenDisplay cadence; `30` is the stability-oriented default. `DISPLAY_NUMBER` and `VNC_PORT` apply only to the X11 compatibility workspace. `WEB_PORT` and the PIN apply only to browser access. Restart TuxDisplay after changing a value.
+`FPS` accepts `15`, `30`, or `60` and controls the requested virtual-monitor cadence, a non-buffering capture limiter, the encoder keyframe interval, and the advertised OpenDisplay cadence; `30` is the stability-oriented default. TuxDisplay accepts the actual PipeWire rate chosen by GNOME and safely drops excess frames before encoding. `DISPLAY_NUMBER` and `VNC_PORT` apply only to the X11 compatibility workspace. `WEB_PORT` and the PIN apply only to browser access. Restart TuxDisplay after changing a value.
 
 Set `TUXDISPLAY_FORCE_X11=1` in the user service environment to force the isolated X11 fallback.
 
@@ -160,7 +160,7 @@ python3 -m unittest discover -s tests -v
 ./build-deb.sh
 ~~~
 
-The package is written to `dist/tuxdisplay_0.4.3_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
+The package is written to `dist/tuxdisplay_0.4.4_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
 
 Development and release conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 

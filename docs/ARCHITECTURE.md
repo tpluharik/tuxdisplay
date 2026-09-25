@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.3. The project has two display backends and three receiver paths. Only the GNOME Wayland backend extends the user's current desktop.
+This document describes TuxDisplay 0.4.4. The project has two display backends and three receiver paths. Only the GNOME Wayland backend extends the user's current desktop.
 
 ## GNOME Wayland data flow
 
@@ -33,7 +33,7 @@ Mutter provides a PipeWire stream for the virtual monitor. One GStreamer pipelin
 - the OpenDisplay branch uses software x264 at 8 Mbit/s, byte-stream output, no B-frames, and an IDR interval of at most one second;
 - the browser branch produces JPEG frames for the authenticated MJPEG endpoint and is paused while no browser is viewing.
 
-Queues are deliberately small and leaky so latency is preferred over delivering stale frames. The configured 15, 30, or 60 FPS is applied consistently to the virtual monitor, PipeWire caps, encoder keyframe interval, and receiver announcement. TuxDisplay caches the most recent H.264 keyframe to show a static desktop, but keeps delta frames gated until a fresh session IDR arrives.
+Queues are deliberately small and leaky so latency is preferred over delivering stale frames. GNOME may supply PipeWire frames at a different rate from the requested virtual-monitor mode, so TuxDisplay accepts the negotiated source rate and uses a non-buffering pad probe to drop excess frames before conversion and encoding. This preserves the first damage-driven frame while keeping the configured 15, 30, or 60 FPS encoder cadence and receiver announcement. TuxDisplay caches the most recent H.264 keyframe to show a static desktop, but keeps delta frames gated until a fresh session IDR arrives.
 
 ### Direct USB transport
 

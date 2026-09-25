@@ -21,6 +21,15 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.4" date="2026-09-25">
+      <description>
+        <ul>
+          <li>Accept GNOME's negotiated PipeWire rate to restore pipeline startup.</li>
+          <li>Limit capture without buffering the first damage-driven frame.</li>
+          <li>Validate video startup before opening the USB transport.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.3" date="2026-09-25">
       <description>
         <ul>
