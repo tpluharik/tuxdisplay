@@ -1,51 +1,171 @@
 .TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.2" "User Commands"
 .SH NAME
-tuxdisplay \- use an iPad as a USB-connected secondary Linux monitor
+tuxdisplay \- use an iPad as a secondary Linux display
 .SH SYNOPSIS
 .B tuxdisplay
 .RI [ command ]
+.PP
+.B tuxdisplay
+.B launch
+.I application
+.RI [ argument ...]
+.PP
+.B tuxdisplay
+.B usb
+.BR connect | disconnect | status
 .SH DESCRIPTION
 .B TuxDisplay
-creates a compositor-owned virtual monitor in a GNOME Wayland session and streams it to the OpenDisplay iPad app through usbmuxd. This direct USB mode requires no IP network, Internet connection, or Personal Hotspot. Windows can be dragged between the physical display and the iPad. An authenticated browser viewer and an isolated X11/noVNC workspace remain available as compatibility fallbacks.
+creates a compositor-owned virtual monitor in a GNOME Wayland session and
+streams it to the OpenDisplay iPad app through usbmuxd. This direct USB mode
+requires no IP address, Internet connection, Wi-Fi, cellular service, or
+Personal Hotspot. Windows can be moved between the physical display and iPad.
+.PP
+An authenticated browser viewer is available on trusted private networks.
+Xorg and unsupported Wayland compositors use an isolated X11/noVNC workspace;
+that workspace is not an extension of the current desktop.
+.PP
+Version 0.4.0 must not be used on GNOME Wayland because its touch path could
+abort Mutter. Use 0.4.2 or newer.
 .SH COMMANDS
-.TP
-.B start, stop, restart
-Control the per-user display service.
-.TP
-.B status
-Show service state, display mode, OpenDisplay connection state, browser fallback URL, and access PIN.
-.TP
-.B url
-Print the preferred iPad URL.
-.TP
-.B password [--reset]
-Show or regenerate the six-digit access PIN.
-.TP
-.B launch APPLICATION [ARGUMENT ...]
-Start an application in the current desktop. In X11 fallback mode, start it in the isolated workspace.
-.TP
-.B usb connect|disconnect|status
-Detect a trusted iPad, start direct OpenDisplay USB streaming, or manage a supported USB gadget fallback.
-.TP
-.B tray
-Run the GNOME tray indicator with start, USB connect, and close-connection actions.
-.TP
-.B doctor
-Check display mode, dependencies, networking, and USB gadget capability.
 .TP
 .B gui
 Open the standalone GTK manager. This is the default when no command is given.
+.TP
+.B start
+Start the per-user service and create the selected display backend.
+.TP
+.B stop
+Stop streaming and remove the virtual monitor or fallback workspace.
+.TP
+.B restart
+Stop and recreate the display. OpenDisplay and browser viewers must reconnect.
+.TP
+.B status
+Show service state, display mode, OpenDisplay connection state, browser
+fallback URL, and access PIN.
+.TP
+.B url
+Print the preferred browser-fallback URL. Direct OpenDisplay USB does not use
+this URL.
+.TP
+.B password
+Show the six-digit browser access PIN.
+.TP
+.B password --reset
+Generate a new browser PIN and invalidate the previous value after restart.
+.TP
+.BI "launch " "application [argument ...]"
+Start an application in the current GNOME desktop. In X11 fallback mode, start
+it in the isolated workspace.
+.TP
+.B usb connect
+Start the display if necessary and wait for OpenDisplay on a trusted,
+cable-connected iPad. When no iPad is paired, TuxDisplay may offer the optional
+USB gadget fallback on supported device-capable hardware.
+.TP
+.B usb disconnect
+Stop the display connection and tear down a TuxDisplay USB gadget if one was
+created.
+.TP
+.B usb status
+Report trusted-device, direct OpenDisplay, USB-network, and gadget capability
+state.
+.TP
+.B tray
+Run the desktop indicator. Its icon is gray when stopped, amber while waiting
+for a receiver, and green when a receiver is viewing.
+.TP
+.B doctor
+Check the selected display mode, required programs, networking, trusted iPad,
+and USB gadget capability.
+.SH DISPLAY MODES
+.SS GNOME Wayland
+Mutter creates a real virtual output named
+.BR Meta-0 .
+PipeWire captures only that output. GStreamer supplies H.264 to OpenDisplay
+and JPEG frames to the browser fallback.
+.SS OpenDisplay USB
+TuxDisplay connects through usbmuxd to OpenDisplay port 9000. Video and input
+use the public OpenDisplay version 3 framing protocol over the USB cable. No
+network interface or browser PIN is involved.
+.SS Browser fallback
+GNOME Wayland serves an authenticated MJPEG viewer over HTTP. Use it only on
+a trusted private LAN or cable network.
+.SS X11 compatibility
+Xvfb, Openbox, tint2, x11vnc, websockify, and noVNC provide a separate desktop.
+Applications from the current desktop cannot be dragged into it.
+.SH RESOLUTION
+The supported presets are 1024x768, 1280x800, 1366x768, 1920x1080,
+2048x1536, and 2160x1620. The default is 1920x1080.
+.PP
+Most traditional iPads are close to 4:3. Use 2048x1536 or 2160x1620 to reduce
+letterboxing, or 1024x768 for lower CPU and bandwidth use.
+.PP
+Changing resolution restarts and replaces the virtual monitor. The iPad can
+show its last frame briefly, and GNOME can move windows from the removed output
+back to a physical monitor. Reopen OpenDisplay if it does not reconnect.
+.SH INPUT
+OpenDisplay touch and Apple Pencil events are translated into a guarded
+single-pointer stream. Tap, drag, pointer movement, and scrolling are
+supported. Native multi-touch, Pencil pressure, and tilt are not forwarded.
+.PP
+The browser path also accepts pointer, touch, scrolling, and keyboard events,
+subject to Safari and iPadOS restrictions.
+.SH CONFIGURATION
+.I ~/.config/tuxdisplay/config
+accepts:
+.PP
+.nf
+RESOLUTION=1920x1080
+DISPLAY_NUMBER=48
+WEB_PORT=6080
+VNC_PORT=5900
+.fi
+.PP
+.B DISPLAY_NUMBER
+and
+.B VNC_PORT
+apply only to the X11 fallback.
+.B WEB_PORT
+and the PIN apply only to browser access. Restart the service after editing.
+.SH ENVIRONMENT
+.TP
+.B TUXDISPLAY_FORCE_X11=1
+Force the isolated X11/noVNC backend instead of GNOME Wayland mode.
 .SH FILES
 .TP
 .I ~/.config/tuxdisplay/config
-Resolution and port settings.
+Resolution and port settings, created with private permissions.
 .TP
 .I ~/.config/tuxdisplay/password
-Generated access PIN. The file is readable only by its user.
+Generated browser PIN.
+.TP
+.I ~/.config/tuxdisplay/*.rfb
+Authentication material for the VNC fallback when used.
 .TP
 .I ~/.local/state/tuxdisplay/
-Service state and application logs.
+Connection state and application logs.
+.SH DIAGNOSTICS
+.nf
+tuxdisplay status
+tuxdisplay usb status
+tuxdisplay doctor
+systemctl --user status tuxdisplay.service
+journalctl --user -u tuxdisplay.service --since "10 minutes ago"
+.fi
 .SH SECURITY
-OpenDisplay traffic uses the trusted local usbmuxd cable connection. Protocol version 3 has no additional authentication, so unlock the iPad and trust only computers you control. The browser fallback listens on all interfaces and uses PIN authentication over ordinary HTTP; do not expose port 6080 to the public Internet.
+OpenDisplay traffic uses the operating system's trusted-device usbmuxd channel,
+but OpenDisplay protocol version 3 adds no encryption or authentication.
+Trust only computers and iPads you control.
+.PP
+The browser service listens on local interfaces and uses PIN authentication
+over ordinary HTTP. Never expose port 6080 to the public Internet or an
+untrusted network.
+.SH LIMITATIONS
+Native desktop extension requires GNOME Wayland. Direct OpenDisplay transport
+is currently USB-only. Encoding is software x264. Receiver dimensions are not
+used to select or dynamically resize the virtual monitor.
 .SH SEE ALSO
-.BR tuxdisplay-usb (8)
+.BR tuxdisplay-usb (8),
+.BR systemctl (1),
+.BR journalctl (1)

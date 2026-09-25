@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=TuxDisplay
-Comment=Use an iPad as a real USB-connected extended monitor
+Comment=Extend a GNOME Wayland desktop to an iPad over USB
 Exec=tuxdisplay gui
 Icon=tuxdisplay
 Terminal=false

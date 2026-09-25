@@ -1,34 +1,79 @@
 .TH TUXDISPLAY-USB 8 "September 2026" "TuxDisplay 0.4.2" "System Administration"
 .SH NAME
-tuxdisplay-usb \- configure optional USB gadget Ethernet for TuxDisplay
+tuxdisplay-usb \- configure optional USB Ethernet for the TuxDisplay browser fallback
 .SH SYNOPSIS
 .B tuxdisplay-usb
 .BR setup | teardown
 .SH DESCRIPTION
 .B tuxdisplay-usb
-creates a USB CDC ECM Ethernet gadget using Linux ConfigFS, assigns 10.55.0.1/24 to the gadget interface, and starts a private DHCP service. It is intended only for computers with a USB Device Controller and a device or dual-role USB port.
+creates a USB CDC ECM Ethernet gadget using Linux ConfigFS, assigns
+10.55.0.1/24 to the gadget interface, and starts a private DHCP service.
+It is intended only for computers with a USB Device Controller and a device or
+dual-role USB port.
 .PP
-Most desktop and laptop USB ports are host-only. They do not need gadget mode for the preferred OpenDisplay transport. Install and open OpenDisplay on the iPad, connect and trust it, and use
+This helper is not used by the preferred OpenDisplay connection. Direct
+OpenDisplay video and input travel through usbmuxd on an ordinary host port and
+need no IP address, DHCP, Personal Hotspot, or gadget support. Use
 .B tuxdisplay usb connect
-to stream directly through usbmuxd without Personal Hotspot. This helper remains available only for the browser-network fallback.
+for that mode.
+.PP
+Most desktop and laptop USB ports are host-only. An empty
+.I /sys/class/udc
+is normally a hardware limitation, not a TuxDisplay failure.
 .SH COMMANDS
 .TP
 .B setup
-Create and bind the gadget, configure its network interface, and start dnsmasq.
+Validate gadget capability, create and bind the TuxDisplay ConfigFS objects,
+configure the private interface, and start dnsmasq.
 .TP
 .B teardown
-Stop the private dnsmasq process, unbind the gadget, and remove only the TuxDisplay ConfigFS objects.
-.SH URL
-After successful setup, open
-.B http://10.55.0.1:6080/
-on the attached iPad.
+Stop the private dnsmasq process, unbind the gadget, and remove only the
+TuxDisplay-created ConfigFS objects.
+.SH REQUIREMENTS
+The host must expose a controller below
+.IR /sys/class/udc ,
+the selected USB port must support device mode, and the kernel must provide
+ConfigFS and CDC ECM gadget functions. The command requires root and is
+normally invoked through the installed PolicyKit action or system service.
+.SH BROWSER URL
+After successful setup and while the per-user TuxDisplay service is running,
+open:
+.PP
+.nf
+http://10.55.0.1:6080/
+.fi
+.PP
+Authenticate with the PIN shown by
+.BR "tuxdisplay password" .
+This is ordinary HTTP over a private point-to-point network.
 .SH SERVICE
 The disabled-by-default
 .B tuxdisplay-usb-gadget.service
-system unit runs this helper. Enable it only after confirming that
-.I /sys/class/udc
-contains a controller.
+system unit runs this helper. Enable it only after confirming that the hardware
+has a suitable USB Device Controller:
+.PP
+.nf
+ls /sys/class/udc
+sudo systemctl enable --now tuxdisplay-usb-gadget.service
+.fi
+.SH DIAGNOSTICS
+.nf
+tuxdisplay usb status
+tuxdisplay doctor
+systemctl status tuxdisplay-usb-gadget.service
+ip address show
+.fi
+.PP
+If the iPad is trusted and
+.B idevice_id -l
+lists it, but no IP interface appears, use direct OpenDisplay USB. A network
+interface is neither expected nor required for that transport.
+.SH SECURITY
+The helper changes system-wide USB and network state with root privileges.
+Enable it only when needed. The browser service uses PIN authentication over
+HTTP; do not bridge, route, or expose its port to an untrusted network.
 .SH SEE ALSO
 .BR tuxdisplay (1),
 .BR systemctl (1),
-.BR dnsmasq (8)
+.BR dnsmasq (8),
+.BR ip (8)

@@ -2,14 +2,17 @@
 <component type="desktop-application">
   <id>io.github.tuxdisplay.Manager</id>
   <name>TuxDisplay</name>
-  <summary>Use an iPad as a real USB-connected extended monitor</summary>
+  <summary>Extend a GNOME Wayland desktop to an iPad over USB</summary>
   <metadata_license>MIT</metadata_license>
   <developer id="io.github.tpluharik"><name>TuxDisplay contributors</name></developer>
   <url type="homepage">https://github.com/tpluharik/tuxdisplay</url>
+  <url type="help">https://github.com/tpluharik/tuxdisplay/blob/main/docs/TROUBLESHOOTING.md</url>
+  <url type="bugtracker">https://github.com/tpluharik/tuxdisplay/issues</url>
   <project_license>MIT</project_license>
   <description>
     <p>TuxDisplay creates a native GNOME Wayland extended monitor and streams it directly to the OpenDisplay iPad app over USB without requiring an IP network or Personal Hotspot.</p>
     <p>An authenticated browser receiver remains available for private networks and compatibility use.</p>
+    <p>Desktop sessions without the required GNOME virtual-monitor APIs use an isolated X11 workspace rather than extending the current desktop.</p>
     <p>The standalone manager and tray indicator show whether the display is stopped, waiting, or actively connected.</p>
   </description>
   <content_rating type="oars-1.1"/>

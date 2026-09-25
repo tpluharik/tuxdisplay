@@ -19,6 +19,8 @@ find "$td_package_root/man" -depth -type d -empty -delete
 
 mkdir -p "$td_package_root/usr/share/doc/tuxdisplay"
 cp "$td_project_dir/README.md" "$td_package_root/usr/share/doc/tuxdisplay/README.md"
+cp "$td_project_dir/CONTRIBUTING.md" "$td_package_root/usr/share/doc/tuxdisplay/CONTRIBUTING.md"
+cp -a "$td_project_dir/docs" "$td_package_root/usr/share/doc/tuxdisplay/"
 cp "$td_project_dir/LICENSE" "$td_package_root/usr/share/doc/tuxdisplay/copyright"
 gzip -9n -c "$td_project_dir/packaging/changelog" > "$td_package_root/usr/share/doc/tuxdisplay/changelog.gz"
 mkdir -p "$td_package_root/usr/share/man/man1" "$td_package_root/usr/share/man/man8"
