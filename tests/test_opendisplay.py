@@ -55,5 +55,53 @@ class OpenDisplayProtocolTests(unittest.TestCase):
         self.assertFalse(is_idr)
 
 
+class OpenDisplayPointerTranslatorTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.translator = MODULE.OpenDisplayPointerTranslator()
+
+    def test_duplicate_touch_phases_produce_one_button_pair(self) -> None:
+        events = []
+        events += self.translator.translate({"type": "touch", "phase": "began", "x": 0.25, "y": 0.5}, 1000, 800)
+        events += self.translator.translate({"type": "touch", "phase": "began", "x": 0.3, "y": 0.6}, 1000, 800)
+        events += self.translator.translate({"type": "touch", "phase": "moved", "x": 0.4, "y": 0.7}, 1000, 800)
+        events += self.translator.translate({"type": "touch", "phase": "ended", "x": 0.4, "y": 0.7}, 1000, 800)
+        events += self.translator.translate({"type": "touch", "phase": "ended", "x": 0.4, "y": 0.7}, 1000, 800)
+
+        self.assertEqual([event["type"] for event in events], ["button", "motion", "motion", "button"])
+        self.assertEqual([event["down"] for event in events if event["type"] == "button"], [True, False])
+        self.assertFalse(any(event["type"].startswith("touch_") for event in events))
+
+    def test_release_clears_a_stuck_pointer_once(self) -> None:
+        self.translator.translate({"type": "touch", "phase": "began", "x": 0.1, "y": 0.2}, 1000, 500)
+
+        self.assertEqual(
+            self.translator.release(),
+            [{"type": "button", "button": 0, "down": False, "x": 100.0, "y": 100.0}],
+        )
+        self.assertEqual(self.translator.release(), [])
+
+    def test_coordinates_are_clamped_and_scaled(self) -> None:
+        events = self.translator.translate(
+            {"type": "scroll", "x": -1, "y": 2, "dx": 30, "dy": -40},
+            1920,
+            1080,
+        )
+
+        self.assertEqual(events[0]["x"], 0.0)
+        self.assertEqual(events[0]["y"], 1080.0)
+        self.assertEqual(events[0]["dx"], 30.0)
+        self.assertEqual(events[0]["dy"], -40.0)
+
+    def test_duplicate_pencil_phases_are_guarded(self) -> None:
+        events = []
+        events += self.translator.translate({"type": "pencil", "phase": "down", "x": 0.5, "y": 0.5}, 800, 600)
+        events += self.translator.translate({"type": "pencil", "phase": "down", "x": 0.6, "y": 0.6}, 800, 600)
+        events += self.translator.translate({"type": "pencil", "phase": "up", "x": 0.6, "y": 0.6}, 800, 600)
+        events += self.translator.translate({"type": "pencil", "phase": "up", "x": 0.6, "y": 0.6}, 800, 600)
+
+        self.assertEqual([event["type"] for event in events], ["button", "motion", "button"])
+        self.assertEqual([event["down"] for event in events if event["type"] == "button"], [True, False])
+
+
 if __name__ == "__main__":
     unittest.main()

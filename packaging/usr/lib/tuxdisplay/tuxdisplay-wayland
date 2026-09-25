@@ -24,7 +24,7 @@ gi.require_version("GstApp", "1.0")
 gi.require_version("GstVideo", "1.0")
 from gi.repository import Gio, GLib, Gst, GstVideo  # type: ignore  # noqa: E402
 
-from opendisplay_usb import OpenDisplayUSB  # noqa: E402
+from opendisplay_usb import OpenDisplayPointerTranslator, OpenDisplayUSB  # noqa: E402
 
 
 REMOTE_DEST = "org.gnome.Mutter.RemoteDesktop"
@@ -250,7 +250,8 @@ class WaylandDisplay:
         self.client_lock = threading.Lock()
         self.opendisp_connected = False
         self.opendisp_status = "Waiting for OpenDisplay"
-        self.touch_down = False
+        self.opendisp_generation = 0
+        self.opendisp_pointer = OpenDisplayPointerTranslator()
         self.pipeline: Gst.Pipeline | None = None
         self.opendisp: OpenDisplayUSB | None = None
         self.remote_session = ""
@@ -478,48 +479,45 @@ class WaylandDisplay:
         kind = str(event.get("type", ""))
         if kind in {"hello", "ping", "kf", "stats", "sleeping", "closing", "cursorAck"}:
             return
-        normalized_x = min(1.0, max(0.0, float(event.get("x", 0.0))))
-        normalized_y = min(1.0, max(0.0, float(event.get("y", 0.0))))
-        x = normalized_x * self.width
-        y = normalized_y * self.height
-        if kind == "touch":
-            phase = str(event.get("phase", ""))
-            if phase == "began":
-                self.touch_down = True
-                self.handle_input({"type": "touch_down", "slot": 0, "x": x, "y": y})
-            elif phase == "moved":
-                input_type = "touch_move" if self.touch_down else "touch_down"
-                self.touch_down = True
-                self.handle_input({"type": input_type, "slot": 0, "x": x, "y": y})
-            elif phase in {"ended", "cancelled"} and self.touch_down:
-                self.handle_input({"type": "touch_up", "slot": 0, "x": x, "y": y})
-                self.touch_down = False
-        elif kind == "scroll":
-            self.handle_input(
-                {
-                    "type": "wheel",
-                    "dx": float(event.get("dx", 0.0)),
-                    "dy": float(event.get("dy", 0.0)),
-                    "x": x,
-                    "y": y,
-                }
-            )
-        elif kind == "pencil":
-            phase = str(event.get("phase", ""))
-            if phase == "down":
-                self.handle_input({"type": "button", "button": 0, "down": True, "x": x, "y": y})
-            elif phase in {"move", "hover"}:
-                self.handle_input({"type": "motion", "x": x, "y": y})
-            elif phase == "up":
-                self.handle_input({"type": "button", "button": 0, "down": False, "x": x, "y": y})
+        with self.client_lock:
+            if not self.opendisp_connected:
+                return
+            generation = self.opendisp_generation
+        GLib.idle_add(
+            self.apply_opendisplay_control,
+            dict(event),
+            generation,
+            priority=GLib.PRIORITY_HIGH_IDLE,
+        )
+
+    def apply_opendisplay_control(self, event: dict[str, Any], generation: int) -> bool:
+        with self.client_lock:
+            if not self.opendisp_connected or generation != self.opendisp_generation:
+                return GLib.SOURCE_REMOVE
+        try:
+            for translated in self.opendisp_pointer.translate(event, self.width, self.height):
+                self.handle_input(translated)
+        except (GLib.Error, TypeError, ValueError) as error:
+            print(f"TuxDisplay OpenDisplay input ignored: {error}", file=sys.stderr)
+        return GLib.SOURCE_REMOVE
+
+    def release_opendisplay_input(self) -> bool:
+        try:
+            for translated in self.opendisp_pointer.release():
+                self.handle_input(translated)
+        except (GLib.Error, TypeError, ValueError):
+            pass
+        return GLib.SOURCE_REMOVE
 
     def set_opendisplay_connected(self, connected: bool, status: str) -> None:
+        release_input = False
         with self.client_lock:
             self.opendisp_status = status
             if connected == self.opendisp_connected:
                 self.write_client_state()
                 return
             self.opendisp_connected = connected
+            self.opendisp_generation += 1
             if self.pipeline is not None:
                 valve = self.pipeline.get_by_name("h264_valve")
                 if valve is not None:
@@ -528,13 +526,13 @@ class WaylandDisplay:
                 self.active_streams += 1
             else:
                 self.active_streams = max(0, self.active_streams - 1)
-                if self.touch_down:
-                    try:
-                        self.handle_input({"type": "touch_up", "slot": 0, "x": 0, "y": 0})
-                    except (GLib.Error, ValueError):
-                        pass
-                    self.touch_down = False
+                release_input = True
             self.write_client_state()
+        if release_input:
+            GLib.idle_add(
+                self.release_opendisplay_input,
+                priority=GLib.PRIORITY_HIGH_IDLE,
+            )
 
     def start_http(self) -> None:
         self.write_client_state()

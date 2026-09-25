@@ -1,3 +1,13 @@
+tuxdisplay (0.4.1) unstable; urgency=critical
+
+  * Prevent repeated OpenDisplay touch phases from aborting Mutter.
+  * Translate slot-less OpenDisplay touch and Pencil input into guarded pointer
+    button events instead of compositor touch slots.
+  * Serialize USB input delivery on the GLib main loop and discard stale events
+    after reconnects.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Fri, 25 Sep 2026 10:05:00 +0200
+
 tuxdisplay (0.4.0) unstable; urgency=medium
 
   * Add native OpenDisplay protocol v3 streaming over usbmuxd.

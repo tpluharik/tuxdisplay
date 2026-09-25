@@ -30,6 +30,84 @@ class USBMuxError(RuntimeError):
     """Raised when usbmuxd cannot create a connection to the receiver."""
 
 
+class OpenDisplayPointerTranslator:
+    """Turn OpenDisplay's slot-less touch stream into safe pointer events.
+
+    Mutter's RemoteDesktop touch API requires perfectly paired, unique touch
+    slots. OpenDisplay protocol v3 carries no slot identifier and may repeat a
+    began phase after reconnects or gesture changes. Pointer/button injection
+    preserves tap, drag, hover, Pencil, and scroll without risking a duplicate
+    touch-slot assertion inside the compositor.
+    """
+
+    def __init__(self) -> None:
+        self.button_down = False
+        self.last_x = 0.0
+        self.last_y = 0.0
+
+    def translate(self, message: dict[str, Any], width: int, height: int) -> list[dict[str, Any]]:
+        kind = str(message.get("type", ""))
+        normalized_x = min(1.0, max(0.0, float(message.get("x", 0.0))))
+        normalized_y = min(1.0, max(0.0, float(message.get("y", 0.0))))
+        self.last_x = normalized_x * width
+        self.last_y = normalized_y * height
+
+        if kind == "scroll":
+            return [
+                {
+                    "type": "wheel",
+                    "dx": float(message.get("dx", 0.0)),
+                    "dy": float(message.get("dy", 0.0)),
+                    "x": self.last_x,
+                    "y": self.last_y,
+                }
+            ]
+
+        if kind == "touch":
+            phase = str(message.get("phase", ""))
+            if phase == "began":
+                if self.button_down:
+                    return [self._motion()]
+                self.button_down = True
+                return [self._button(True)]
+            if phase == "moved":
+                return [self._motion()]
+            if phase in {"ended", "cancelled"}:
+                if not self.button_down:
+                    return []
+                self.button_down = False
+                return [self._button(False)]
+            return []
+
+        if kind == "pencil":
+            phase = str(message.get("phase", ""))
+            if phase == "down":
+                if self.button_down:
+                    return [self._motion()]
+                self.button_down = True
+                return [self._button(True)]
+            if phase in {"move", "hover"}:
+                return [self._motion()]
+            if phase == "up":
+                if not self.button_down:
+                    return []
+                self.button_down = False
+                return [self._button(False)]
+        return []
+
+    def release(self) -> list[dict[str, Any]]:
+        if not self.button_down:
+            return []
+        self.button_down = False
+        return [self._button(False)]
+
+    def _motion(self) -> dict[str, Any]:
+        return {"type": "motion", "x": self.last_x, "y": self.last_y}
+
+    def _button(self, down: bool) -> dict[str, Any]:
+        return {"type": "button", "button": 0, "down": down, "x": self.last_x, "y": self.last_y}
+
+
 def _recv_exact(connection: socket.socket, size: int) -> bytes:
     chunks: list[bytes] = []
     remaining = size
@@ -77,7 +155,7 @@ def list_usb_devices() -> list[dict[str, Any]]:
             connection,
             {
                 "MessageType": "ListDevices",
-                "ClientVersionString": "tuxdisplay-0.4",
+                "ClientVersionString": "tuxdisplay-0.4.1",
                 "ProgName": "tuxdisplay",
                 "kLibUSBMuxVersion": 3,
             },
@@ -105,7 +183,7 @@ def connect_usb_device(device_id: int, port: int = OPENDISPLAY_PORT) -> socket.s
             connection,
             {
                 "MessageType": "Connect",
-                "ClientVersionString": "tuxdisplay-0.4",
+                "ClientVersionString": "tuxdisplay-0.4.1",
                 "ProgName": "tuxdisplay",
                 "DeviceID": int(device_id),
                 # usbmuxd's plist protocol carries the TCP port in network order.
