@@ -1,4 +1,4 @@
-.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.2" "User Commands"
+.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.3" "User Commands"
 .SH NAME
 tuxdisplay \- use an iPad as a secondary Linux display
 .SH SYNOPSIS
@@ -25,7 +25,7 @@ Xorg and unsupported Wayland compositors use an isolated X11/noVNC workspace;
 that workspace is not an extension of the current desktop.
 .PP
 Version 0.4.0 must not be used on GNOME Wayland because its touch path could
-abort Mutter. Use 0.4.2 or newer.
+abort Mutter. Use 0.4.3 or newer.
 .SH COMMANDS
 .TP
 .B gui
@@ -117,6 +117,7 @@ accepts:
 .PP
 .nf
 RESOLUTION=1920x1080
+FPS=30
 DISPLAY_NUMBER=48
 WEB_PORT=6080
 VNC_PORT=5900
@@ -126,6 +127,9 @@ VNC_PORT=5900
 and
 .B VNC_PORT
 apply only to the X11 fallback.
+.B FPS
+accepts 15, 30, or 60 and controls the virtual-monitor, encoder, and advertised
+receiver cadence. The default is 30.
 .B WEB_PORT
 and the PIN apply only to browser access. Restart the service after editing.
 .SH ENVIRONMENT

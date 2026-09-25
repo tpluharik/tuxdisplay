@@ -23,6 +23,11 @@ td_xauthority="$td_config_dir/Xauthority"
 mkdir -p "$td_config_dir" "$td_state_dir"
 chmod 700 "$td_config_dir" "$td_state_dir"
 printf '%s\n' x11 >"$td_state_dir/mode"
+td_clients_tmp="$td_state_dir/clients.tmp"
+printf '{"pid":%s,"instance_id":"x11-%s","updated_at":%s,"active_streams":0,"opendisplay_usb":false,"opendisplay_status":"X11 browser fallback","receiver":{}}\n' \
+    "$$" "$$" "$(date +%s)" >"$td_clients_tmp"
+chmod 600 "$td_clients_tmp"
+mv "$td_clients_tmp" "$td_state_dir/clients.json"
 
 if [ ! -f "$td_config_file" ]; then
     /usr/bin/tuxdisplay url >/dev/null
@@ -148,4 +153,15 @@ done
 
 websockify --web /usr/share/tuxdisplay/web "0.0.0.0:$td_web_port" "127.0.0.1:$td_vnc_port" >"$td_web_log" 2>&1 &
 td_web_pid=$!
-wait "$td_web_pid"
+
+while :; do
+    for td_process in "$td_xvfb_pid:Xvfb" "$td_vnc_pid:x11vnc" "$td_openbox_pid:Openbox" "$td_web_pid:websockify"; do
+        td_pid=${td_process%%:*}
+        td_name=${td_process#*:}
+        if ! kill -0 "$td_pid" >/dev/null 2>&1; then
+            echo "TuxDisplay: $td_name stopped unexpectedly" >&2
+            exit 1
+        fi
+    done
+    sleep 1
+done

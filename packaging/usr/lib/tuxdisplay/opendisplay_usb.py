@@ -24,6 +24,7 @@ MIN_PROTOCOL_VERSION = 1
 USBMUX_HEADER = struct.Struct("<IIII")
 FRAME_HEADER = struct.Struct("!I")
 MAX_CONTROL_SIZE = (1 << 20) - 1
+MAX_USBMUX_MESSAGE_SIZE = 1 << 20
 
 
 class USBMuxError(RuntimeError):
@@ -139,7 +140,13 @@ def _usbmux_request(connection: socket.socket, request: dict[str, Any], tag: int
     connection.sendall(USBMUX_HEADER.pack(16 + len(payload), 1, 8, tag) + payload)
     raw_header = _recv_exact(connection, USBMUX_HEADER.size)
     length, version, message, response_tag = USBMUX_HEADER.unpack(raw_header)
-    if version != 1 or message != 8 or response_tag != tag or length < USBMUX_HEADER.size:
+    if (
+        version != 1
+        or message != 8
+        or response_tag != tag
+        or length < USBMUX_HEADER.size
+        or length > MAX_USBMUX_MESSAGE_SIZE
+    ):
         raise USBMuxError("usbmuxd returned an invalid response")
     response = plistlib.loads(_recv_exact(connection, length - USBMUX_HEADER.size))
     if not isinstance(response, dict):
@@ -155,7 +162,7 @@ def list_usb_devices() -> list[dict[str, Any]]:
             connection,
             {
                 "MessageType": "ListDevices",
-                "ClientVersionString": "tuxdisplay-0.4.2",
+                "ClientVersionString": "tuxdisplay-0.4.3",
                 "ProgName": "tuxdisplay",
                 "kLibUSBMuxVersion": 3,
             },
@@ -183,7 +190,7 @@ def connect_usb_device(device_id: int, port: int = OPENDISPLAY_PORT) -> socket.s
             connection,
             {
                 "MessageType": "Connect",
-                "ClientVersionString": "tuxdisplay-0.4.2",
+                "ClientVersionString": "tuxdisplay-0.4.3",
                 "ProgName": "tuxdisplay",
                 "DeviceID": int(device_id),
                 # usbmuxd's plist protocol carries the TCP port in network order.
@@ -267,7 +274,7 @@ class OpenDisplayUSB:
         self.request_keyframe = request_keyframe
         self.stop_event = threading.Event()
         self.session_failed = threading.Event()
-        self.video_queue: queue.Queue[tuple[bytes, int]] = queue.Queue(maxsize=2)
+        self.video_queue: queue.Queue[tuple[int, bytes, int]] = queue.Queue(maxsize=2)
         self.connection: socket.socket | None = None
         self.connection_lock = threading.Lock()
         self.send_lock = threading.Lock()
@@ -275,6 +282,11 @@ class OpenDisplayUSB:
         self.thread: threading.Thread | None = None
         self.waiting_for_idr = True
         self.latest_keyframe: bytes | None = None
+        self.video_generation = 0
+        self.last_video_submitted = 0.0
+        self.last_video_sent = 0.0
+        self.bad_stats_reports = 0
+        self.last_recovery = 0.0
         self.dropped_frames = 0
 
     def start(self) -> None:
@@ -285,8 +297,10 @@ class OpenDisplayUSB:
 
     def stop(self) -> None:
         self.stop_event.set()
+        self.session_failed.set()
         with self.connection_lock:
             connection = self.connection
+            self.connection = None
         if connection is not None:
             try:
                 connection.shutdown(socket.SHUT_RDWR)
@@ -300,21 +314,23 @@ class OpenDisplayUSB:
         normalized, is_idr = normalize_annex_b(access_unit)
         if not normalized:
             return
-        with self.video_state_lock:
-            if is_idr:
-                self.latest_keyframe = normalized
+        now = time.monotonic()
         with self.connection_lock:
             connected = self.connection is not None
-        if not connected:
-            return
         with self.video_state_lock:
+            self.last_video_submitted = now
+            if is_idr:
+                self.latest_keyframe = normalized
+            if not connected:
+                return
             if self.waiting_for_idr:
                 if not is_idr:
                     return
                 self.waiting_for_idr = False
-        self._queue_video((normalized, captured_ms))
+            generation = self.video_generation
+            self._queue_video_locked((generation, normalized, captured_ms))
 
-    def _queue_video(self, item: tuple[bytes, int]) -> None:
+    def _queue_video_locked(self, item: tuple[int, bytes, int]) -> None:
         try:
             self.video_queue.put_nowait(item)
         except queue.Full:
@@ -328,7 +344,7 @@ class OpenDisplayUSB:
             except queue.Full:
                 self.dropped_frames += 1
 
-    def _clear_video_queue(self) -> None:
+    def _clear_video_queue_locked(self) -> None:
         while not self.video_queue.empty():
             try:
                 self.video_queue.get_nowait()
@@ -336,15 +352,28 @@ class OpenDisplayUSB:
                 return
 
     def _prime_cached_keyframe(self) -> bool:
-        """Queue the most recent IDR so a static desktop appears immediately."""
+        """Show a static desktop while still waiting for a fresh session IDR."""
         with self.video_state_lock:
             keyframe = self.latest_keyframe
             if keyframe is None:
                 self.waiting_for_idr = True
                 return False
-            self.waiting_for_idr = False
-        self._queue_video((keyframe, int(time.time() * 1000)))
-        return True
+            self._queue_video_locked((self.video_generation, keyframe, int(time.time() * 1000)))
+            return True
+
+    def _reset_video_stream(self, prime_cached: bool) -> None:
+        """Atomically discard the old prediction chain and require a fresh IDR."""
+        with self.video_state_lock:
+            self.video_generation += 1
+            self.waiting_for_idr = True
+            self._clear_video_queue_locked()
+            keyframe = self.latest_keyframe if prime_cached else None
+            if keyframe is not None:
+                self._queue_video_locked((self.video_generation, keyframe, int(time.time() * 1000)))
+
+    def _request_recovery_keyframe(self, prime_cached: bool = False) -> None:
+        self._reset_video_stream(prime_cached=prime_cached)
+        self.request_keyframe()
 
     def _send_packet(self, payload: bytes) -> None:
         with self.connection_lock:
@@ -367,28 +396,54 @@ class OpenDisplayUSB:
     def _writer(self) -> None:
         while not self.stop_event.is_set() and not self.session_failed.is_set():
             try:
-                access_unit, captured_ms = self.video_queue.get(timeout=0.5)
+                generation, access_unit, captured_ms = self.video_queue.get(timeout=0.5)
             except queue.Empty:
                 continue
+            with self.video_state_lock:
+                if generation != self.video_generation:
+                    continue
             sent_ms = int(time.time() * 1000)
             telemetry = json.dumps({"cap": captured_ms, "snd": sent_ms}, separators=(",", ":")).encode("ascii")
             try:
                 self._send_packet(telemetry + access_unit)
+                self.last_video_sent = time.monotonic()
             except (ConnectionError, OSError):
                 return
+
+    def _handle_stats(self, message: dict[str, Any]) -> bool:
+        """Use receiver health as a staged IDR-then-reconnect watchdog."""
+        now = time.monotonic()
+        try:
+            receiver_fps = float(message.get("fps", 0))
+            stalls = int(message.get("stalls", 0))
+            lost = int(message.get("curLost", 0))
+        except (TypeError, ValueError, OverflowError):
+            return True
+        with self.video_state_lock:
+            source_active = now - self.last_video_submitted < 6.0
+        unhealthy = lost > 0 or stalls >= 3 or (source_active and receiver_fps < max(1.0, self.frames_per_second * 0.25))
+        if not unhealthy:
+            self.bad_stats_reports = 0
+            return True
+        self.bad_stats_reports += 1
+        if self.bad_stats_reports == 1 and now - self.last_recovery >= 3.0:
+            self.last_recovery = now
+            self._request_recovery_keyframe()
+        elif self.bad_stats_reports >= 3 and now - self.last_recovery >= 8.0:
+            self.session_failed.set()
+            return False
+        return True
 
     def _handle_message(self, message: dict[str, Any]) -> bool:
         kind = str(message.get("type", ""))
         if kind == "ping":
             self._send_control({"type": "pong", "t": message.get("t", 0), "mt": int(time.time() * 1000)})
         elif kind == "kf":
-            self._clear_video_queue()
-            with self.video_state_lock:
-                self.waiting_for_idr = True
-            self.request_keyframe()
-            self._prime_cached_keyframe()
+            self._request_recovery_keyframe(prime_cached=True)
         elif kind == "stats":
             print("PHONE-STATS " + json.dumps(message, separators=(",", ":")), file=sys.stderr, flush=True)
+            if not self._handle_stats(message):
+                return False
         elif kind in {"sleeping", "closing"}:
             return False
         try:
@@ -410,15 +465,16 @@ class OpenDisplayUSB:
     def _run_session(self, connection: socket.socket, serial: str) -> None:
         connection.settimeout(5.0)
         hello = self._receive_hello(connection)
-        receiver_version = int(hello.get("pv", 1))
+        receiver_version = hello.get("pv", 1)
+        if isinstance(receiver_version, bool) or not isinstance(receiver_version, int):
+            raise ConnectionError("OpenDisplay hello has an invalid protocol version")
+        if receiver_version < MIN_PROTOCOL_VERSION:
+            raise ConnectionError(f"OpenDisplay protocol {receiver_version} is too old")
+        self.session_failed.clear()
+        self.bad_stats_reports = 0
+        self._reset_video_stream(prime_cached=True)
         with self.connection_lock:
             self.connection = connection
-        self.session_failed.clear()
-        self._clear_video_queue()
-        with self.video_state_lock:
-            self.waiting_for_idr = True
-        self.on_connected(True, serial)
-        self.on_control(hello)
         self._send_control({"type": "welcome", "pv": PROTOCOL_VERSION, "min": MIN_PROTOCOL_VERSION})
         if receiver_version >= 3:
             self._send_control(
@@ -431,9 +487,10 @@ class OpenDisplayUSB:
                 }
             )
         self.request_keyframe()
-        self._prime_cached_keyframe()
         writer = threading.Thread(target=self._writer, name="tuxdisplay-opendisplay-writer", daemon=True)
         writer.start()
+        self.on_connected(True, serial)
+        self.on_control(hello)
         connection.settimeout(0.5)
         last_received = time.monotonic()
         last_ping = 0.0
@@ -454,15 +511,17 @@ class OpenDisplayUSB:
                 try:
                     payload = receive_frame(connection)
                 except socket.timeout:
-                    if now - last_received > 6.0:
+                    if time.monotonic() - last_received > 6.0:
                         raise ConnectionError("OpenDisplay receiver stopped responding")
                     continue
-                last_received = time.monotonic()
                 try:
                     message = json.loads(payload.decode("utf-8"))
                 except (UnicodeDecodeError, json.JSONDecodeError):
                     continue
-                if isinstance(message, dict) and not self._handle_message(message):
+                if not isinstance(message, dict):
+                    continue
+                last_received = time.monotonic()
+                if not self._handle_message(message):
                     return
         finally:
             self.session_failed.set()
@@ -470,34 +529,66 @@ class OpenDisplayUSB:
 
     def _run(self) -> None:
         last_status = ""
+        retry_delay = 0.5
         while not self.stop_event.is_set():
-            connection: socket.socket | None = None
-            serial = "iPad"
             try:
                 devices = list_usb_devices()
-                if not devices:
-                    status = "Waiting for a trusted iPad USB cable"
-                    if status != last_status:
-                        self.on_connected(False, status)
-                        last_status = status
-                    self.stop_event.wait(1.0)
-                    continue
-                device = devices[0]
-                properties = device.get("Properties", {})
-                serial = str(properties.get("SerialNumber", "iPad"))
-                connection = connect_usb_device(int(device["DeviceID"]))
-                last_status = ""
-                self._run_session(connection, serial)
-            except (OSError, ConnectionError, USBMuxError, ValueError, plistlib.InvalidFileException) as error:
-                status = f"Open OpenDisplay on the iPad ({error})"
+            except Exception as error:
+                devices = []
+                status = f"usbmuxd error: {error}"
                 if status != last_status:
                     self.on_connected(False, status)
                     last_status = status
+                self.stop_event.wait(min(4.0, retry_delay))
+                retry_delay = min(4.0, retry_delay * 2)
+                continue
+            if not devices:
+                status = "Waiting for a trusted iPad USB cable"
+                if status != last_status:
+                    self.on_connected(False, status)
+                    last_status = status
+                retry_delay = 0.5
                 self.stop_event.wait(1.0)
-            finally:
-                with self.connection_lock:
-                    if self.connection is connection:
-                        self.connection = None
-                if connection is not None:
-                    connection.close()
-                self.on_connected(False, "Waiting for OpenDisplay")
+                continue
+
+            errors: list[str] = []
+            session_ran = False
+            for device in devices:
+                if self.stop_event.is_set():
+                    break
+                connection: socket.socket | None = None
+                properties = device.get("Properties", {})
+                serial = str(properties.get("SerialNumber", "iPad"))
+                try:
+                    connection = connect_usb_device(int(device["DeviceID"]))
+                    self._run_session(connection, serial)
+                    session_ran = True
+                    retry_delay = 0.5
+                    break
+                except Exception as error:
+                    errors.append(str(error))
+                finally:
+                    with self.connection_lock:
+                        if self.connection is connection:
+                            self.connection = None
+                    if connection is not None:
+                        try:
+                            connection.close()
+                        except OSError:
+                            pass
+                    if session_ran and not self.stop_event.is_set():
+                        self.on_connected(False, "Waiting for OpenDisplay")
+
+            if self.stop_event.is_set():
+                break
+            if session_ran:
+                last_status = "Waiting for OpenDisplay"
+                self.stop_event.wait(0.5)
+                continue
+            detail = "; ".join(errors[:2]) or "receiver unavailable"
+            status = f"Open OpenDisplay on the iPad ({detail})"
+            if status != last_status:
+                self.on_connected(False, status)
+                last_status = status
+            self.stop_event.wait(retry_delay)
+            retry_delay = min(4.0, retry_delay * 2)

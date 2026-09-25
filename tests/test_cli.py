@@ -39,6 +39,7 @@ class TuxDisplayTests(unittest.TestCase):
     def test_default_config_is_created_privately(self) -> None:
         config = MODULE.ensure_config()
         self.assertEqual(config["RESOLUTION"], "1920x1080")
+        self.assertEqual(config["FPS"], "30")
         path = MODULE.config_file()
         self.assertTrue(path.exists())
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
@@ -46,12 +47,14 @@ class TuxDisplayTests(unittest.TestCase):
     def test_invalid_config_values_fall_back(self) -> None:
         values = {
             "RESOLUTION": "bad;command",
+            "FPS": "144",
             "DISPLAY_NUMBER": "9999",
             "WEB_PORT": "80",
             "VNC_PORT": "5900",
         }
         validated = MODULE.validate_config(values)
         self.assertEqual(validated["RESOLUTION"], "1920x1080")
+        self.assertEqual(validated["FPS"], "30")
         self.assertEqual(validated["DISPLAY_NUMBER"], "48")
         self.assertEqual(validated["WEB_PORT"], "6080")
         self.assertEqual(validated["VNC_PORT"], "5900")
@@ -81,13 +84,41 @@ class TuxDisplayTests(unittest.TestCase):
         text = daemon.read_text(encoding='utf-8')
         self.assertIn('"modes": GLib.Variant("aa{sv}", [mode])', text)
         self.assertIn('"size": GLib.Variant("(uu)", (self.width, self.height))', text)
+        self.assertIn('"refresh-rate": GLib.Variant("d", float(self.frames_per_second))', text)
 
     def test_wayland_pipeline_does_not_hold_a_damage_driven_first_frame(self) -> None:
         daemon = SCRIPT.parents[1] / 'lib' / 'tuxdisplay' / 'tuxdisplay-wayland'
         text = daemon.read_text(encoding='utf-8')
         self.assertIn('pipewiresrc path={self.node_id}', text)
         self.assertNotIn('videorate', text)
-        self.assertNotIn('valve name=', text)
+        self.assertIn('framerate={self.frames_per_second}/1', text)
+        self.assertIn('valve name=jpeg_valve drop=false', text)
+        self.assertIn('key-int-max={self.frames_per_second}', text)
+
+    def test_browser_recovers_or_reauthenticates_after_service_restart(self) -> None:
+        viewer = SCRIPT.parents[1] / "share" / "tuxdisplay" / "wayland-viewer.html"
+        html = viewer.read_text(encoding="utf-8")
+        self.assertIn("function scheduleReconnect()", html)
+        self.assertIn("response.status === 401", html)
+        self.assertIn("The display restarted. Enter the PIN", html)
+        self.assertIn("type:'release_all'", html)
+
+    def test_dead_client_state_is_not_reported_connected(self) -> None:
+        with mock.patch.object(MODULE, "is_active", return_value=True), mock.patch.object(
+            MODULE.os, "kill", side_effect=ProcessLookupError
+        ):
+            path = MODULE.client_state_file()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('{"pid":999999,"active_streams":1,"opendisplay_usb":true}\n', encoding="utf-8")
+            self.assertEqual(MODULE.connection_state(), "running")
+            self.assertFalse(MODULE.opendisplay_connected())
+
+    def test_shutdown_stops_pipeline_before_mutter_session(self) -> None:
+        daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"
+        text = daemon.read_text(encoding="utf-8")
+        stop = text[text.index("    def stop(self) -> None:") :]
+        self.assertLess(stop.index("self.pipeline.set_state(Gst.State.NULL)"), stop.index('REMOTE_SESSION_IFACE, "Stop"'))
+        self.assertIn("timeout_ms=2_000", stop)
 
     def test_ipheth_usb_address_is_preferred(self) -> None:
         addresses = [("wlan0", "192.0.2.5"), ("enxipad", "172.20.10.2")]

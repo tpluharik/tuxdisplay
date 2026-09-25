@@ -45,9 +45,9 @@ def unpack(value: Any) -> Any:
     return value
 
 
-def read_config() -> tuple[int, int, int]:
+def read_config() -> tuple[int, int, int, int]:
     config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    values = {"RESOLUTION": "1920x1080", "WEB_PORT": "6080"}
+    values = {"RESOLUTION": "1920x1080", "WEB_PORT": "6080", "FPS": "30"}
     path = config_home / "tuxdisplay" / "config"
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -59,13 +59,16 @@ def read_config() -> tuple[int, int, int]:
     try:
         width, height = (int(part) for part in values["RESOLUTION"].split("x", 1))
         port = int(values["WEB_PORT"])
+        frames_per_second = int(values["FPS"])
     except (ValueError, TypeError):
-        return 1920, 1080, 6080
+        return 1920, 1080, 6080, 30
     if not (320 <= width <= 8192 and 240 <= height <= 8192):
         width, height = 1920, 1080
     if not 1024 <= port <= 65535:
         port = 6080
-    return width, height, port
+    if frames_per_second not in (15, 30, 60):
+        frames_per_second = 30
+    return width, height, port, frames_per_second
 
 
 def ensure_pin() -> str:
@@ -195,7 +198,7 @@ class RequestHandler(BaseHTTPRequestHandler):
             return
         if path == "/input":
             try:
-                self.server.app.handle_input(body)
+                self.server.app.handle_browser_input(body)
             except (ValueError, TypeError, GLib.Error) as error:
                 self.send_bytes(HTTPStatus.BAD_REQUEST, "application/json", json.dumps({"error": str(error)}).encode())
                 return
@@ -204,6 +207,7 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_bytes(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"Not found\n")
 
     def stream_mjpeg(self) -> None:
+        self.connection.settimeout(10.0)
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
         self.send_header("Cache-Control", "no-store, no-cache, must-revalidate")
@@ -230,7 +234,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(frame)
                 self.wfile.write(b"\r\n")
                 self.wfile.flush()
-        except (BrokenPipeError, ConnectionResetError, TimeoutError):
+        except OSError:
             return
         finally:
             self.server.app.client_closed()
@@ -238,9 +242,10 @@ class RequestHandler(BaseHTTPRequestHandler):
 
 class WaylandDisplay:
     def __init__(self) -> None:
-        self.width, self.height, self.port = read_config()
+        self.width, self.height, self.port, self.frames_per_second = read_config()
         self.pin = ensure_pin()
         self.token = secrets.token_urlsafe(32)
+        self.instance_id = secrets.token_hex(8)
         self.frame = b""
         self.frame_generation = 0
         self.frame_ready = threading.Condition()
@@ -248,12 +253,19 @@ class WaylandDisplay:
         self.active_streams = 0
         self.browser_streams = 0
         self.client_lock = threading.Lock()
+        self.browser_input_lock = threading.Lock()
+        self.browser_buttons: set[int] = set()
+        self.browser_touches: set[int] = set()
+        self.browser_keys: set[int] = set()
         self.opendisp_connected = False
         self.opendisp_status = "Waiting for OpenDisplay"
         self.opendisp_generation = 0
+        self.receiver_stats: dict[str, Any] = {}
+        self.last_video_at = 0.0
         self.opendisp_pointer = OpenDisplayPointerTranslator()
         self.pipeline: Gst.Pipeline | None = None
         self.opendisp: OpenDisplayUSB | None = None
+        self.fatal_error: str | None = None
         self.remote_session = ""
         self.stream_path = ""
         self.mapping_id = ""
@@ -265,8 +277,17 @@ class WaylandDisplay:
             viewer = Path(__file__).resolve().parents[2] / "share/tuxdisplay/wayland-viewer.html"
         self.viewer_html = viewer.read_bytes()
 
-    def call(self, destination: str, path: str, interface: str, method: str, parameters: GLib.Variant | None = None, reply: GLib.VariantType | None = None) -> GLib.Variant:
-        return self.bus.call_sync(destination, path, interface, method, parameters, reply, Gio.DBusCallFlags.NONE, 10_000, None)
+    def call(
+        self,
+        destination: str,
+        path: str,
+        interface: str,
+        method: str,
+        parameters: GLib.Variant | None = None,
+        reply: GLib.VariantType | None = None,
+        timeout_ms: int = 10_000,
+    ) -> GLib.Variant:
+        return self.bus.call_sync(destination, path, interface, method, parameters, reply, Gio.DBusCallFlags.NONE, timeout_ms, None)
 
     def get_property(self, destination: str, path: str, interface: str, name: str) -> Any:
         value = self.call(
@@ -292,7 +313,7 @@ class WaylandDisplay:
         self.stream_path = ""
         mode = {
             "size": GLib.Variant("(uu)", (self.width, self.height)),
-            "refresh-rate": GLib.Variant("d", 60.0),
+            "refresh-rate": GLib.Variant("d", float(self.frames_per_second)),
             "is-preferred": GLib.Variant("b", True),
         }
         cast_stream = self.call(
@@ -340,16 +361,17 @@ class WaylandDisplay:
         Gst.init(None)
         description = (
             f"pipewiresrc path={self.node_id} do-timestamp=true "
-            f"! video/x-raw,format=BGRx,width={self.width},height={self.height} "
+            f"! video/x-raw,format=BGRx,width={self.width},height={self.height},framerate={self.frames_per_second}/1 "
             "! queue max-size-buffers=1 leaky=downstream "
             "! videoconvert ! video/x-raw,format=I420 "
             "! tee name=displaytee "
             "displaytee. ! queue max-size-buffers=1 leaky=downstream "
+            "! valve name=jpeg_valve drop=false "
             "! jpegenc quality=76 "
             "! appsink name=jpeg_sink emit-signals=true max-buffers=1 drop=true sync=false "
             "displaytee. ! queue max-size-buffers=2 leaky=downstream "
             "! x264enc name=h264_encoder tune=zerolatency speed-preset=ultrafast "
-            "bitrate=8000 byte-stream=true bframes=0 key-int-max=30 "
+            f"bitrate=8000 byte-stream=true bframes=0 key-int-max={self.frames_per_second} "
             "! h264parse config-interval=-1 "
             "! video/x-h264,stream-format=byte-stream,alignment=au "
             "! appsink name=h264_sink emit-signals=true max-buffers=2 drop=true sync=false"
@@ -373,7 +395,7 @@ class WaylandDisplay:
         self.opendisp = OpenDisplayUSB(
             width=self.width,
             height=self.height,
-            frames_per_second=30,
+            frames_per_second=self.frames_per_second,
             on_control=self.handle_opendisplay_control,
             on_connected=self.set_opendisplay_connected,
             request_keyframe=self.force_keyframe,
@@ -409,6 +431,12 @@ class WaylandDisplay:
             self.frame = data
             self.frame_generation += 1
             self.frame_ready.notify_all()
+        with self.client_lock:
+            browser_active = self.browser_streams > 0
+        if not browser_active and self.pipeline is not None:
+            jpeg_valve = self.pipeline.get_by_name("jpeg_valve")
+            if jpeg_valve is not None:
+                jpeg_valve.set_property("drop", True)
         return Gst.FlowReturn.OK
 
     def on_h264_sample(self, sink: Any) -> Gst.FlowReturn:
@@ -425,12 +453,18 @@ class WaylandDisplay:
             buffer.unmap(info)
         if self.opendisp is not None:
             self.opendisp.submit_video(data, int(time.time() * 1000))
+        self.last_video_at = time.time()
         return Gst.FlowReturn.OK
 
     def on_pipeline_message(self, _bus: Gst.Bus, message: Gst.Message) -> None:
         if message.type == Gst.MessageType.ERROR:
             error, detail = message.parse_error()
-            print(f"TuxDisplay video error: {error.message}; {detail}", file=sys.stderr)
+            self.fatal_error = f"video pipeline error: {error.message}; {detail}"
+            print(f"TuxDisplay {self.fatal_error}", file=sys.stderr)
+            self.loop.quit()
+        elif message.type == Gst.MessageType.EOS and not self.stopping:
+            self.fatal_error = "video pipeline ended unexpectedly"
+            print(f"TuxDisplay {self.fatal_error}", file=sys.stderr)
             self.loop.quit()
 
     def remote_input(self, method: str, signature: str, values: tuple[Any, ...]) -> None:
@@ -472,9 +506,68 @@ class WaylandDisplay:
         else:
             raise ValueError("Unsupported input event")
 
+    def handle_browser_input(self, event: dict[str, Any]) -> None:
+        kind = str(event.get("type", ""))
+        if kind == "release_all":
+            self.release_browser_input()
+            return
+        self.handle_input(event)
+        with self.browser_input_lock:
+            if kind == "button":
+                button = int(event.get("button", -1))
+                if bool(event.get("down")):
+                    self.browser_buttons.add(button)
+                else:
+                    self.browser_buttons.discard(button)
+            elif kind == "touch_down":
+                self.browser_touches.add(int(event.get("slot", -1)))
+            elif kind == "touch_up":
+                self.browser_touches.discard(int(event.get("slot", -1)))
+            elif kind == "key":
+                keysym = int(event.get("keysym", 0))
+                if bool(event.get("down")):
+                    self.browser_keys.add(keysym)
+                else:
+                    self.browser_keys.discard(keysym)
+
+    def release_browser_input(self) -> bool:
+        with self.browser_input_lock:
+            buttons = tuple(self.browser_buttons)
+            touches = tuple(self.browser_touches)
+            keys = tuple(self.browser_keys)
+            self.browser_buttons.clear()
+            self.browser_touches.clear()
+            self.browser_keys.clear()
+        try:
+            for button in buttons:
+                mapped = {0: 272, 1: 274, 2: 273}.get(button)
+                if mapped is not None:
+                    self.remote_input("NotifyPointerButton", "(ib)", (mapped, False))
+            for slot in touches:
+                if 0 <= slot <= 31:
+                    self.remote_input("NotifyTouchUp", "(u)", (slot,))
+            for keysym in keys:
+                if 0 < keysym <= 0x11FFFFFF:
+                    self.remote_input("NotifyKeyboardKeysym", "(ub)", (keysym, False))
+        except GLib.Error:
+            pass
+        return GLib.SOURCE_REMOVE
+
     def handle_opendisplay_control(self, event: dict[str, Any]) -> None:
         kind = str(event.get("type", ""))
-        if kind in {"hello", "ping", "kf", "stats", "sleeping", "closing", "cursorAck"}:
+        if kind == "stats":
+            with self.client_lock:
+                if not self.opendisp_connected:
+                    return
+                generation = self.opendisp_generation
+            GLib.idle_add(
+                self.apply_opendisplay_stats,
+                dict(event),
+                generation,
+                priority=GLib.PRIORITY_DEFAULT_IDLE,
+            )
+            return
+        if kind in {"hello", "ping", "kf", "sleeping", "closing", "cursorAck"}:
             return
         with self.client_lock:
             if not self.opendisp_connected:
@@ -498,6 +591,18 @@ class WaylandDisplay:
             print(f"TuxDisplay OpenDisplay input ignored: {error}", file=sys.stderr)
         return GLib.SOURCE_REMOVE
 
+    def apply_opendisplay_stats(self, event: dict[str, Any], generation: int) -> bool:
+        with self.client_lock:
+            if not self.opendisp_connected or generation != self.opendisp_generation:
+                return GLib.SOURCE_REMOVE
+            self.receiver_stats = {
+                key: event[key]
+                for key in ("fps", "stalls", "curLost", "rtt", "mbps")
+                if isinstance(event.get(key), (int, float))
+            }
+            self.write_client_state()
+        return GLib.SOURCE_REMOVE
+
     def release_opendisplay_input(self) -> bool:
         try:
             for translated in self.opendisp_pointer.release():
@@ -519,6 +624,7 @@ class WaylandDisplay:
                 self.active_streams += 1
             else:
                 self.active_streams = max(0, self.active_streams - 1)
+                self.receiver_stats = {}
                 release_input = True
             self.write_client_state()
         if release_input:
@@ -542,9 +648,14 @@ class WaylandDisplay:
         temporary.write_text(
             json.dumps(
                 {
+                    "pid": os.getpid(),
+                    "instance_id": self.instance_id,
+                    "updated_at": time.time(),
                     "active_streams": self.active_streams,
                     "opendisplay_usb": self.opendisp_connected,
                     "opendisplay_status": self.opendisp_status,
+                    "last_video_at": self.last_video_at,
+                    "receiver": self.receiver_stats,
                 }
             )
             + "\n",
@@ -558,12 +669,23 @@ class WaylandDisplay:
             self.browser_streams += 1
             self.active_streams += 1
             self.write_client_state()
+        if self.pipeline is not None:
+            jpeg_valve = self.pipeline.get_by_name("jpeg_valve")
+            if jpeg_valve is not None:
+                jpeg_valve.set_property("drop", False)
 
     def client_closed(self) -> None:
         with self.client_lock:
             self.browser_streams = max(0, self.browser_streams - 1)
             self.active_streams = max(0, self.active_streams - 1)
             self.write_client_state()
+            browser_active = self.browser_streams > 0
+        if not browser_active and self.pipeline is not None:
+            jpeg_valve = self.pipeline.get_by_name("jpeg_valve")
+            if jpeg_valve is not None:
+                jpeg_valve.set_property("drop", True)
+        if not browser_active:
+            GLib.idle_add(self.release_browser_input, priority=GLib.PRIORITY_HIGH_IDLE)
 
     def write_mode(self) -> None:
         state_home = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
@@ -577,26 +699,32 @@ class WaylandDisplay:
         self.stopping = True
         with self.client_lock:
             self.active_streams = 0
+            self.opendisp_connected = False
+            self.receiver_stats = {}
             self.write_client_state()
         with self.frame_ready:
             self.frame_ready.notify_all()
+        if self.pipeline is not None:
+            self.pipeline.set_state(Gst.State.NULL)
+            self.pipeline = None
         if self.opendisp is not None:
             self.opendisp.stop()
         if hasattr(self, "http"):
             shutdown = threading.Thread(target=self.http.shutdown, name="tuxdisplay-http-stop", daemon=True)
             shutdown.start()
-            shutdown.join(timeout=2)
+            shutdown.join(timeout=1)
             self.http.server_close()
+            if hasattr(self, "http_thread"):
+                self.http_thread.join(timeout=1)
         if self.remote_session:
             try:
-                self.call(REMOTE_DEST, self.remote_session, REMOTE_SESSION_IFACE, "Stop")
+                self.call(REMOTE_DEST, self.remote_session, REMOTE_SESSION_IFACE, "Stop", timeout_ms=2_000)
             except GLib.Error:
                 pass
-        if self.pipeline is not None:
-            self.pipeline.set_state(Gst.State.NULL)
 
     def run(self) -> None:
         try:
+            self.write_client_state()
             self.create_monitor()
             self.start_opendisplay()
             self.start_pipeline()
@@ -614,6 +742,8 @@ class WaylandDisplay:
             signal.signal(signal.SIGTERM, quit_loop)
             signal.signal(signal.SIGINT, quit_loop)
             self.loop.run()
+            if self.fatal_error is not None:
+                raise RuntimeError(self.fatal_error)
         finally:
             self.stop()
 

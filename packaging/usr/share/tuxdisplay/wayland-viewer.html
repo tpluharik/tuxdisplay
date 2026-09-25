@@ -81,6 +81,7 @@
     const keyboard = document.querySelector('#keyboard');
     let displayWidth = 1280, displayHeight = 720;
     let motionPending = null, motionBusy = false;
+    let reconnectTimer = 0, reconnectDelay = 1000;
     const touchSlots = new Map();
     const downKeys = new Set();
 
@@ -95,8 +96,40 @@
       displayWidth = status.width; displayHeight = status.height;
       document.querySelector('#details').textContent = ` · ${displayWidth}×${displayHeight} · ${status.monitor}`;
       login.style.display = 'none'; desktop.style.display = 'block';
+      reconnectDelay = 1000;
       screen.src = '/stream.mjpg?t=' + Date.now();
       return true;
+    }
+    function requireLogin(message) {
+      desktop.style.display = 'none';
+      login.style.display = 'grid';
+      errorBox.textContent = message;
+      pin.focus();
+    }
+    function scheduleReconnect() {
+      if (reconnectTimer) return;
+      reconnectTimer = setTimeout(async () => {
+        reconnectTimer = 0;
+        try {
+          const response = await api('/status');
+          if (response.status === 401) {
+            requireLogin('The display restarted. Enter the PIN to reconnect.');
+            return;
+          }
+          if (response.ok) {
+            const status = await response.json();
+            displayWidth = status.width; displayHeight = status.height;
+            document.querySelector('#details').textContent = ` · ${displayWidth}×${displayHeight} · ${status.monitor}`;
+            reconnectDelay = 1000;
+            screen.src = '/stream.mjpg?t=' + Date.now();
+            return;
+          }
+        } catch (error) {
+          console.debug('TuxDisplay reconnect pending', error);
+        }
+        reconnectDelay = Math.min(10000, reconnectDelay * 2);
+        scheduleReconnect();
+      }, reconnectDelay);
     }
     keypad.addEventListener('click', event => {
       const button = event.target.closest('button');
@@ -190,7 +223,16 @@
     function viewerActive() { return desktop.style.display === 'block'; }
     window.addEventListener('keydown', event => { if (viewerActive() && event.target !== keyboard) keyEvent(event, true); });
     window.addEventListener('keyup', event => { if (viewerActive() && event.target !== keyboard) keyEvent(event, false); });
-    window.addEventListener('blur', () => { for (const symbol of downKeys) send({type:'key', keysym:symbol, down:false}); downKeys.clear(); });
+    function releaseAllInput() {
+      send({type:'release_all'});
+      downKeys.clear(); touchSlots.clear();
+    }
+    window.addEventListener('blur', releaseAllInput);
+    window.addEventListener('pagehide', () => {
+      const body = new Blob([JSON.stringify({type:'release_all'})], {type:'application/json'});
+      navigator.sendBeacon('/input', body);
+      downKeys.clear(); touchSlots.clear();
+    });
     keyboard.addEventListener('keydown', event => { if (named[event.key]) keyEvent(event, true, true); });
     keyboard.addEventListener('beforeinput', event => {
       let value = event.data;
@@ -231,7 +273,7 @@
     });
     document.addEventListener('fullscreenchange', () => { if (!fullscreenElement()) setImmersive(false); });
     document.addEventListener('webkitfullscreenchange', () => { if (!fullscreenElement()) setImmersive(false); });
-    screen.addEventListener('error', () => { setTimeout(() => { screen.src = '/stream.mjpg?t=' + Date.now(); }, 1500); });
+    screen.addEventListener('error', scheduleReconnect);
   </script>
 </body>
 </html>

@@ -7,7 +7,9 @@ import importlib.util
 import json
 from pathlib import Path
 import struct
+import time
 import unittest
+from unittest import mock
 
 
 MODULE_PATH = Path(__file__).parents[1] / "packaging" / "usr" / "lib" / "tuxdisplay" / "opendisplay_usb.py"
@@ -62,10 +64,92 @@ class OpenDisplayProtocolTests(unittest.TestCase):
 
         self.assertIsNotNone(sender.latest_keyframe)
         self.assertTrue(sender._prime_cached_keyframe())
-        queued, captured_ms = sender.video_queue.get_nowait()
+        _generation, queued, captured_ms = sender.video_queue.get_nowait()
         self.assertIn(b"\x00\x00\x00\x01\x65idr", queued)
         self.assertGreater(captured_ms, 1)
+        self.assertTrue(sender.waiting_for_idr)
+
+    def test_cached_keyframe_keeps_delta_frames_gated_until_fresh_idr(self) -> None:
+        sender = MODULE.OpenDisplayUSB(1920, 1080, 30, lambda _message: None, lambda _connected, _status: None, lambda: None)
+        keyframe = b"\x00\x00\x00\x01\x67sps\x00\x00\x00\x01\x68pps\x00\x00\x00\x01\x65idr"
+        delta = b"\x00\x00\x00\x01\x41delta"
+        sender.submit_video(keyframe, 1)
+        sender._reset_video_stream(prime_cached=True)
+        with sender.connection_lock:
+            sender.connection = object()
+
+        sender.submit_video(delta, 2)
+        self.assertEqual(sender.video_queue.qsize(), 1)
+        sender.submit_video(keyframe, 3)
+
+        self.assertEqual(sender.video_queue.qsize(), 2)
         self.assertFalse(sender.waiting_for_idr)
+
+    def test_invalid_protocol_version_is_a_recoverable_connection_error(self) -> None:
+        packet = MODULE.encode_frame(json.dumps({"type": "hello", "pv": None}).encode())
+
+        class FakeConnection:
+            def __init__(self, data: bytes) -> None:
+                self.data = data
+
+            def settimeout(self, _timeout: float) -> None:
+                pass
+
+            def recv(self, size: int) -> bytes:
+                chunk, self.data = self.data[:size], self.data[size:]
+                return chunk
+
+        sender = MODULE.OpenDisplayUSB(1920, 1080, 30, lambda _message: None, lambda _connected, _status: None, lambda: None)
+        with self.assertRaisesRegex(ConnectionError, "invalid protocol version"):
+            sender._run_session(FakeConnection(packet), "test")
+
+    def test_receiver_stalls_request_idr_then_reconnect(self) -> None:
+        recoveries = []
+        sender = MODULE.OpenDisplayUSB(
+            1920,
+            1080,
+            30,
+            lambda _message: None,
+            lambda _connected, _status: None,
+            lambda: recoveries.append("idr"),
+        )
+        sender.last_video_submitted = time.monotonic()
+
+        self.assertTrue(sender._handle_stats({"fps": 0, "stalls": 4, "curLost": 0}))
+        self.assertEqual(recoveries, ["idr"])
+        sender.last_recovery -= 9
+        self.assertTrue(sender._handle_stats({"fps": 0, "stalls": 4, "curLost": 0}))
+        self.assertFalse(sender._handle_stats({"fps": 0, "stalls": 4, "curLost": 0}))
+        self.assertTrue(sender.session_failed.is_set())
+
+    def test_connection_loop_tries_every_attached_apple_device(self) -> None:
+        attempts = []
+
+        class FakeConnection:
+            def close(self) -> None:
+                pass
+
+        sender = MODULE.OpenDisplayUSB(1920, 1080, 30, lambda _message: None, lambda _connected, _status: None, lambda: None)
+
+        def connect(device_id: int) -> FakeConnection:
+            attempts.append(device_id)
+            if device_id == 1:
+                raise MODULE.USBMuxError("wrong device")
+            return FakeConnection()
+
+        def run_session(_connection: FakeConnection, _serial: str) -> None:
+            sender.stop_event.set()
+
+        devices = [
+            {"DeviceID": 1, "Properties": {"SerialNumber": "phone"}},
+            {"DeviceID": 2, "Properties": {"SerialNumber": "ipad"}},
+        ]
+        with mock.patch.object(MODULE, "list_usb_devices", return_value=devices), mock.patch.object(
+            MODULE, "connect_usb_device", side_effect=connect
+        ), mock.patch.object(sender, "_run_session", side_effect=run_session):
+            sender._run()
+
+        self.assertEqual(attempts, [1, 2])
 
 
 class OpenDisplayPointerTranslatorTests(unittest.TestCase):

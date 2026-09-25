@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.2. The project has two display backends and three receiver paths. Only the GNOME Wayland backend extends the user's current desktop.
+This document describes TuxDisplay 0.4.3. The project has two display backends and three receiver paths. Only the GNOME Wayland backend extends the user's current desktop.
 
 ## GNOME Wayland data flow
 
@@ -31,15 +31,17 @@ Creating and removing the monitor changes the GNOME monitor topology. A resoluti
 Mutter provides a PipeWire stream for the virtual monitor. One GStreamer pipeline splits the captured frames:
 
 - the OpenDisplay branch uses software x264 at 8 Mbit/s, byte-stream output, no B-frames, and an IDR interval of at most one second;
-- the browser branch produces JPEG frames for the authenticated MJPEG endpoint.
+- the browser branch produces JPEG frames for the authenticated MJPEG endpoint and is paused while no browser is viewing.
 
-Queues are deliberately small and leaky so latency is preferred over delivering stale frames. TuxDisplay caches the most recent H.264 keyframe and primes a newly connected receiver with it. This is important when the desktop is static and PipeWire produces no new damage immediately after connection.
+Queues are deliberately small and leaky so latency is preferred over delivering stale frames. The configured 15, 30, or 60 FPS is applied consistently to the virtual monitor, PipeWire caps, encoder keyframe interval, and receiver announcement. TuxDisplay caches the most recent H.264 keyframe to show a static desktop, but keeps delta frames gated until a fresh session IDR arrives.
 
 ### Direct USB transport
 
 TuxDisplay speaks the public OpenDisplay protocol version 3. It asks usbmuxd to connect to port 9000 on a paired iPad, receives the app's JSON hello, replies with the stream configuration, and sends length-prefixed H.264 Annex-B access units. Control and input messages travel over the same connection.
 
 The OpenDisplay transport is not IP networking. It does not require an address, DHCP, Personal Hotspot, Wi-Fi, or the optional USB gadget service.
+
+TuxDisplay checks every attached Apple USB device, validates the receiver hello, and retries with a bounded backoff. Receiver telemetry drives staged recovery: first request a fresh IDR, then rebuild the cable session if decoding does not recover.
 
 ### Input safety
 
@@ -103,7 +105,7 @@ The tray derives three user-facing states:
 
 | Path | Contents |
 | --- | --- |
-| `~/.config/tuxdisplay/config` | Resolution, display number, and ports |
+| `~/.config/tuxdisplay/config` | Resolution, frame rate, display number, and ports |
 | `~/.config/tuxdisplay/password` | Browser PIN |
 | `~/.config/tuxdisplay/*.rfb` | Browser/VNC authentication material when used |
 | `~/.local/state/tuxdisplay/` | Connection state and logs |

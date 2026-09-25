@@ -20,4 +20,15 @@
   <provides>
     <binary>tuxdisplay</binary>
   </provides>
+  <releases>
+    <release version="0.4.3" date="2026-09-25">
+      <description>
+        <ul>
+          <li>Keep capture, encoding, and receiver cadence consistent.</li>
+          <li>Recover stalled OpenDisplay sessions with a fresh keyframe or reconnect.</li>
+          <li>Bound shutdown and restore browser sessions after display restarts.</li>
+        </ul>
+      </description>
+    </release>
+  </releases>
 </component>
