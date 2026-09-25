@@ -23,12 +23,12 @@ The Debian package includes a standalone GTK manager, application icon, and GNOM
 ./build-deb.sh
 ```
 
-The package is written to `dist/tuxdisplay_0.4.1_all.deb`.
+The package is written to `dist/tuxdisplay_0.4.2_all.deb`.
 
 ## Install and use
 
 ```sh
-sudo apt install ./dist/tuxdisplay_0.4.1_all.deb
+sudo apt install ./dist/tuxdisplay_0.4.2_all.deb
 tuxdisplay start
 ```
 

@@ -342,15 +342,12 @@ class WaylandDisplay:
             f"pipewiresrc path={self.node_id} do-timestamp=true "
             f"! video/x-raw,format=BGRx,width={self.width},height={self.height} "
             "! queue max-size-buffers=1 leaky=downstream "
-            "! videorate drop-only=true max-rate=30 "
             "! videoconvert ! video/x-raw,format=I420 "
             "! tee name=displaytee "
             "displaytee. ! queue max-size-buffers=1 leaky=downstream "
-            "! valve name=jpeg_valve drop=true "
             "! jpegenc quality=76 "
             "! appsink name=jpeg_sink emit-signals=true max-buffers=1 drop=true sync=false "
             "displaytee. ! queue max-size-buffers=2 leaky=downstream "
-            "! valve name=h264_valve drop=true "
             "! x264enc name=h264_encoder tune=zerolatency speed-preset=ultrafast "
             "bitrate=8000 byte-stream=true bframes=0 key-int-max=30 "
             "! h264parse config-interval=-1 "
@@ -518,10 +515,6 @@ class WaylandDisplay:
                 return
             self.opendisp_connected = connected
             self.opendisp_generation += 1
-            if self.pipeline is not None:
-                valve = self.pipeline.get_by_name("h264_valve")
-                if valve is not None:
-                    valve.set_property("drop", not connected)
             if connected:
                 self.active_streams += 1
             else:
@@ -564,20 +557,12 @@ class WaylandDisplay:
         with self.client_lock:
             self.browser_streams += 1
             self.active_streams += 1
-            if self.pipeline is not None:
-                valve = self.pipeline.get_by_name("jpeg_valve")
-                if valve is not None:
-                    valve.set_property("drop", False)
             self.write_client_state()
 
     def client_closed(self) -> None:
         with self.client_lock:
             self.browser_streams = max(0, self.browser_streams - 1)
             self.active_streams = max(0, self.active_streams - 1)
-            if self.browser_streams == 0 and self.pipeline is not None:
-                valve = self.pipeline.get_by_name("jpeg_valve")
-                if valve is not None:
-                    valve.set_property("drop", True)
             self.write_client_state()
 
     def write_mode(self) -> None:
@@ -613,8 +598,8 @@ class WaylandDisplay:
     def run(self) -> None:
         try:
             self.create_monitor()
-            self.start_pipeline()
             self.start_opendisplay()
+            self.start_pipeline()
             self.start_http()
             self.write_mode()
             print(

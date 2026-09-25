@@ -82,6 +82,13 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertIn('"modes": GLib.Variant("aa{sv}", [mode])', text)
         self.assertIn('"size": GLib.Variant("(uu)", (self.width, self.height))', text)
 
+    def test_wayland_pipeline_does_not_hold_a_damage_driven_first_frame(self) -> None:
+        daemon = SCRIPT.parents[1] / 'lib' / 'tuxdisplay' / 'tuxdisplay-wayland'
+        text = daemon.read_text(encoding='utf-8')
+        self.assertIn('pipewiresrc path={self.node_id}', text)
+        self.assertNotIn('videorate', text)
+        self.assertNotIn('valve name=', text)
+
     def test_ipheth_usb_address_is_preferred(self) -> None:
         addresses = [("wlan0", "192.0.2.5"), ("enxipad", "172.20.10.2")]
         with mock.patch.object(MODULE, "network_addresses", return_value=addresses), mock.patch.object(

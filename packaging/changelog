@@ -1,3 +1,13 @@
+tuxdisplay (0.4.2) unstable; urgency=high
+
+  * Fix a black OpenDisplay screen when the virtual monitor is initially static.
+  * Pass PipeWire's first damage-driven frame directly to the encoders instead
+    of holding it in a frame-rate filter until a second desktop update arrives.
+  * Retain the initial browser frame and cache an H.264 keyframe so static
+    desktops render immediately after a USB connection or reconnect.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Fri, 25 Sep 2026 10:20:00 +0200
+
 tuxdisplay (0.4.1) unstable; urgency=critical
 
   * Prevent repeated OpenDisplay touch phases from aborting Mutter.

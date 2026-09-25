@@ -54,6 +54,19 @@ class OpenDisplayProtocolTests(unittest.TestCase):
         self.assertEqual(normalized, b"")
         self.assertFalse(is_idr)
 
+    def test_cached_keyframe_primes_a_static_desktop_session(self) -> None:
+        sender = MODULE.OpenDisplayUSB(1920, 1080, 30, lambda _message: None, lambda _connected, _status: None, lambda: None)
+        keyframe = b"\x00\x00\x00\x01\x67sps\x00\x00\x00\x01\x68pps\x00\x00\x00\x01\x65idr"
+
+        sender.submit_video(keyframe, 1)
+
+        self.assertIsNotNone(sender.latest_keyframe)
+        self.assertTrue(sender._prime_cached_keyframe())
+        queued, captured_ms = sender.video_queue.get_nowait()
+        self.assertIn(b"\x00\x00\x00\x01\x65idr", queued)
+        self.assertGreater(captured_ms, 1)
+        self.assertFalse(sender.waiting_for_idr)
+
 
 class OpenDisplayPointerTranslatorTests(unittest.TestCase):
     def setUp(self) -> None:

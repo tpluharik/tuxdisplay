@@ -155,7 +155,7 @@ def list_usb_devices() -> list[dict[str, Any]]:
             connection,
             {
                 "MessageType": "ListDevices",
-                "ClientVersionString": "tuxdisplay-0.4.1",
+                "ClientVersionString": "tuxdisplay-0.4.2",
                 "ProgName": "tuxdisplay",
                 "kLibUSBMuxVersion": 3,
             },
@@ -183,7 +183,7 @@ def connect_usb_device(device_id: int, port: int = OPENDISPLAY_PORT) -> socket.s
             connection,
             {
                 "MessageType": "Connect",
-                "ClientVersionString": "tuxdisplay-0.4.1",
+                "ClientVersionString": "tuxdisplay-0.4.2",
                 "ProgName": "tuxdisplay",
                 "DeviceID": int(device_id),
                 # usbmuxd's plist protocol carries the TCP port in network order.
@@ -271,8 +271,10 @@ class OpenDisplayUSB:
         self.connection: socket.socket | None = None
         self.connection_lock = threading.Lock()
         self.send_lock = threading.Lock()
+        self.video_state_lock = threading.Lock()
         self.thread: threading.Thread | None = None
         self.waiting_for_idr = True
+        self.latest_keyframe: bytes | None = None
         self.dropped_frames = 0
 
     def start(self) -> None:
@@ -298,15 +300,21 @@ class OpenDisplayUSB:
         normalized, is_idr = normalize_annex_b(access_unit)
         if not normalized:
             return
+        with self.video_state_lock:
+            if is_idr:
+                self.latest_keyframe = normalized
         with self.connection_lock:
             connected = self.connection is not None
         if not connected:
             return
-        if self.waiting_for_idr:
-            if not is_idr:
-                return
-            self.waiting_for_idr = False
-        item = (normalized, captured_ms)
+        with self.video_state_lock:
+            if self.waiting_for_idr:
+                if not is_idr:
+                    return
+                self.waiting_for_idr = False
+        self._queue_video((normalized, captured_ms))
+
+    def _queue_video(self, item: tuple[bytes, int]) -> None:
         try:
             self.video_queue.put_nowait(item)
         except queue.Full:
@@ -319,6 +327,24 @@ class OpenDisplayUSB:
                 self.video_queue.put_nowait(item)
             except queue.Full:
                 self.dropped_frames += 1
+
+    def _clear_video_queue(self) -> None:
+        while not self.video_queue.empty():
+            try:
+                self.video_queue.get_nowait()
+            except queue.Empty:
+                return
+
+    def _prime_cached_keyframe(self) -> bool:
+        """Queue the most recent IDR so a static desktop appears immediately."""
+        with self.video_state_lock:
+            keyframe = self.latest_keyframe
+            if keyframe is None:
+                self.waiting_for_idr = True
+                return False
+            self.waiting_for_idr = False
+        self._queue_video((keyframe, int(time.time() * 1000)))
+        return True
 
     def _send_packet(self, payload: bytes) -> None:
         with self.connection_lock:
@@ -356,8 +382,11 @@ class OpenDisplayUSB:
         if kind == "ping":
             self._send_control({"type": "pong", "t": message.get("t", 0), "mt": int(time.time() * 1000)})
         elif kind == "kf":
-            self.waiting_for_idr = True
+            self._clear_video_queue()
+            with self.video_state_lock:
+                self.waiting_for_idr = True
             self.request_keyframe()
+            self._prime_cached_keyframe()
         elif kind == "stats":
             print("PHONE-STATS " + json.dumps(message, separators=(",", ":")), file=sys.stderr, flush=True)
         elif kind in {"sleeping", "closing"}:
@@ -385,12 +414,9 @@ class OpenDisplayUSB:
         with self.connection_lock:
             self.connection = connection
         self.session_failed.clear()
-        self.waiting_for_idr = True
-        while not self.video_queue.empty():
-            try:
-                self.video_queue.get_nowait()
-            except queue.Empty:
-                break
+        self._clear_video_queue()
+        with self.video_state_lock:
+            self.waiting_for_idr = True
         self.on_connected(True, serial)
         self.on_control(hello)
         self._send_control({"type": "welcome", "pv": PROTOCOL_VERSION, "min": MIN_PROTOCOL_VERSION})
@@ -405,6 +431,7 @@ class OpenDisplayUSB:
                 }
             )
         self.request_keyframe()
+        self._prime_cached_keyframe()
         writer = threading.Thread(target=self._writer, name="tuxdisplay-opendisplay-writer", daemon=True)
         writer.start()
         connection.settimeout(0.5)
