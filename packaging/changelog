@@ -1,3 +1,13 @@
+tuxdisplay (0.4.0) unstable; urgency=medium
+
+  * Add native OpenDisplay protocol v3 streaming over usbmuxd.
+  * Stream low-latency H.264 directly to the App Store receiver on TCP 9000.
+  * Support USB operation without IP networking, Internet, or Personal Hotspot.
+  * Forward OpenDisplay touch, scroll, and Pencil input into GNOME Wayland.
+  * Keep the authenticated Safari/browser transport as a compatibility fallback.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Fri, 25 Sep 2026 11:30:00 +0200
+
 tuxdisplay (0.3.0) unstable; urgency=medium
 
   * Add a standalone GTK manager with an automatically started tray indicator.

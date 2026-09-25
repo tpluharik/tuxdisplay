@@ -133,6 +133,14 @@ def connection_state() -> str:
     return "running"
 
 
+def opendisplay_connected() -> bool:
+    try:
+        payload = json.loads(client_state_file().read_text(encoding="utf-8"))
+        return bool(payload.get("opendisplay_usb", False))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return False
+
+
 def service_action(action: str) -> int:
     ensure_config()
     try:
@@ -201,21 +209,26 @@ def usb_device_ids() -> list[str]:
 
 
 def usb_status() -> tuple[str, str, str | None]:
+    devices = usb_device_ids()
+    if devices:
+        if opendisplay_connected():
+            return "ready", "OpenDisplay connected directly through the USB cable", None
+        return "cable", "iPad cable detected and trusted; open OpenDisplay on the iPad", None
     addresses = usb_network_addresses()
     if addresses:
         interface, address = addresses[0]
         kind = "USB gadget" if address == USB_GADGET_ADDRESS else "iPad USB tethering"
         return "ready", f"{kind} ready on {interface}", f"http://{address}:{ensure_config()['WEB_PORT']}/"
-    if usb_device_ids():
-        return "cable", "iPad cable detected and trusted; enable Personal Hotspot on the iPad", None
     udc_path = Path("/sys/class/udc")
     if udc_path.is_dir() and any(udc_path.iterdir()):
         return "gadget", "Device-capable USB port available", None
-    return "absent", "No iPad USB network detected", None
+    return "absent", "No trusted iPad USB cable detected", None
 
 
 def usb_connect(wait_seconds: int = 12) -> tuple[int, str]:
     status, _message, url = usb_status()
+    if status == "ready" and opendisplay_connected():
+        return 0, "OpenDisplay is connected directly through USB."
     if status == "ready" and url:
         result = 0 if is_active() else service_action("start")
         return result, f"USB connection ready: {url}" if result == 0 else "USB is ready, but the display could not start."
@@ -234,26 +247,14 @@ def usb_connect(wait_seconds: int = 12) -> tuple[int, str]:
                 subprocess.run(["idevicepair", "pair"], check=False, timeout=30)
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
-        interfaces = Path("/sys/class/net").iterdir() if Path("/sys/class/net").is_dir() else ()
-        for interface in (item.name for item in interfaces if interface_driver(item.name) == "ipheth"):
-            try:
-                subprocess.run(
-                    ["nmcli", "device", "connect", interface],
-                    check=False,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    timeout=8,
-                )
-            except (FileNotFoundError, subprocess.TimeoutExpired):
-                pass
+        result = 0 if is_active() else service_action("start")
+        if result:
+            return result, "The iPad is trusted, but the display service could not start."
         for _attempt in range(max(1, wait_seconds)):
-            addresses = usb_network_addresses()
-            if addresses:
-                address = addresses[0][1]
-                result = 0 if is_active() else service_action("start")
-                return result, f"USB connection ready: http://{address}:{ensure_config()['WEB_PORT']}/"
+            if opendisplay_connected():
+                return 0, "OpenDisplay connected directly through USB."
             time.sleep(1)
-        return 4, "The iPad is trusted. Enable Settings → Personal Hotspot → Allow Others to Join, then press Connect USB again."
+        return 0, "The USB display is ready. Open the OpenDisplay app on the iPad; Personal Hotspot is not required."
 
     if status == "gadget":
         try:
@@ -265,7 +266,7 @@ def usb_connect(wait_seconds: int = 12) -> tuple[int, str]:
         display_result = 0 if is_active() else service_action("start")
         return display_result, f"USB connection ready: http://{USB_GADGET_ADDRESS}:{ensure_config()['WEB_PORT']}/"
 
-    return 4, "Connect and trust the iPad with a USB cable, then enable Personal Hotspot on the iPad."
+    return 4, "Connect and trust the iPad with a USB data cable, then open OpenDisplay on the iPad."
 
 
 def usb_disconnect() -> tuple[int, str]:
@@ -430,7 +431,8 @@ def doctor() -> int:
     print(f"Display mode: {'native GNOME Wayland monitor' if native_wayland else 'portable X11 workspace'}")
     print(f"Service: {'running' if is_active() else 'stopped'}")
     print(f"Resolution: {ensure_config()['RESOLUTION']}")
-    print(f"Browser URL: {preferred_url()}")
+    print(f"Browser fallback URL: {preferred_url()}")
+    print(f"OpenDisplay USB: {'connected' if opendisplay_connected() else 'waiting'}")
     udc_path = Path("/sys/class/udc")
     controllers = list(udc_path.iterdir()) if udc_path.is_dir() else []
     if controllers:
@@ -498,7 +500,7 @@ def run_gui() -> int:
             grid = Gtk.Grid(column_spacing=14, row_spacing=12)
             outer.append(grid)
 
-            url_label = Gtk.Label(label="iPad URL")
+            url_label = Gtk.Label(label="Browser fallback URL")
             url_label.set_halign(Gtk.Align.END)
             grid.attach(url_label, 0, 0, 1, 1)
             self.url_entry = Gtk.Entry()
@@ -506,7 +508,7 @@ def run_gui() -> int:
             self.url_entry.set_hexpand(True)
             grid.attach(self.url_entry, 1, 0, 1, 1)
 
-            pin_label = Gtk.Label(label="Access PIN")
+            pin_label = Gtk.Label(label="Browser fallback PIN")
             pin_label.set_halign(Gtk.Align.END)
             grid.attach(pin_label, 0, 1, 1, 1)
             self.pin_entry = Gtk.Entry()
@@ -537,7 +539,7 @@ def run_gui() -> int:
             self.start_button.add_css_class("suggested-action")
             self.start_button.connect("clicked", self.on_start)
             controls.append(self.start_button)
-            self.usb_button = Gtk.Button(label="Connect USB")
+            self.usb_button = Gtk.Button(label="Connect OpenDisplay")
             self.usb_button.connect("clicked", self.on_usb)
             controls.append(self.usb_button)
             self.stop_button = Gtk.Button(label="Close connection")
@@ -570,8 +572,8 @@ def run_gui() -> int:
 
             usb_note = Gtk.Label(
                 label=(
-                    "For a normal laptop USB port, connect and trust the iPad, then enable "
-                    "Settings → Personal Hotspot → Allow Others to Join. TuxDisplay will prefer the cable address automatically."
+                    "Install and open OpenDisplay on the iPad, then connect a trusted USB data cable. "
+                    "This direct connection works without Wi-Fi, an IP address, Internet access, or Personal Hotspot."
                 )
             )
             usb_note.set_wrap(True)
@@ -605,7 +607,7 @@ def run_gui() -> int:
                 self.status.add_css_class("warning")
             usb_kind, usb_message, usb_url = usb_status()
             self.usb_status_label.set_label(usb_message)
-            self.usb_button.set_label("Use USB address" if usb_kind == "ready" else "Connect USB")
+            self.usb_button.set_label("OpenDisplay connected" if usb_kind == "ready" and not usb_url else "Connect OpenDisplay")
             self.url_entry.set_text(usb_url or preferred_url())
             self.pin_entry.set_text(read_password())
             self.start_button.set_sensitive(state == "disconnected")
@@ -614,7 +616,7 @@ def run_gui() -> int:
 
         def on_start(self, _button: Gtk.Button) -> None:
             result = service_action("start")
-            self.show_message("Display started. Open the URL on the iPad." if result == 0 else "The display could not start. Run ‘tuxdisplay status’ for details.")
+            self.show_message("Display started. Open OpenDisplay on the iPad." if result == 0 else "The display could not start. Run ‘tuxdisplay status’ for details.")
             self.refresh()
 
         def on_stop(self, _button: Gtk.Button) -> None:
@@ -624,7 +626,7 @@ def run_gui() -> int:
 
         def on_usb(self, _button: Gtk.Button) -> None:
             self.usb_button.set_sensitive(False)
-            self.show_message("Checking the USB cable…")
+            self.show_message("Connecting to OpenDisplay through USB…")
 
             def finished(result: int, message: str) -> bool:
                 self.usb_button.set_sensitive(True)
@@ -750,7 +752,7 @@ def run_tray() -> int:
     menu.append(open_item)
     start_item = Gtk.MenuItem(label="Start display")
     menu.append(start_item)
-    usb_item = Gtk.MenuItem(label="Connect with USB cable")
+    usb_item = Gtk.MenuItem(label="Connect OpenDisplay with USB")
     menu.append(usb_item)
     close_item = Gtk.MenuItem(label="Close connection")
     menu.append(close_item)
@@ -836,8 +838,9 @@ def print_status() -> int:
         mode = "unknown"
     labels = {"wayland": "native GNOME Wayland extended monitor", "x11": "portable X11 workspace"}
     print(f"Mode: {labels.get(mode, mode)}")
-    print(f"URL: {preferred_url()}")
-    print(f"PIN: {read_password()}")
+    print(f"OpenDisplay USB: {'connected' if opendisplay_connected() else 'waiting'}")
+    print(f"Browser fallback URL: {preferred_url()}")
+    print(f"Browser fallback PIN: {read_password()}")
     if not running:
         try:
             result = systemctl("status", SERVICE)
@@ -849,7 +852,7 @@ def print_status() -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Use an iPad browser as a secondary Linux workspace.")
+    parser = argparse.ArgumentParser(description="Use an iPad as a USB or browser-connected secondary Linux monitor.")
     subparsers = parser.add_subparsers(dest="command")
     for command in ("start", "stop", "restart", "status", "url", "doctor", "gui", "tray"):
         subparsers.add_parser(command)

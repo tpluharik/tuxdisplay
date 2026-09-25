@@ -1,19 +1,19 @@
-.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.3.0" "User Commands"
+.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.0" "User Commands"
 .SH NAME
-tuxdisplay \- use an iPad browser as a secondary Linux monitor
+tuxdisplay \- use an iPad as a USB-connected secondary Linux monitor
 .SH SYNOPSIS
 .B tuxdisplay
 .RI [ command ]
 .SH DESCRIPTION
 .B TuxDisplay
-creates a compositor-owned virtual monitor in a GNOME Wayland session and publishes it to an authenticated browser viewer. Windows can be dragged between the physical display and the iPad. A GTK manager and tray indicator show disconnected, running, and connected states. Other desktops use an isolated X11/noVNC workspace as a fallback.
+creates a compositor-owned virtual monitor in a GNOME Wayland session and streams it to the OpenDisplay iPad app through usbmuxd. This direct USB mode requires no IP network, Internet connection, or Personal Hotspot. Windows can be dragged between the physical display and the iPad. An authenticated browser viewer and an isolated X11/noVNC workspace remain available as compatibility fallbacks.
 .SH COMMANDS
 .TP
 .B start, stop, restart
 Control the per-user display service.
 .TP
 .B status
-Show service state, display mode, browser URL, and access PIN.
+Show service state, display mode, OpenDisplay connection state, browser fallback URL, and access PIN.
 .TP
 .B url
 Print the preferred iPad URL.
@@ -25,7 +25,7 @@ Show or regenerate the six-digit access PIN.
 Start an application in the current desktop. In X11 fallback mode, start it in the isolated workspace.
 .TP
 .B usb connect|disconnect|status
-Detect and manage iPad USB tethering or a supported USB gadget connection.
+Detect a trusted iPad, start direct OpenDisplay USB streaming, or manage a supported USB gadget fallback.
 .TP
 .B tray
 Run the GNOME tray indicator with start, USB connect, and close-connection actions.
@@ -46,6 +46,6 @@ Generated access PIN. The file is readable only by its user.
 .I ~/.local/state/tuxdisplay/
 Service state and application logs.
 .SH SECURITY
-The web listener is available on all interfaces and uses PIN authentication. Traffic is ordinary HTTP. Use it only on a trusted USB or private LAN link and do not expose port 6080 to the public Internet.
+OpenDisplay traffic uses the trusted local usbmuxd cable connection. Protocol version 3 has no additional authentication, so unlock the iPad and trust only computers you control. The browser fallback listens on all interfaces and uses PIN authentication over ordinary HTTP; do not expose port 6080 to the public Internet.
 .SH SEE ALSO
 .BR tuxdisplay-usb (8)

@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Expose a real GNOME Wayland virtual monitor to a browser."""
+"""Expose a real GNOME Wayland virtual monitor to OpenDisplay and browsers."""
 
 from __future__ import annotations
 
@@ -11,6 +11,7 @@ import secrets
 import signal
 import sys
 import threading
+import time
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie
@@ -20,7 +21,10 @@ import gi
 
 gi.require_version("Gst", "1.0")
 gi.require_version("GstApp", "1.0")
-from gi.repository import Gio, GLib, Gst  # type: ignore  # noqa: E402
+gi.require_version("GstVideo", "1.0")
+from gi.repository import Gio, GLib, Gst, GstVideo  # type: ignore  # noqa: E402
+
+from opendisplay_usb import OpenDisplayUSB  # noqa: E402
 
 
 REMOTE_DEST = "org.gnome.Mutter.RemoteDesktop"
@@ -242,8 +246,13 @@ class WaylandDisplay:
         self.frame_ready = threading.Condition()
         self.stopping = False
         self.active_streams = 0
+        self.browser_streams = 0
         self.client_lock = threading.Lock()
+        self.opendisp_connected = False
+        self.opendisp_status = "Waiting for OpenDisplay"
+        self.touch_down = False
         self.pipeline: Gst.Pipeline | None = None
+        self.opendisp: OpenDisplayUSB | None = None
         self.remote_session = ""
         self.stream_path = ""
         self.mapping_id = ""
@@ -333,22 +342,58 @@ class WaylandDisplay:
             f"! video/x-raw,format=BGRx,width={self.width},height={self.height} "
             "! queue max-size-buffers=1 leaky=downstream "
             "! videorate drop-only=true max-rate=30 "
-            "! videoconvert "
+            "! videoconvert ! video/x-raw,format=I420 "
+            "! tee name=displaytee "
+            "displaytee. ! queue max-size-buffers=1 leaky=downstream "
+            "! valve name=jpeg_valve drop=true "
             "! jpegenc quality=76 "
-            "! appsink name=sink emit-signals=true max-buffers=1 drop=true sync=false"
+            "! appsink name=jpeg_sink emit-signals=true max-buffers=1 drop=true sync=false "
+            "displaytee. ! queue max-size-buffers=2 leaky=downstream "
+            "! valve name=h264_valve drop=true "
+            "! x264enc name=h264_encoder tune=zerolatency speed-preset=ultrafast "
+            "bitrate=8000 byte-stream=true bframes=0 key-int-max=30 "
+            "! h264parse config-interval=-1 "
+            "! video/x-h264,stream-format=byte-stream,alignment=au "
+            "! appsink name=h264_sink emit-signals=true max-buffers=2 drop=true sync=false"
         )
         pipeline = Gst.parse_launch(description)
         if not isinstance(pipeline, Gst.Pipeline):
             raise RuntimeError("Could not create the video pipeline")
         self.pipeline = pipeline
-        sink = pipeline.get_by_name("sink")
-        sink.connect("new-sample", self.on_sample)
+        jpeg_sink = pipeline.get_by_name("jpeg_sink")
+        jpeg_sink.connect("new-sample", self.on_sample)
+        h264_sink = pipeline.get_by_name("h264_sink")
+        h264_sink.connect("new-sample", self.on_h264_sample)
         messages = pipeline.get_bus()
         messages.add_signal_watch()
         messages.connect("message", self.on_pipeline_message)
         result = pipeline.set_state(Gst.State.PLAYING)
         if result == Gst.StateChangeReturn.FAILURE:
             raise RuntimeError("PipeWire video pipeline could not start")
+
+    def start_opendisplay(self) -> None:
+        self.opendisp = OpenDisplayUSB(
+            width=self.width,
+            height=self.height,
+            frames_per_second=30,
+            on_control=self.handle_opendisplay_control,
+            on_connected=self.set_opendisplay_connected,
+            request_keyframe=self.force_keyframe,
+        )
+        self.opendisp.start()
+
+    def force_keyframe(self) -> None:
+        if self.pipeline is None:
+            return
+        try:
+            event = GstVideo.video_event_new_upstream_force_key_unit(Gst.CLOCK_TIME_NONE, True, 0)
+            encoder = self.pipeline.get_by_name("h264_encoder")
+            source_pad = encoder.get_static_pad("src") if encoder is not None else None
+            if source_pad is not None:
+                source_pad.send_event(event)
+        except (AttributeError, TypeError):
+            # A periodic IDR is still emitted every second by key-int-max.
+            pass
 
     def on_sample(self, sink: Any) -> Gst.FlowReturn:
         sample = sink.emit("pull-sample")
@@ -366,6 +411,22 @@ class WaylandDisplay:
             self.frame = data
             self.frame_generation += 1
             self.frame_ready.notify_all()
+        return Gst.FlowReturn.OK
+
+    def on_h264_sample(self, sink: Any) -> Gst.FlowReturn:
+        sample = sink.emit("pull-sample")
+        if sample is None:
+            return Gst.FlowReturn.ERROR
+        buffer = sample.get_buffer()
+        ok, info = buffer.map(Gst.MapFlags.READ)
+        if not ok:
+            return Gst.FlowReturn.ERROR
+        try:
+            data = bytes(info.data)
+        finally:
+            buffer.unmap(info)
+        if self.opendisp is not None:
+            self.opendisp.submit_video(data, int(time.time() * 1000))
         return Gst.FlowReturn.OK
 
     def on_pipeline_message(self, _bus: Gst.Bus, message: Gst.Message) -> None:
@@ -413,6 +474,68 @@ class WaylandDisplay:
         else:
             raise ValueError("Unsupported input event")
 
+    def handle_opendisplay_control(self, event: dict[str, Any]) -> None:
+        kind = str(event.get("type", ""))
+        if kind in {"hello", "ping", "kf", "stats", "sleeping", "closing", "cursorAck"}:
+            return
+        normalized_x = min(1.0, max(0.0, float(event.get("x", 0.0))))
+        normalized_y = min(1.0, max(0.0, float(event.get("y", 0.0))))
+        x = normalized_x * self.width
+        y = normalized_y * self.height
+        if kind == "touch":
+            phase = str(event.get("phase", ""))
+            if phase == "began":
+                self.touch_down = True
+                self.handle_input({"type": "touch_down", "slot": 0, "x": x, "y": y})
+            elif phase == "moved":
+                input_type = "touch_move" if self.touch_down else "touch_down"
+                self.touch_down = True
+                self.handle_input({"type": input_type, "slot": 0, "x": x, "y": y})
+            elif phase in {"ended", "cancelled"} and self.touch_down:
+                self.handle_input({"type": "touch_up", "slot": 0, "x": x, "y": y})
+                self.touch_down = False
+        elif kind == "scroll":
+            self.handle_input(
+                {
+                    "type": "wheel",
+                    "dx": float(event.get("dx", 0.0)),
+                    "dy": float(event.get("dy", 0.0)),
+                    "x": x,
+                    "y": y,
+                }
+            )
+        elif kind == "pencil":
+            phase = str(event.get("phase", ""))
+            if phase == "down":
+                self.handle_input({"type": "button", "button": 0, "down": True, "x": x, "y": y})
+            elif phase in {"move", "hover"}:
+                self.handle_input({"type": "motion", "x": x, "y": y})
+            elif phase == "up":
+                self.handle_input({"type": "button", "button": 0, "down": False, "x": x, "y": y})
+
+    def set_opendisplay_connected(self, connected: bool, status: str) -> None:
+        with self.client_lock:
+            self.opendisp_status = status
+            if connected == self.opendisp_connected:
+                self.write_client_state()
+                return
+            self.opendisp_connected = connected
+            if self.pipeline is not None:
+                valve = self.pipeline.get_by_name("h264_valve")
+                if valve is not None:
+                    valve.set_property("drop", not connected)
+            if connected:
+                self.active_streams += 1
+            else:
+                self.active_streams = max(0, self.active_streams - 1)
+                if self.touch_down:
+                    try:
+                        self.handle_input({"type": "touch_up", "slot": 0, "x": 0, "y": 0})
+                    except (GLib.Error, ValueError):
+                        pass
+                    self.touch_down = False
+            self.write_client_state()
+
     def start_http(self) -> None:
         self.write_client_state()
         self.http = TuxDisplayServer(("0.0.0.0", self.port), self)
@@ -425,18 +548,38 @@ class WaylandDisplay:
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = directory / "clients.json"
         temporary = path.with_suffix(".tmp")
-        temporary.write_text(json.dumps({"active_streams": self.active_streams}) + "\n", encoding="utf-8")
+        temporary.write_text(
+            json.dumps(
+                {
+                    "active_streams": self.active_streams,
+                    "opendisplay_usb": self.opendisp_connected,
+                    "opendisplay_status": self.opendisp_status,
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
         temporary.chmod(0o600)
         temporary.replace(path)
 
     def client_opened(self) -> None:
         with self.client_lock:
+            self.browser_streams += 1
             self.active_streams += 1
+            if self.pipeline is not None:
+                valve = self.pipeline.get_by_name("jpeg_valve")
+                if valve is not None:
+                    valve.set_property("drop", False)
             self.write_client_state()
 
     def client_closed(self) -> None:
         with self.client_lock:
+            self.browser_streams = max(0, self.browser_streams - 1)
             self.active_streams = max(0, self.active_streams - 1)
+            if self.browser_streams == 0 and self.pipeline is not None:
+                valve = self.pipeline.get_by_name("jpeg_valve")
+                if valve is not None:
+                    valve.set_property("drop", True)
             self.write_client_state()
 
     def write_mode(self) -> None:
@@ -454,6 +597,8 @@ class WaylandDisplay:
             self.write_client_state()
         with self.frame_ready:
             self.frame_ready.notify_all()
+        if self.opendisp is not None:
+            self.opendisp.stop()
         if hasattr(self, "http"):
             shutdown = threading.Thread(target=self.http.shutdown, name="tuxdisplay-http-stop", daemon=True)
             shutdown.start()
@@ -471,9 +616,14 @@ class WaylandDisplay:
         try:
             self.create_monitor()
             self.start_pipeline()
+            self.start_opendisplay()
             self.start_http()
             self.write_mode()
-            print(f"TuxDisplay native monitor {self.width}x{self.height} at http://0.0.0.0:{self.port}/", flush=True)
+            print(
+                f"TuxDisplay native monitor {self.width}x{self.height}; "
+                f"OpenDisplay USB enabled; browser fallback at http://0.0.0.0:{self.port}/",
+                flush=True,
+            )
 
             def quit_loop(_signum: int, _frame: object) -> None:
                 self.loop.quit()

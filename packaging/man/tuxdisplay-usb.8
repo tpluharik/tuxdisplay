@@ -1,4 +1,4 @@
-.TH TUXDISPLAY-USB 8 "September 2026" "TuxDisplay 0.3.0" "System Administration"
+.TH TUXDISPLAY-USB 8 "September 2026" "TuxDisplay 0.4.0" "System Administration"
 .SH NAME
 tuxdisplay-usb \- configure optional USB gadget Ethernet for TuxDisplay
 .SH SYNOPSIS
@@ -8,9 +8,9 @@ tuxdisplay-usb \- configure optional USB gadget Ethernet for TuxDisplay
 .B tuxdisplay-usb
 creates a USB CDC ECM Ethernet gadget using Linux ConfigFS, assigns 10.55.0.1/24 to the gadget interface, and starts a private DHCP service. It is intended only for computers with a USB Device Controller and a device or dual-role USB port.
 .PP
-Most desktop and laptop USB ports are host-only. On those computers connect and trust the iPad, enable Personal Hotspot on iPadOS, and use
+Most desktop and laptop USB ports are host-only. They do not need gadget mode for the preferred OpenDisplay transport. Install and open OpenDisplay on the iPad, connect and trust it, and use
 .B tuxdisplay usb connect
-to activate and prefer the ipheth cable address.
+to stream directly through usbmuxd without Personal Hotspot. This helper remains available only for the browser-network fallback.
 .SH COMMANDS
 .TP
 .B setup

@@ -103,10 +103,22 @@ class TuxDisplayTests(unittest.TestCase):
     def test_usb_status_reports_a_trusted_cable_without_tethering(self) -> None:
         with mock.patch.object(MODULE, "usb_network_addresses", return_value=[]), mock.patch.object(
             MODULE, "usb_device_ids", return_value=["test-ipad"]
+        ), mock.patch.object(
+            MODULE, "opendisplay_connected", return_value=False
         ):
             status, message, url = MODULE.usb_status()
         self.assertEqual(status, "cable")
-        self.assertIn("Personal Hotspot", message)
+        self.assertIn("open OpenDisplay", message)
+        self.assertNotIn("Personal Hotspot", message)
+        self.assertIsNone(url)
+
+    def test_usb_status_reports_direct_opendisplay_connection(self) -> None:
+        with mock.patch.object(MODULE, "usb_device_ids", return_value=["test-ipad"]), mock.patch.object(
+            MODULE, "opendisplay_connected", return_value=True
+        ):
+            status, message, url = MODULE.usb_status()
+        self.assertEqual(status, "ready")
+        self.assertIn("OpenDisplay connected", message)
         self.assertIsNone(url)
 
     def test_tray_autostart_and_state_icons_are_packaged(self) -> None:

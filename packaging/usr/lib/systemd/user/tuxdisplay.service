@@ -1,5 +1,5 @@
 [Unit]
-Description=TuxDisplay browser-accessible virtual display
+Description=TuxDisplay OpenDisplay USB and browser virtual display
 Documentation=file:///usr/share/doc/tuxdisplay/README.md
 After=graphical-session.target network-online.target
 
