@@ -1,4 +1,4 @@
-.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.5" "User Commands"
+.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.6" "User Commands"
 .SH NAME
 tuxdisplay \- use an iPad as a secondary Linux display
 .SH SYNOPSIS
@@ -25,7 +25,7 @@ Xorg and unsupported Wayland compositors use an isolated X11/noVNC workspace;
 that workspace is not an extension of the current desktop.
 .PP
 Version 0.4.0 must not be used on GNOME Wayland because its touch path could
-abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions. Use 0.4.5 or newer.
+abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions. Use 0.4.6 or newer.
 .SH COMMANDS
 .TP
 .B gui
@@ -118,6 +118,7 @@ accepts:
 .nf
 RESOLUTION=1920x1080
 FPS=30
+KEEP_AWAKE_WITH_LID_CLOSED=0
 DISPLAY_NUMBER=48
 WEB_PORT=6080
 VNC_PORT=5900
@@ -130,6 +131,10 @@ apply only to the X11 fallback.
 .B FPS
 accepts 15, 30, or 60 and controls the virtual-monitor, encoder, and advertised
 receiver cadence. The default is 30.
+.B KEEP_AWAKE_WITH_LID_CLOSED
+accepts 0 or 1. When enabled, TuxDisplay blocks system sleep and lid-switch
+handling while the display service runs. This also blocks manual and idle
+suspend. Stopping TuxDisplay releases the inhibitor.
 .B WEB_PORT
 and the PIN apply only to browser access. Restart the service after editing.
 .SH ENVIRONMENT

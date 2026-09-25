@@ -14,24 +14,30 @@ The first three commands are safe to paste into a bug report. Review logs before
 
 ## Do not run 0.4.0 on GNOME Wayland
 
-TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. TuxDisplay 0.4.3 could reject GNOME's negotiated PipeWire rate, while 0.4.4 could periodically reconnect a healthy low-FPS stream. Upgrade to 0.4.5 or newer:
+TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. TuxDisplay 0.4.3 could reject GNOME's negotiated PipeWire rate, while 0.4.4 could periodically reconnect a healthy low-FPS stream. Upgrade to 0.4.6 or newer:
 
 ~~~sh
-sudo apt install ./tuxdisplay_0.4.5_all.deb
+sudo apt install ./tuxdisplay_0.4.6_all.deb
 tuxdisplay restart
 ~~~
 
-Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate. Version 0.4.5 prevents false watchdog reconnects on quiet or low-FPS desktops.
+Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate. Version 0.4.5 prevents false watchdog reconnects on quiet or low-FPS desktops. Version 0.4.6 adds optional closed-lid operation.
 
 ## OpenDisplay shows a black screen
 
 1. Confirm `tuxdisplay status` reports GNOME Wayland mode and a running service.
-2. Confirm the package version is at least 0.4.5.
+2. Confirm the package version is at least 0.4.6.
 3. Move the pointer or a window onto `Meta-0` to create screen damage.
 4. Close and reopen OpenDisplay so the sender performs a new handshake.
 5. Run `tuxdisplay restart` if the app does not reconnect.
 
-If a new connection remains black on 0.4.5, capture the user-service log. The log should show a valid OpenDisplay hello, an active H.264 stream, and receiver-health statistics.
+If a new connection remains black on 0.4.6, capture the user-service log. The log should show a valid OpenDisplay hello, an active H.264 stream, and receiver-health statistics.
+
+## The display stops when the laptop lid closes
+
+Enable **Keep awake with lid closed** in the TuxDisplay manager. The manager restarts the display once so the service can acquire its logind inhibitor. Confirm it with `tuxdisplay status`; the output should say that lid-close sleep is blocked while TuxDisplay runs.
+
+The inhibitor is released when TuxDisplay stops. It intentionally blocks manual and idle suspend as well as lid-triggered sleep, but firmware thermal protection and critical-battery handling may still shut down or suspend the computer. Keep a closed laptop ventilated.
 
 ## The image freezes after changing resolution
 

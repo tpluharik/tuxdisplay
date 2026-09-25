@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.5. The project has two display backends and three receiver paths. Only the GNOME Wayland backend extends the user's current desktop.
+This document describes TuxDisplay 0.4.6. The project has two display backends and three receiver paths. Only the GNOME Wayland backend extends the user's current desktop.
 
 ## GNOME Wayland data flow
 
@@ -76,6 +76,10 @@ The isolated desktop is not part of the user's current monitor layout. `tuxdispl
 
 Set `TUXDISPLAY_FORCE_X11=1` in the user service environment to select this backend deliberately.
 
+## Closed-lid inhibitor
+
+When `KEEP_AWAKE_WITH_LID_CLOSED=1`, `tuxdisplay-session` re-executes itself below `systemd-inhibit` before selecting a display backend. The inhibitor blocks `sleep` and `handle-lid-switch` through logind and is owned by the TuxDisplay service process tree. Stopping or failing the service closes the inhibitor automatically, so no permanent system configuration is changed.
+
 ## Optional USB network gadget
 
 `tuxdisplay-usb` can configure Linux ConfigFS, CDC ECM, address `10.55.0.1/24`, and a private dnsmasq instance. This gives the browser fallback a cable network on computers with a USB Device Controller.
@@ -105,7 +109,7 @@ The tray derives three user-facing states:
 
 | Path | Contents |
 | --- | --- |
-| `~/.config/tuxdisplay/config` | Resolution, frame rate, display number, and ports |
+| `~/.config/tuxdisplay/config` | Resolution, frame rate, lid-close behavior, display number, and ports |
 | `~/.config/tuxdisplay/password` | Browser PIN |
 | `~/.config/tuxdisplay/*.rfb` | Browser/VNC authentication material when used |
 | `~/.local/state/tuxdisplay/` | Connection state and logs |

@@ -12,7 +12,7 @@ The Debian package also includes:
 - an optional USB Ethernet gadget helper for hardware with a device-capable USB controller.
 
 > [!IMPORTANT]
-> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, and 0.4.4 can unnecessarily reconnect a healthy low-FPS OpenDisplay session. Install 0.4.5 or newer.
+> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, and 0.4.4 can unnecessarily reconnect a healthy low-FPS OpenDisplay session. Install 0.4.6 or newer.
 
 ## Documentation
 
@@ -44,6 +44,7 @@ The packaged and tested target is Debian/Ubuntu. The direct OpenDisplay sender c
 - Gray stopped, amber waiting, and green connected tray states.
 - Start, connect, disconnect, and manager actions from the tray.
 - Authenticated browser access using a generated six-digit PIN.
+- Optional closed-lid operation using a service-scoped system sleep inhibitor.
 
 OpenDisplay protocol v3 does not identify individual touch slots. TuxDisplay therefore treats touch and Pencil events as a single guarded pointer stream. Native multi-touch gestures and Pencil pressure or tilt are not forwarded.
 
@@ -53,7 +54,7 @@ Download the current `.deb` and `SHA256SUMS` from [GitHub Releases](https://gith
 
 ~~~sh
 sha256sum --ignore-missing --check SHA256SUMS
-sudo apt install ./tuxdisplay_0.4.5_all.deb
+sudo apt install ./tuxdisplay_0.4.6_all.deb
 ~~~
 
 The checksum file can include packages from several releases. The checksum for the package being installed must report `OK`.
@@ -89,6 +90,12 @@ Choose a preset in the manager before starting or reconnecting:
 TuxDisplay does not yet read the iPad's aspect ratio and select a mode automatically. A 4:3 preset fills most traditional iPad panels more closely than 16:9 or 16:10. Safari and iPadOS may still reserve browser chrome or apply safe-area insets.
 
 Changing resolution restarts the virtual monitor. The image will pause briefly, OpenDisplay will reconnect, and GNOME may move windows from the removed virtual monitor back to the laptop display. Move them back after the new monitor appears. If the iPad keeps the last frame, reopen OpenDisplay or use **Close connection**, then start again.
+
+## Closed-lid operation
+
+Enable **Keep awake with lid closed** in the TuxDisplay manager when the iPad should remain usable after closing the laptop. TuxDisplay then blocks system sleep and lid-switch handling for exactly as long as its user service runs. Stopping TuxDisplay releases the inhibitor and restores normal sleep behavior.
+
+This option also blocks manual and idle suspend while TuxDisplay is running. A closed laptop can retain more heat, so keep it connected to power when appropriate and make sure its vents are not obstructed. Firmware-level thermal shutdown and critical-battery actions can still override the inhibitor.
 
 ## Command line
 
@@ -142,12 +149,13 @@ TuxDisplay creates `~/.config/tuxdisplay/config` with private permissions:
 ~~~ini
 RESOLUTION=1920x1080
 FPS=30
+KEEP_AWAKE_WITH_LID_CLOSED=0
 DISPLAY_NUMBER=48
 WEB_PORT=6080
 VNC_PORT=5900
 ~~~
 
-`FPS` accepts `15`, `30`, or `60` and controls the requested virtual-monitor cadence, a non-buffering capture limiter, the encoder keyframe interval, and the advertised OpenDisplay cadence; `30` is the stability-oriented default. TuxDisplay accepts the actual PipeWire rate chosen by GNOME and safely drops excess frames before encoding. `DISPLAY_NUMBER` and `VNC_PORT` apply only to the X11 compatibility workspace. `WEB_PORT` and the PIN apply only to browser access. Restart TuxDisplay after changing a value.
+`FPS` accepts `15`, `30`, or `60` and controls the requested virtual-monitor cadence, a non-buffering capture limiter, the encoder keyframe interval, and the advertised OpenDisplay cadence; `30` is the stability-oriented default. TuxDisplay accepts the actual PipeWire rate chosen by GNOME and safely drops excess frames before encoding. `KEEP_AWAKE_WITH_LID_CLOSED=1` enables the service-lifetime sleep inhibitor; the default `0` preserves normal sleep behavior. `DISPLAY_NUMBER` and `VNC_PORT` apply only to the X11 compatibility workspace. `WEB_PORT` and the PIN apply only to browser access. Restart TuxDisplay after changing a value.
 
 Set `TUXDISPLAY_FORCE_X11=1` in the user service environment to force the isolated X11 fallback.
 
@@ -160,7 +168,7 @@ python3 -m unittest discover -s tests -v
 ./build-deb.sh
 ~~~
 
-The package is written to `dist/tuxdisplay_0.4.5_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
+The package is written to `dist/tuxdisplay_0.4.6_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
 
 Development and release conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 

@@ -1,10 +1,10 @@
 Package: tuxdisplay
-Version: 0.4.5
+Version: 0.4.6
 Section: net
 Priority: optional
 Architecture: all
 Maintainer: TuxDisplay contributors <tpluharik@users.noreply.github.com>
-Depends: python3, python3-gi, gir1.2-gtk-4.0, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1, gir1.2-gstreamer-1.0, gir1.2-gst-plugins-base-1.0, gstreamer1.0-pipewire, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-plugins-ugly, xvfb, x11vnc, novnc, websockify, openbox, tint2, xterm, x11-utils, x11-xserver-utils, xauth, iproute2, network-manager, avahi-daemon, polkitd, pkexec, dnsmasq-base, libimobiledevice-utils, usbmuxd, ipheth-utils
+Depends: python3, python3-gi, gir1.2-gtk-4.0, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1, gir1.2-gstreamer-1.0, gir1.2-gst-plugins-base-1.0, gstreamer1.0-pipewire, gstreamer1.0-plugins-good, gstreamer1.0-plugins-bad, gstreamer1.0-plugins-ugly, systemd, xvfb, x11vnc, novnc, websockify, openbox, tint2, xterm, x11-utils, x11-xserver-utils, xauth, iproute2, network-manager, avahi-daemon, polkitd, pkexec, dnsmasq-base, libimobiledevice-utils, usbmuxd, ipheth-utils
 Recommends: gnome-shell-extension-appindicator, firefox | chromium | chromium-browser
 Homepage: https://github.com/tpluharik/tuxdisplay
 Description: use an iPad as a GNOME Wayland monitor over USB

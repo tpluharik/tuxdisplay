@@ -40,6 +40,7 @@ class TuxDisplayTests(unittest.TestCase):
         config = MODULE.ensure_config()
         self.assertEqual(config["RESOLUTION"], "1920x1080")
         self.assertEqual(config["FPS"], "30")
+        self.assertEqual(config["KEEP_AWAKE_WITH_LID_CLOSED"], "0")
         path = MODULE.config_file()
         self.assertTrue(path.exists())
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
@@ -48,6 +49,7 @@ class TuxDisplayTests(unittest.TestCase):
         values = {
             "RESOLUTION": "bad;command",
             "FPS": "144",
+            "KEEP_AWAKE_WITH_LID_CLOSED": "yes",
             "DISPLAY_NUMBER": "9999",
             "WEB_PORT": "80",
             "VNC_PORT": "5900",
@@ -55,6 +57,7 @@ class TuxDisplayTests(unittest.TestCase):
         validated = MODULE.validate_config(values)
         self.assertEqual(validated["RESOLUTION"], "1920x1080")
         self.assertEqual(validated["FPS"], "30")
+        self.assertEqual(validated["KEEP_AWAKE_WITH_LID_CLOSED"], "0")
         self.assertEqual(validated["DISPLAY_NUMBER"], "48")
         self.assertEqual(validated["WEB_PORT"], "6080")
         self.assertEqual(validated["VNC_PORT"], "5900")
@@ -104,6 +107,18 @@ class TuxDisplayTests(unittest.TestCase):
         run = text[text.index('    def run(self) -> None:') :]
         self.assertLess(run.index('self.prepare_opendisplay()'), run.index('self.start_pipeline()'))
         self.assertLess(run.index('self.start_pipeline()'), run.index('self.start_opendisplay()'))
+
+    def test_lid_close_sleep_inhibitor_is_opt_in_and_scoped_to_service(self) -> None:
+        session = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-session"
+        text = session.read_text(encoding="utf-8")
+        self.assertIn("KEEP_AWAKE_WITH_LID_CLOSED 0", text)
+        self.assertIn("${TUXDISPLAY_INHIBITED:-0}", text)
+        self.assertIn("--what=handle-lid-switch:sleep", text)
+        self.assertIn("--mode=block", text)
+        self.assertIn('exec systemd-inhibit', text)
+        manager = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('Gtk.Label(label="Keep awake with lid closed")', manager)
+        self.assertIn('configuration["KEEP_AWAKE_WITH_LID_CLOSED"] = selected', manager)
 
     def test_browser_recovers_or_reauthenticates_after_service_restart(self) -> None:
         viewer = SCRIPT.parents[1] / "share" / "tuxdisplay" / "wayland-viewer.html"

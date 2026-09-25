@@ -1,16 +1,6 @@
 #!/bin/sh
 set -eu
 
-# GNOME ScreenCast/RemoteDesktop creates a compositor-owned virtual output.
-# Keep the original Xvfb/noVNC workspace for other desktops.
-if [ "${TUXDISPLAY_FORCE_X11:-0}" != "1" ]; then
-    case "${XDG_CURRENT_DESKTOP:-}:${XDG_SESSION_TYPE:-}" in
-        *GNOME*:wayland|*gnome*:wayland)
-            exec /usr/lib/tuxdisplay/tuxdisplay-wayland
-            ;;
-    esac
-fi
-
 td_config_home=${XDG_CONFIG_HOME:-"$HOME/.config"}
 td_state_home=${XDG_STATE_HOME:-"$HOME/.local/state"}
 td_config_dir="$td_config_home/tuxdisplay"
@@ -22,12 +12,6 @@ td_xauthority="$td_config_dir/Xauthority"
 
 mkdir -p "$td_config_dir" "$td_state_dir"
 chmod 700 "$td_config_dir" "$td_state_dir"
-printf '%s\n' x11 >"$td_state_dir/mode"
-td_clients_tmp="$td_state_dir/clients.tmp"
-printf '{"pid":%s,"instance_id":"x11-%s","updated_at":%s,"active_streams":0,"opendisplay_usb":false,"opendisplay_status":"X11 browser fallback","receiver":{}}\n' \
-    "$$" "$$" "$(date +%s)" >"$td_clients_tmp"
-chmod 600 "$td_clients_tmp"
-mv "$td_clients_tmp" "$td_state_dir/clients.json"
 
 if [ ! -f "$td_config_file" ]; then
     /usr/bin/tuxdisplay url >/dev/null
@@ -43,6 +27,38 @@ td_read_config() {
         printf '%s' "$td_fallback"
     fi
 }
+
+td_keep_awake=$(td_read_config KEEP_AWAKE_WITH_LID_CLOSED 0)
+if [ "$td_keep_awake" = "1" ] && [ "${TUXDISPLAY_INHIBITED:-0}" != "1" ]; then
+    if ! command -v systemd-inhibit >/dev/null 2>&1; then
+        echo "TuxDisplay: systemd-inhibit is unavailable; lid-close protection cannot start" >&2
+        exit 1
+    fi
+    export TUXDISPLAY_INHIBITED=1
+    exec systemd-inhibit \
+        --what=handle-lid-switch:sleep \
+        --who=TuxDisplay \
+        --why="Keep the iPad display active while the laptop lid is closed" \
+        --mode=block \
+        "$0"
+fi
+
+# GNOME ScreenCast/RemoteDesktop creates a compositor-owned virtual output.
+# Keep the original Xvfb/noVNC workspace for other desktops.
+if [ "${TUXDISPLAY_FORCE_X11:-0}" != "1" ]; then
+    case "${XDG_CURRENT_DESKTOP:-}:${XDG_SESSION_TYPE:-}" in
+        *GNOME*:wayland|*gnome*:wayland)
+            exec /usr/lib/tuxdisplay/tuxdisplay-wayland
+            ;;
+    esac
+fi
+
+printf '%s\n' x11 >"$td_state_dir/mode"
+td_clients_tmp="$td_state_dir/clients.tmp"
+printf '{"pid":%s,"instance_id":"x11-%s","updated_at":%s,"active_streams":0,"opendisplay_usb":false,"opendisplay_status":"X11 browser fallback","receiver":{}}\n' \
+    "$$" "$$" "$(date +%s)" >"$td_clients_tmp"
+chmod 600 "$td_clients_tmp"
+mv "$td_clients_tmp" "$td_state_dir/clients.json"
 
 td_resolution=$(td_read_config RESOLUTION 1920x1080)
 td_display_number=$(td_read_config DISPLAY_NUMBER 48)

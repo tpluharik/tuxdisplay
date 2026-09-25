@@ -1,3 +1,14 @@
+tuxdisplay (0.4.6) unstable; urgency=medium
+
+  * Add an opt-in manager switch that keeps the host awake when its lid is
+    closed while TuxDisplay is running.
+  * Hold a logind sleep and lid-switch inhibitor for the exact lifetime of the
+    display service and release it automatically on stop.
+  * Report lid-close protection in status and diagnostics, and document power,
+    battery, and ventilation implications.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Fri, 25 Sep 2026 12:20:00 +0200
+
 tuxdisplay (0.4.5) unstable; urgency=critical
 
   * Stop treating OpenDisplay's decoder-starvation counter as proof of a failed
