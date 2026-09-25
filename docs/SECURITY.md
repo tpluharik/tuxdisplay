@@ -64,6 +64,10 @@ sha256sum --ignore-missing --check SHA256SUMS
 
 SHA-256 detects a damaged or substituted file relative to the published checksum. Releases are not currently documented as reproducible or cryptographically signed, so verify the GitHub repository and release source as well.
 
+The in-app updater applies the same policy before it requests system authentication. It accepts only a newer stable semantic version from the repository's latest-release API, requires the exact versioned `.deb` and `SHA256SUMS` assets, restricts metadata and downloads to HTTPS GitHub hosts, enforces response-size limits, verifies the published SHA-256 and any asset digest returned by GitHub, and checks the package name, version, and `all` architecture with `dpkg-deb`. The user must explicitly choose installation and approve the PolicyKit prompt; installation is delegated to `apt-get`.
+
+These checks protect against accidental corruption, unsafe redirects, and asset mix-ups. They do not protect against compromise of the GitHub repository or release account because the package and checksum share that trust root. The updater does not send the display stream, configuration, PIN, or iPad identifier to GitHub.
+
 ## Hardening recommendations
 
 - Prefer direct USB over the browser fallback.
@@ -73,6 +77,7 @@ SHA-256 detects a damaged or substituted file relative to the published checksum
 - Do not run the display service as root.
 - Leave `tuxdisplay-usb-gadget.service` disabled unless gadget networking is explicitly required.
 - Review `journalctl --user -u tuxdisplay.service` after unexplained connections.
+- Inspect the version and release notes shown by the updater before approving installation.
 
 ## Known limitations
 

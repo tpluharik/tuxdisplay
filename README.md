@@ -6,13 +6,13 @@ No IP address, Internet connection, Wi-Fi, cellular service, Personal Hotspot, a
 
 The Debian package also includes:
 
-- a standalone GTK manager and three-state tray icon;
+- one GTK application with a manager, three-state tray icon, and verified in-app updates;
 - an authenticated Safari/browser fallback for private networks;
 - an isolated X11/noVNC workspace for desktops that cannot create a GNOME virtual monitor;
 - an optional USB Ethernet gadget helper for hardware with a device-capable USB controller.
 
 > [!IMPORTANT]
-> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, and 0.4.4 can unnecessarily reconnect a healthy low-FPS OpenDisplay session. Install 0.4.6 or newer.
+> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, and 0.4.4 can unnecessarily reconnect a healthy low-FPS OpenDisplay session. Install 0.4.7 or newer.
 
 ## Documentation
 
@@ -54,7 +54,7 @@ Download the current `.deb` and `SHA256SUMS` from [GitHub Releases](https://gith
 
 ~~~sh
 sha256sum --ignore-missing --check SHA256SUMS
-sudo apt install ./tuxdisplay_0.4.6_all.deb
+sudo apt install ./tuxdisplay_0.4.7_all.deb
 ~~~
 
 The checksum file can include packages from several releases. The checksum for the package being installed must report `OK`.
@@ -70,7 +70,13 @@ Install [OpenDisplay](https://apps.apple.com/us/app/opendisplay/id6780264891) on
 5. Choose **Connect OpenDisplay** in TuxDisplay.
 6. Drag a window beyond the right edge of the computer display.
 
-The tray starts automatically at the next login and whenever the manager opens. It is gray when stopped, amber while waiting for a viewer, and green while the iPad is viewing the display. **Close connection** stops streaming and removes the virtual monitor.
+TuxDisplay is a single application: the manager window and tray controls share one process and one connection state. The tray starts automatically at the next login. Opening TuxDisplay from the app grid brings up the existing manager instead of starting another copy. It is gray when stopped, amber while waiting for a viewer, and green while the iPad is viewing the display. **Close connection** stops streaming and removes the virtual monitor.
+
+## In-app updates
+
+The manager checks GitHub Releases after it starts and shows **Install update** when a newer stable version is available. You can also choose **Check for updates** from the tray. Downloading an update requires Internet access, but using the iPad display does not.
+
+Before requesting system authentication, TuxDisplay requires the exact versioned Debian package and `SHA256SUMS` from the official release, restricts downloads to HTTPS GitHub hosts, verifies the SHA-256 checksum and any GitHub asset digest, and checks the package name, version, and architecture. Installation uses the normal system package manager so dependencies and upgrades remain tracked by Debian/Ubuntu. Restart TuxDisplay from the offered button after installation.
 
 Change the monitor arrangement in **Settings → Displays** if the virtual output is not on the expected edge.
 
@@ -111,7 +117,7 @@ tuxdisplay stop
 tuxdisplay usb status
 tuxdisplay usb connect
 tuxdisplay usb disconnect
-tuxdisplay tray
+tuxdisplay tray             # compatibility alias for the same background application
 tuxdisplay doctor
 tuxdisplay launch APPLICATION [ARGUMENT ...]
 ~~~
@@ -168,7 +174,7 @@ python3 -m unittest discover -s tests -v
 ./build-deb.sh
 ~~~
 
-The package is written to `dist/tuxdisplay_0.4.6_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
+The package is written to `dist/tuxdisplay_0.4.7_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
 
 Development and release conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 

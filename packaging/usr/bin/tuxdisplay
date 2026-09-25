@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -13,14 +14,23 @@ import shlex
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from typing import Sequence
+import urllib.error
+import urllib.parse
+import urllib.request
 
 
 APP_NAME = "TuxDisplay"
+VERSION = "0.4.7"
 SERVICE = "tuxdisplay.service"
 USB_GADGET_ADDRESS = "10.55.0.1"
+UPDATE_API = "https://api.github.com/repos/tpluharik/tuxdisplay/releases/latest"
+UPDATE_HOSTS = {"api.github.com", "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"}
+MAX_UPDATE_METADATA = 1 << 20
+MAX_UPDATE_PACKAGE = 100 << 20
 DEFAULTS = {
     "RESOLUTION": "1920x1080",
     "FPS": "30",
@@ -38,6 +48,141 @@ RESOLUTIONS = (
     "2160x1620",
 )
 FRAME_RATES = ("15", "30", "60")
+
+
+def version_tuple(version: str) -> tuple[int, int, int]:
+    match = re.fullmatch(r"v?([0-9]+)\.([0-9]+)\.([0-9]+)", version.strip())
+    if match is None:
+        raise ValueError(f"unsupported version: {version}")
+    return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
+
+
+def download_url(url: str, maximum_size: int, timeout: int = 20) -> bytes:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme != "https" or parsed.hostname not in UPDATE_HOSTS:
+        raise RuntimeError("The update server returned an unsafe download address.")
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"TuxDisplay/{VERSION}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=timeout) as response:
+        final = urllib.parse.urlparse(response.geturl())
+        if final.scheme != "https" or final.hostname not in UPDATE_HOSTS:
+            raise RuntimeError("The update download was redirected to an unsafe server.")
+        length = response.headers.get("Content-Length")
+        try:
+            declared_size = int(length) if length is not None else None
+        except ValueError as error:
+            raise RuntimeError("The update server returned an invalid download size.") from error
+        if declared_size is not None and declared_size > maximum_size:
+            raise RuntimeError("The update download is unexpectedly large.")
+        payload = response.read(maximum_size + 1)
+    if len(payload) > maximum_size:
+        raise RuntimeError("The update download is unexpectedly large.")
+    return payload
+
+
+def release_update_from_payload(payload: object) -> dict[str, str] | None:
+    if not isinstance(payload, dict) or payload.get("draft") or payload.get("prerelease"):
+        raise RuntimeError("GitHub returned invalid release metadata.")
+    version = str(payload.get("tag_name", "")).removeprefix("v")
+    if version_tuple(version) <= version_tuple(VERSION):
+        return None
+    package_name = f"tuxdisplay_{version}_all.deb"
+    assets = payload.get("assets")
+    if not isinstance(assets, list):
+        raise RuntimeError("The release does not contain downloadable assets.")
+    by_name = {str(asset.get("name", "")): asset for asset in assets if isinstance(asset, dict)}
+    package = by_name.get(package_name)
+    checksums = by_name.get("SHA256SUMS")
+    if not isinstance(package, dict) or not isinstance(checksums, dict):
+        raise RuntimeError("The release is missing its Debian package or checksum file.")
+    result = {
+        "version": version,
+        "package_name": package_name,
+        "package_url": str(package.get("browser_download_url", "")),
+        "checksum_url": str(checksums.get("browser_download_url", "")),
+        "package_digest": str(package.get("digest", "")),
+        "release_url": str(payload.get("html_url", "")),
+        "notes": str(payload.get("body", ""))[:4000],
+    }
+    for key in ("package_url", "checksum_url"):
+        parsed = urllib.parse.urlparse(result[key])
+        if parsed.scheme != "https" or parsed.hostname != "github.com":
+            raise RuntimeError("The release contains an unsafe asset address.")
+    return result
+
+
+def check_for_update() -> dict[str, str] | None:
+    raw = download_url(UPDATE_API, MAX_UPDATE_METADATA)
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise RuntimeError("GitHub returned unreadable release metadata.") from error
+    return release_update_from_payload(payload)
+
+
+def verify_update_assets(update: dict[str, str], package_data: bytes, checksum_data: bytes) -> str:
+    package_name = update["package_name"]
+    try:
+        lines = checksum_data.decode("utf-8").splitlines()
+    except UnicodeDecodeError as error:
+        raise RuntimeError("The release checksum file is unreadable.") from error
+    expected = ""
+    for line in lines:
+        fields = line.split()
+        if len(fields) >= 2 and fields[1].lstrip("*").removeprefix("./") == package_name:
+            expected = fields[0].lower()
+            break
+    if not re.fullmatch(r"[0-9a-f]{64}", expected):
+        raise RuntimeError("The package checksum is missing from SHA256SUMS.")
+    actual = hashlib.sha256(package_data).hexdigest()
+    if not secrets.compare_digest(actual, expected):
+        raise RuntimeError("The downloaded package failed checksum verification.")
+    api_digest = update.get("package_digest", "")
+    if api_digest.startswith("sha256:") and not secrets.compare_digest(actual, api_digest[7:].lower()):
+        raise RuntimeError("The package does not match GitHub's release digest.")
+    return actual
+
+
+def install_update(update: dict[str, str]) -> tuple[bool, str]:
+    try:
+        package_data = download_url(update["package_url"], MAX_UPDATE_PACKAGE, timeout=60)
+        checksum_data = download_url(update["checksum_url"], MAX_UPDATE_METADATA)
+        verify_update_assets(update, package_data, checksum_data)
+        with tempfile.TemporaryDirectory(prefix="tuxdisplay-update-") as temporary:
+            package_path = Path(temporary) / update["package_name"]
+            package_path.write_bytes(package_data)
+            metadata = subprocess.run(
+                [
+                    "dpkg-deb",
+                    "--show",
+                    "--showformat=${Package}\\n${Version}\\n${Architecture}\\n",
+                    str(package_path),
+                ],
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=20,
+            )
+            fields = metadata.stdout.splitlines()
+            if metadata.returncode or fields != ["tuxdisplay", update["version"], "all"]:
+                raise RuntimeError("The downloaded Debian package has unexpected metadata.")
+            installed = subprocess.run(
+                ["pkexec", "/usr/bin/apt-get", "install", "--yes", str(package_path)],
+                check=False,
+                timeout=300,
+            )
+            if installed.returncode:
+                return False, "The update was cancelled or could not be installed."
+    except (OSError, KeyError, RuntimeError, subprocess.TimeoutExpired, urllib.error.URLError) as error:
+        return False, str(error)
+    return True, f"TuxDisplay {update['version']} was installed successfully."
 
 
 def config_dir() -> Path:
@@ -489,52 +634,64 @@ def shutil_which(command: str) -> str | None:
     return None
 
 
-def run_gui() -> int:
+def run_gui(background: bool = False) -> int:
     try:
         import gi
 
-        gi.require_version("Gtk", "4.0")
-        gi.require_version("Gdk", "4.0")
-        from gi.repository import Gdk, Gio, GLib, Gtk  # type: ignore
+        gi.require_version("Gtk", "3.0")
+        gi.require_version("Gdk", "3.0")
+        gi.require_version("AyatanaAppIndicator3", "0.1")
+        from gi.repository import AyatanaAppIndicator3, Gdk, Gio, GLib, Gtk  # type: ignore
     except (ImportError, ValueError) as error:
-        print(f"GTK 4 is unavailable: {error}", file=sys.stderr)
+        print(f"TuxDisplay graphical support is unavailable: {error}", file=sys.stderr)
         return 1
 
+    Gtk.Window.set_default_icon_name("tuxdisplay")
+
+    def add_css_class(widget: Gtk.Widget, name: str) -> None:
+        widget.get_style_context().add_class(name)
+
     class ManagerWindow(Gtk.ApplicationWindow):
-        def __init__(self, application: Gtk.Application) -> None:
+        def __init__(self, application: "ManagerApplication") -> None:
             super().__init__(application=application, title=APP_NAME)
-            self.set_default_size(700, 620)
+            self.application = application
+            self.set_default_size(720, 680)
             self.set_resizable(True)
-
-            outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18)
-            outer.set_margin_top(28)
-            outer.set_margin_bottom(28)
-            outer.set_margin_start(32)
-            outer.set_margin_end(32)
-            scroller = Gtk.ScrolledWindow()
-            scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-            scroller.set_child(outer)
-            self.set_child(scroller)
-
-            title = Gtk.Label(label="TuxDisplay")
-            title.add_css_class("title-1")
-            title.set_halign(Gtk.Align.START)
-            outer.append(title)
-
-            subtitle = Gtk.Label(label="Use an iPad as a real extended monitor on GNOME Wayland")
-            subtitle.add_css_class("dim-label")
-            subtitle.set_halign(Gtk.Align.START)
-            outer.append(subtitle)
-
-            self.status = Gtk.Label()
-            self.status.set_halign(Gtk.Align.START)
-            self.status.add_css_class("title-3")
-            outer.append(self.status)
+            self.set_icon_name("tuxdisplay")
+            self.connect("delete-event", self.on_close)
             self.restart_timeout = 0
             self.restart_reason = ""
 
-            grid = Gtk.Grid(column_spacing=14, row_spacing=12)
-            outer.append(grid)
+            outer = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+            outer.set_border_width(28)
+            scroller = Gtk.ScrolledWindow()
+            scroller.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+            scroller.add(outer)
+            self.add(scroller)
+
+            header = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+            outer.pack_start(header, False, False, 0)
+            header.pack_start(Gtk.Image.new_from_icon_name("tuxdisplay", Gtk.IconSize.DIALOG), False, False, 0)
+            heading = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+            header.pack_start(heading, True, True, 0)
+            title = Gtk.Label(label="TuxDisplay")
+            title.set_halign(Gtk.Align.START)
+            add_css_class(title, "title")
+            heading.pack_start(title, False, False, 0)
+            subtitle = Gtk.Label(label="Use an iPad as a real extended monitor on GNOME Wayland")
+            subtitle.set_halign(Gtk.Align.START)
+            add_css_class(subtitle, "dim-label")
+            heading.pack_start(subtitle, False, False, 0)
+
+            self.status = Gtk.Label()
+            self.status.set_halign(Gtk.Align.START)
+            add_css_class(self.status, "status")
+            outer.pack_start(self.status, False, False, 0)
+
+            grid = Gtk.Grid()
+            grid.set_column_spacing(14)
+            grid.set_row_spacing(12)
+            outer.pack_start(grid, False, False, 0)
 
             url_label = Gtk.Label(label="Browser fallback URL")
             url_label.set_halign(Gtk.Align.END)
@@ -555,19 +712,23 @@ def run_gui() -> int:
             resolution_label = Gtk.Label(label="Resolution")
             resolution_label.set_halign(Gtk.Align.END)
             grid.attach(resolution_label, 0, 2, 1, 1)
-            self.resolution = Gtk.DropDown.new_from_strings(list(RESOLUTIONS))
+            self.resolution = Gtk.ComboBoxText()
+            for resolution in RESOLUTIONS:
+                self.resolution.append_text(resolution)
             current = ensure_config()["RESOLUTION"]
-            self.resolution.set_selected(RESOLUTIONS.index(current) if current in RESOLUTIONS else 3)
-            self.resolution.connect("notify::selected", self.on_resolution_changed)
+            self.resolution.set_active(RESOLUTIONS.index(current) if current in RESOLUTIONS else 3)
+            self.resolution.connect("changed", self.on_resolution_changed)
             grid.attach(self.resolution, 1, 2, 1, 1)
 
             frame_rate_label = Gtk.Label(label="Frame rate")
             frame_rate_label.set_halign(Gtk.Align.END)
             grid.attach(frame_rate_label, 0, 3, 1, 1)
-            self.frame_rate = Gtk.DropDown.new_from_strings([f"{value} FPS" for value in FRAME_RATES])
+            self.frame_rate = Gtk.ComboBoxText()
+            for value in FRAME_RATES:
+                self.frame_rate.append_text(f"{value} FPS")
             current_fps = ensure_config()["FPS"]
-            self.frame_rate.set_selected(FRAME_RATES.index(current_fps) if current_fps in FRAME_RATES else 1)
-            self.frame_rate.connect("notify::selected", self.on_frame_rate_changed)
+            self.frame_rate.set_active(FRAME_RATES.index(current_fps) if current_fps in FRAME_RATES else 1)
+            self.frame_rate.connect("changed", self.on_frame_rate_changed)
             grid.attach(self.frame_rate, 1, 3, 1, 1)
 
             keep_awake_label = Gtk.Label(label="Keep awake with lid closed")
@@ -584,7 +745,7 @@ def run_gui() -> int:
             grid.attach(usb_label, 0, 5, 1, 1)
             self.usb_status_label = Gtk.Label()
             self.usb_status_label.set_halign(Gtk.Align.START)
-            self.usb_status_label.set_wrap(True)
+            self.usb_status_label.set_line_wrap(True)
             grid.attach(self.usb_status_label, 1, 5, 1, 1)
 
             lid_note = Gtk.Label(
@@ -593,65 +754,78 @@ def run_gui() -> int:
                     "Keep the closed laptop connected to power and well ventilated."
                 )
             )
-            lid_note.set_wrap(True)
+            lid_note.set_line_wrap(True)
             lid_note.set_halign(Gtk.Align.START)
-            lid_note.add_css_class("dim-label")
-            outer.append(lid_note)
+            add_css_class(lid_note, "dim-label")
+            outer.pack_start(lid_note, False, False, 0)
 
-            controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-            outer.append(controls)
+            controls = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+            outer.pack_start(controls, False, False, 0)
             self.start_button = Gtk.Button(label="Start display")
-            self.start_button.add_css_class("suggested-action")
+            add_css_class(self.start_button, "suggested-action")
             self.start_button.connect("clicked", self.on_start)
-            controls.append(self.start_button)
+            controls.pack_start(self.start_button, False, False, 0)
             self.usb_button = Gtk.Button(label="Connect OpenDisplay")
             self.usb_button.connect("clicked", self.on_usb)
-            controls.append(self.usb_button)
+            controls.pack_start(self.usb_button, False, False, 0)
             self.stop_button = Gtk.Button(label="Close connection")
             self.stop_button.connect("clicked", self.on_stop)
-            controls.append(self.stop_button)
+            controls.pack_start(self.stop_button, False, False, 0)
             copy_button = Gtk.Button(label="Copy URL")
             copy_button.connect("clicked", self.on_copy)
-            controls.append(copy_button)
+            controls.pack_start(copy_button, False, False, 0)
             preview_button = Gtk.Button(label="Open preview")
             preview_button.connect("clicked", self.on_preview)
-            controls.append(preview_button)
+            controls.pack_start(preview_button, False, False, 0)
 
-            separator = Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL)
-            outer.append(separator)
-
+            outer.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 0)
             app_title = Gtk.Label(label="Launch an app in the current desktop")
-            app_title.add_css_class("title-4")
             app_title.set_halign(Gtk.Align.START)
-            outer.append(app_title)
+            add_css_class(app_title, "section-title")
+            outer.pack_start(app_title, False, False, 0)
             launch_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-            outer.append(launch_row)
+            outer.pack_start(launch_row, False, False, 0)
             self.command_entry = Gtk.Entry()
             self.command_entry.set_placeholder_text("xterm, firefox --new-instance, libreoffice …")
             self.command_entry.set_hexpand(True)
             self.command_entry.connect("activate", self.on_launch)
-            launch_row.append(self.command_entry)
+            launch_row.pack_start(self.command_entry, True, True, 0)
             launch_button = Gtk.Button(label="Launch")
             launch_button.connect("clicked", self.on_launch)
-            launch_row.append(launch_button)
+            launch_row.pack_start(launch_button, False, False, 0)
 
             usb_note = Gtk.Label(
                 label=(
                     "Install and open OpenDisplay on the iPad, then connect a trusted USB data cable. "
-                    "This direct connection works without Wi-Fi, an IP address, Internet access, or Personal Hotspot."
+                    "The direct connection works without Wi-Fi, an IP address, or Personal Hotspot."
                 )
             )
-            usb_note.set_wrap(True)
+            usb_note.set_line_wrap(True)
             usb_note.set_halign(Gtk.Align.START)
-            usb_note.add_css_class("dim-label")
-            outer.append(usb_note)
+            add_css_class(usb_note, "dim-label")
+            outer.pack_start(usb_note, False, False, 0)
+
+            outer.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 0)
+            update_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            outer.pack_start(update_row, False, False, 0)
+            self.version_label = Gtk.Label(label=f"Version {VERSION}")
+            self.version_label.set_halign(Gtk.Align.START)
+            update_row.pack_start(self.version_label, True, True, 0)
+            self.update_button = Gtk.Button(label="Check for updates")
+            self.update_button.connect("clicked", self.on_update)
+            update_row.pack_start(self.update_button, False, False, 0)
 
             self.message = Gtk.Label()
-            self.message.set_wrap(True)
+            self.message.set_line_wrap(True)
             self.message.set_halign(Gtk.Align.START)
-            outer.append(self.message)
+            outer.pack_start(self.message, False, False, 0)
             self.refresh()
-            GLib.timeout_add_seconds(2, self.refresh)
+            self.update_update_button()
+            self.show_all()
+
+        def on_close(self, _window: Gtk.Window, _event: object) -> bool:
+            self.hide()
+            return True
 
         def show_message(self, text: str) -> None:
             self.message.set_label(text)
@@ -664,12 +838,13 @@ def run_gui() -> int:
                 "disconnected": "○ Disconnected",
             }
             self.status.set_label(labels[state])
-            self.status.remove_css_class("success")
-            self.status.remove_css_class("warning")
+            context = self.status.get_style_context()
+            context.remove_class("success")
+            context.remove_class("warning")
             if state == "connected":
-                self.status.add_css_class("success")
+                context.add_class("success")
             elif state == "running":
-                self.status.add_css_class("warning")
+                context.add_class("warning")
             usb_kind, usb_message, usb_url = usb_status()
             self.usb_status_label.set_label(usb_message)
             self.usb_button.set_label("OpenDisplay connected" if usb_kind == "ready" and not usb_url else "Connect OpenDisplay")
@@ -677,7 +852,16 @@ def run_gui() -> int:
             self.pin_entry.set_text(read_password())
             self.start_button.set_sensitive(state == "disconnected")
             self.stop_button.set_sensitive(state != "disconnected")
-            return True
+            return GLib.SOURCE_CONTINUE
+
+        def update_update_button(self) -> None:
+            if self.application.update_installed:
+                self.update_button.set_label("Restart TuxDisplay")
+            elif self.application.available_update is not None:
+                self.update_button.set_label(f"Install {self.application.available_update['version']}")
+            else:
+                self.update_button.set_label("Check for updates")
+            self.update_button.set_sensitive(not self.application.update_busy)
 
         def on_start(self, _button: Gtk.Button) -> None:
             result = service_action("start")
@@ -693,7 +877,7 @@ def run_gui() -> int:
             self.usb_button.set_sensitive(False)
             self.show_message("Connecting to OpenDisplay through USB…")
 
-            def finished(result: int, message: str) -> bool:
+            def finished(_result: int, message: str) -> bool:
                 self.usb_button.set_sensitive(True)
                 self.show_message(message)
                 self.refresh()
@@ -706,10 +890,8 @@ def run_gui() -> int:
             threading.Thread(target=worker, name="tuxdisplay-usb-connect", daemon=True).start()
 
         def on_copy(self, _button: Gtk.Button) -> None:
-            display = Gdk.Display.get_default()
-            if display:
-                display.get_clipboard().set(self.url_entry.get_text())
-                self.show_message("URL copied.")
+            Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(self.url_entry.get_text(), -1)
+            self.show_message("URL copied.")
 
         def on_preview(self, _button: Gtk.Button) -> None:
             try:
@@ -730,9 +912,9 @@ def run_gui() -> int:
             result = launch(command)
             self.show_message("Application launched. Drag its window to the iPad monitor." if result == 0 else "The application could not be launched.")
 
-        def on_resolution_changed(self, dropdown: Gtk.DropDown, _parameter: object) -> None:
-            selected = dropdown.get_selected()
-            if selected >= len(RESOLUTIONS):
+        def on_resolution_changed(self, dropdown: Gtk.ComboBoxText) -> None:
+            selected = dropdown.get_active()
+            if not 0 <= selected < len(RESOLUTIONS):
                 return
             configuration = ensure_config()
             if configuration["RESOLUTION"] == RESOLUTIONS[selected]:
@@ -742,9 +924,9 @@ def run_gui() -> int:
             if is_active():
                 self.schedule_display_restart("Resolution")
 
-        def on_frame_rate_changed(self, dropdown: Gtk.DropDown, _parameter: object) -> None:
-            selected = dropdown.get_selected()
-            if selected >= len(FRAME_RATES):
+        def on_frame_rate_changed(self, dropdown: Gtk.ComboBoxText) -> None:
+            selected = dropdown.get_active()
+            if not 0 <= selected < len(FRAME_RATES):
                 return
             configuration = ensure_config()
             if configuration["FPS"] == FRAME_RATES[selected]:
@@ -792,154 +974,230 @@ def run_gui() -> int:
             threading.Thread(target=worker, name="tuxdisplay-settings-restart", daemon=True).start()
             return GLib.SOURCE_REMOVE
 
+        def on_update(self, _button: Gtk.Button) -> None:
+            if self.application.update_installed:
+                self.application.restart_application()
+            elif self.application.available_update is not None:
+                self.application.install_available_update()
+            else:
+                self.application.check_updates(show_current=True)
+
     class ManagerApplication(Gtk.Application):
-        def __init__(self) -> None:
-            super().__init__(application_id="io.github.tuxdisplay.Manager")
+        def __init__(self, background_start: bool) -> None:
+            super().__init__(application_id="io.github.tuxdisplay.Manager", flags=Gio.ApplicationFlags.FLAGS_NONE)
+            self.background_start = background_start
+            self.window: ManagerWindow | None = None
+            self.available_update: dict[str, str] | None = None
+            self.update_busy = False
+            self.update_installed = False
+
+        def do_startup(self) -> None:
+            Gtk.Application.do_startup(self)
+            self.hold()
+            self.setup_indicator()
+            GLib.timeout_add_seconds(4, self.automatic_update_check)
 
         def do_activate(self) -> None:
-            try:
-                subprocess.Popen(
-                    ["tuxdisplay", "tray"],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.DEVNULL,
-                    stderr=subprocess.DEVNULL,
-                    start_new_session=True,
-                )
-            except OSError:
-                pass
-            window = self.props.active_window
-            if window is None:
-                window = ManagerWindow(self)
-            window.present()
+            if self.background_start:
+                self.background_start = False
+                return
+            self.present_manager()
+
+        def setup_indicator(self) -> None:
+            self.indicator = AyatanaAppIndicator3.Indicator.new(
+                "tuxdisplay",
+                "tuxdisplay-disconnected",
+                AyatanaAppIndicator3.IndicatorCategory.APPLICATION_STATUS,
+            )
+            self.indicator.set_status(AyatanaAppIndicator3.IndicatorStatus.ACTIVE)
+            self.indicator.set_title("TuxDisplay")
+            menu = Gtk.Menu()
+            self.status_item = Gtk.MenuItem(label="Disconnected")
+            self.status_item.set_sensitive(False)
+            menu.append(self.status_item)
+            menu.append(Gtk.SeparatorMenuItem())
+            open_item = Gtk.MenuItem(label="Open TuxDisplay")
+            open_item.connect("activate", lambda _item: self.present_manager())
+            menu.append(open_item)
+            self.start_item = Gtk.MenuItem(label="Start display")
+            self.start_item.connect("activate", self.start_display)
+            menu.append(self.start_item)
+            self.usb_item = Gtk.MenuItem(label="Connect OpenDisplay with USB")
+            self.usb_item.connect("activate", self.connect_usb)
+            menu.append(self.usb_item)
+            self.close_item = Gtk.MenuItem(label="Close connection")
+            self.close_item.connect("activate", self.close_connection)
+            menu.append(self.close_item)
+            menu.append(Gtk.SeparatorMenuItem())
+            self.update_item = Gtk.MenuItem(label="Check for updates")
+            self.update_item.connect("activate", self.on_update_item)
+            menu.append(self.update_item)
+            quit_item = Gtk.MenuItem(label="Quit TuxDisplay")
+            quit_item.connect("activate", lambda _item: self.quit())
+            menu.append(quit_item)
+            menu.show_all()
+            self.indicator.set_menu(menu)
+            self.refresh_indicator()
+            GLib.timeout_add_seconds(2, self.refresh_indicator)
+
+        def present_manager(self) -> None:
+            if self.window is None:
+                self.window = ManagerWindow(self)
+            self.window.show_all()
+            self.window.present()
+
+        def notify_user(self, message: str) -> None:
+            notification = Gio.Notification.new("TuxDisplay")
+            notification.set_body(message)
+            notification.set_icon(Gio.ThemedIcon.new("tuxdisplay"))
+            self.send_notification("tuxdisplay-status", notification)
+
+        def refresh_indicator(self) -> bool:
+            state = connection_state()
+            details = {
+                "connected": ("tuxdisplay-connected", "Connected — iPad is viewing"),
+                "running": ("tuxdisplay-running", "Running — waiting for iPad"),
+                "disconnected": ("tuxdisplay-disconnected", "Disconnected — display stopped"),
+            }
+            icon, label = details[state]
+            self.indicator.set_icon_full(icon, label)
+            self.status_item.set_label(label)
+            self.start_item.set_sensitive(state == "disconnected")
+            self.close_item.set_sensitive(state != "disconnected")
+            if self.window is not None:
+                self.window.refresh()
+            return GLib.SOURCE_CONTINUE
+
+        def start_display(self, _item: Gtk.MenuItem) -> None:
+            result = service_action("start")
+            self.notify_user("Display started." if result == 0 else "The display could not start.")
+            self.refresh_indicator()
+
+        def connect_usb(self, _item: Gtk.MenuItem) -> None:
+            self.usb_item.set_sensitive(False)
+
+            def worker() -> None:
+                _result, message = usb_connect()
+                GLib.idle_add(self.notify_user, message)
+                GLib.idle_add(self.usb_item.set_sensitive, True)
+                GLib.idle_add(self.refresh_indicator)
+
+            threading.Thread(target=worker, name="tuxdisplay-usb-connect", daemon=True).start()
+
+        def close_connection(self, _item: Gtk.MenuItem) -> None:
+            result = service_action("stop")
+            self.notify_user("Connection closed." if result == 0 else "The connection could not be closed.")
+            self.refresh_indicator()
+
+        def automatic_update_check(self) -> bool:
+            self.check_updates(show_current=False)
+            return GLib.SOURCE_REMOVE
+
+        def on_update_item(self, _item: Gtk.MenuItem) -> None:
+            if self.update_installed:
+                self.restart_application()
+            elif self.available_update is not None:
+                self.install_available_update()
+            else:
+                self.check_updates(show_current=True)
+
+        def check_updates(self, show_current: bool) -> None:
+            if self.update_busy:
+                return
+            self.update_busy = True
+            self.update_item.set_sensitive(False)
+            if show_current and self.window is not None:
+                self.window.show_message("Checking for updates…")
+            if self.window is not None:
+                self.window.update_update_button()
+
+            def finished(update: dict[str, str] | None, error: str) -> bool:
+                self.update_busy = False
+                self.update_item.set_sensitive(True)
+                if error:
+                    if show_current and self.window is not None:
+                        self.window.show_message(f"Update check failed: {error}")
+                elif update is None:
+                    self.available_update = None
+                    self.update_item.set_label("Check for updates")
+                    if show_current and self.window is not None:
+                        self.window.show_message(f"TuxDisplay {VERSION} is up to date.")
+                else:
+                    self.available_update = update
+                    self.update_item.set_label(f"Install update {update['version']}")
+                    self.notify_user(f"TuxDisplay {update['version']} is available.")
+                    if self.window is not None:
+                        self.window.show_message(
+                            f"TuxDisplay {update['version']} is available. The package will be verified before installation."
+                        )
+                if self.window is not None:
+                    self.window.update_update_button()
+                return GLib.SOURCE_REMOVE
+
+            def worker() -> None:
+                try:
+                    update = check_for_update()
+                    error = ""
+                except (OSError, RuntimeError, ValueError, urllib.error.URLError) as caught:
+                    update = None
+                    error = str(caught)
+                GLib.idle_add(finished, update, error)
+
+            threading.Thread(target=worker, name="tuxdisplay-update-check", daemon=True).start()
+
+        def install_available_update(self) -> None:
+            update = self.available_update
+            if update is None or self.update_busy:
+                return
+            self.update_busy = True
+            self.update_item.set_sensitive(False)
+            if self.window is not None:
+                self.window.show_message("Downloading and verifying the update… System authentication will be requested.")
+                self.window.update_update_button()
+
+            def finished(success: bool, message: str) -> bool:
+                self.update_busy = False
+                self.update_item.set_sensitive(True)
+                if success:
+                    self.update_installed = True
+                    self.update_item.set_label("Restart TuxDisplay")
+                    service_action("restart")
+                    self.notify_user(message)
+                    if self.window is not None:
+                        self.window.show_message(message + " Restart TuxDisplay to use the new application version.")
+                elif self.window is not None:
+                    self.window.show_message(f"Update failed: {message}")
+                if self.window is not None:
+                    self.window.update_update_button()
+                return GLib.SOURCE_REMOVE
+
+            def worker() -> None:
+                success, message = install_update(update)
+                GLib.idle_add(finished, success, message)
+
+            threading.Thread(target=worker, name="tuxdisplay-update-install", daemon=True).start()
+
+        def restart_application(self) -> None:
+            os.execv("/usr/bin/tuxdisplay", ["/usr/bin/tuxdisplay", "gui"])
 
     css = b"""
+        .title { font-size: 24px; font-weight: bold; }
+        .status { font-size: 17px; font-weight: bold; }
+        .section-title { font-size: 15px; font-weight: bold; }
         .success { color: #2ec27e; }
-        .warning { color: #f6c344; }
-        entry { min-height: 34px; }
-        button { min-height: 34px; }
+        .warning { color: #d99b11; }
+        .dim-label { opacity: 0.72; }
+        entry, button, combobox { min-height: 34px; }
     """
     provider = Gtk.CssProvider()
-    provider.load_from_data(css.decode("utf-8"))
-    display = Gdk.Display.get_default()
-    if display:
-        Gtk.StyleContext.add_provider_for_display(display, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+    provider.load_from_data(css)
+    screen = Gdk.Screen.get_default()
+    if screen is not None:
+        Gtk.StyleContext.add_provider_for_screen(screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
     try:
-        return ManagerApplication().run([])
+        return ManagerApplication(background).run([sys.argv[0]])
     except KeyboardInterrupt:
         return 0
-
-
-def run_tray() -> int:
-    try:
-        import fcntl
-        import gi
-
-        gi.require_version("Gtk", "3.0")
-        gi.require_version("AyatanaAppIndicator3", "0.1")
-        from gi.repository import AyatanaAppIndicator3, GLib, Gtk  # type: ignore
-    except (ImportError, ValueError) as error:
-        print(f"Tray support is unavailable: {error}", file=sys.stderr)
-        return 1
-
-    state_dir().mkdir(mode=0o700, parents=True, exist_ok=True)
-    lock_handle = (state_dir() / "tray.lock").open("w", encoding="utf-8")
-    try:
-        fcntl.flock(lock_handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        return 0
-
-    indicator = AyatanaAppIndicator3.Indicator.new(
-        "tuxdisplay",
-        "tuxdisplay-disconnected",
-        AyatanaAppIndicator3.IndicatorCategory.APPLICATION_STATUS,
-    )
-    indicator.set_status(AyatanaAppIndicator3.IndicatorStatus.ACTIVE)
-    indicator.set_title("TuxDisplay")
-
-    menu = Gtk.Menu()
-    status_item = Gtk.MenuItem(label="Disconnected")
-    status_item.set_sensitive(False)
-    menu.append(status_item)
-    menu.append(Gtk.SeparatorMenuItem())
-
-    open_item = Gtk.MenuItem(label="Open TuxDisplay")
-    menu.append(open_item)
-    start_item = Gtk.MenuItem(label="Start display")
-    menu.append(start_item)
-    usb_item = Gtk.MenuItem(label="Connect OpenDisplay with USB")
-    menu.append(usb_item)
-    close_item = Gtk.MenuItem(label="Close connection")
-    menu.append(close_item)
-    menu.append(Gtk.SeparatorMenuItem())
-    quit_item = Gtk.MenuItem(label="Quit tray icon")
-    menu.append(quit_item)
-    menu.show_all()
-    indicator.set_menu(menu)
-
-    def notify(message: str) -> None:
-        try:
-            subprocess.Popen(
-                ["notify-send", "TuxDisplay", message],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
-        except OSError:
-            pass
-
-    def refresh() -> bool:
-        state = connection_state()
-        details = {
-            "connected": ("tuxdisplay-connected", "Connected — iPad is viewing"),
-            "running": ("tuxdisplay-running", "Running — waiting for iPad"),
-            "disconnected": ("tuxdisplay-disconnected", "Disconnected — display stopped"),
-        }
-        icon, label = details[state]
-        indicator.set_icon_full(icon, label)
-        status_item.set_label(label)
-        start_item.set_sensitive(state == "disconnected")
-        close_item.set_sensitive(state != "disconnected")
-        return GLib.SOURCE_CONTINUE
-
-    def open_manager(_item: Gtk.MenuItem) -> None:
-        try:
-            subprocess.Popen(["tuxdisplay", "gui"], start_new_session=True)
-        except OSError as error:
-            notify(f"Could not open the manager: {error}")
-
-    def start_display(_item: Gtk.MenuItem) -> None:
-        result = service_action("start")
-        notify("Display started." if result == 0 else "The display could not start.")
-        refresh()
-
-    def connect_usb(_item: Gtk.MenuItem) -> None:
-        usb_item.set_sensitive(False)
-
-        def worker() -> None:
-            _result, message = usb_connect()
-            GLib.idle_add(notify, message)
-            GLib.idle_add(usb_item.set_sensitive, True)
-            GLib.idle_add(refresh)
-
-        threading.Thread(target=worker, name="tuxdisplay-tray-usb", daemon=True).start()
-
-    def close_connection(_item: Gtk.MenuItem) -> None:
-        result = service_action("stop")
-        notify("Connection closed." if result == 0 else "The connection could not be closed.")
-        refresh()
-
-    open_item.connect("activate", open_manager)
-    start_item.connect("activate", start_display)
-    usb_item.connect("activate", connect_usb)
-    close_item.connect("activate", close_connection)
-    quit_item.connect("activate", lambda _item: Gtk.main_quit())
-    refresh()
-    GLib.timeout_add_seconds(2, refresh)
-    try:
-        Gtk.main()
-    except KeyboardInterrupt:
-        pass
-    lock_handle.close()
-    return 0
 
 
 def print_status() -> int:
@@ -976,8 +1234,10 @@ def print_status() -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Use an iPad as a USB or browser-connected secondary Linux monitor.")
     subparsers = parser.add_subparsers(dest="command")
-    for command in ("start", "stop", "restart", "status", "url", "doctor", "gui", "tray"):
+    for command in ("start", "stop", "restart", "status", "url", "doctor", "tray"):
         subparsers.add_parser(command)
+    gui_parser = subparsers.add_parser("gui")
+    gui_parser.add_argument("--background", action="store_true", help=argparse.SUPPRESS)
     usb_parser = subparsers.add_parser("usb")
     usb_parser.add_argument("action", choices=("connect", "disconnect", "status"), nargs="?", default="status")
     password_parser = subparsers.add_parser("password")
@@ -1020,9 +1280,9 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(message)
         return result
     if command == "tray":
-        return run_tray()
+        return run_gui(background=True)
     if command == "gui":
-        return run_gui()
+        return run_gui(background=getattr(arguments, "background", False))
     parser.error(f"unknown command: {command}")
     return 2
 

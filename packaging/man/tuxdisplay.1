@@ -1,4 +1,4 @@
-.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.6" "User Commands"
+.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.7" "User Commands"
 .SH NAME
 tuxdisplay \- use an iPad as a secondary Linux display
 .SH SYNOPSIS
@@ -25,11 +25,17 @@ Xorg and unsupported Wayland compositors use an isolated X11/noVNC workspace;
 that workspace is not an extension of the current desktop.
 .PP
 Version 0.4.0 must not be used on GNOME Wayland because its touch path could
-abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions. Use 0.4.6 or newer.
+abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions. Use 0.4.7 or newer.
+.PP
+The GTK manager and three-state indicator are one single-instance application.
+The manager can check GitHub Releases and install a verified update after an
+explicit user action and PolicyKit authentication. Display streaming itself
+does not require Internet access.
 .SH COMMANDS
 .TP
 .B gui
-Open the standalone GTK manager. This is the default when no command is given.
+Open or present the single-instance GTK manager. This is the default when no
+command is given.
 .TP
 .B start
 Start the per-user service and create the selected display backend.
@@ -72,8 +78,9 @@ Report trusted-device, direct OpenDisplay, USB-network, and gadget capability
 state.
 .TP
 .B tray
-Run the desktop indicator. Its icon is gray when stopped, amber while waiting
-for a receiver, and green when a receiver is viewing.
+Compatibility alias that starts the same application in background mode. Its
+indicator is gray when stopped, amber while waiting for a receiver, and green
+when a receiver is viewing.
 .TP
 .B doctor
 Check the selected display mode, required programs, networking, trusted iPad,

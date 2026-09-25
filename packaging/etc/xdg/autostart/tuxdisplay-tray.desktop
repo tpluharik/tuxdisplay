@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=TuxDisplay Tray
-Comment=Show TuxDisplay connection status and controls
-Exec=tuxdisplay tray
+Name=TuxDisplay
+Comment=Keep TuxDisplay controls and connection status available
+Exec=tuxdisplay gui --background
 Icon=tuxdisplay
 Terminal=false
 OnlyShowIn=GNOME;Unity;

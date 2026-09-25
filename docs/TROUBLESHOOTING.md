@@ -14,24 +14,40 @@ The first three commands are safe to paste into a bug report. Review logs before
 
 ## Do not run 0.4.0 on GNOME Wayland
 
-TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. TuxDisplay 0.4.3 could reject GNOME's negotiated PipeWire rate, while 0.4.4 could periodically reconnect a healthy low-FPS stream. Upgrade to 0.4.6 or newer:
+TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. TuxDisplay 0.4.3 could reject GNOME's negotiated PipeWire rate, while 0.4.4 could periodically reconnect a healthy low-FPS stream. Upgrade to 0.4.7 or newer:
 
 ~~~sh
-sudo apt install ./tuxdisplay_0.4.6_all.deb
+sudo apt install ./tuxdisplay_0.4.7_all.deb
 tuxdisplay restart
 ~~~
 
-Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate. Version 0.4.5 prevents false watchdog reconnects on quiet or low-FPS desktops. Version 0.4.6 adds optional closed-lid operation.
+Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate. Version 0.4.5 prevents false watchdog reconnects on quiet or low-FPS desktops. Version 0.4.6 adds optional closed-lid operation. Version 0.4.7 unifies the desktop application and adds verified in-app updates.
 
 ## OpenDisplay shows a black screen
 
 1. Confirm `tuxdisplay status` reports GNOME Wayland mode and a running service.
-2. Confirm the package version is at least 0.4.6.
+2. Confirm the package version is at least 0.4.7.
 3. Move the pointer or a window onto `Meta-0` to create screen damage.
 4. Close and reopen OpenDisplay so the sender performs a new handshake.
 5. Run `tuxdisplay restart` if the app does not reconnect.
 
-If a new connection remains black on 0.4.6, capture the user-service log. The log should show a valid OpenDisplay hello, an active H.264 stream, and receiver-health statistics.
+If a new connection remains black on 0.4.7, capture the user-service log. The log should show a valid OpenDisplay hello, an active H.264 stream, and receiver-health statistics.
+
+## The in-app update fails
+
+Display streaming works offline, but checking for or downloading an update requires an Internet connection to GitHub. A failed automatic check does not affect the monitor.
+
+1. Open the manager or tray and choose **Check for updates** again after Internet access is restored.
+2. Confirm the system date is correct so HTTPS certificates validate.
+3. Approve the system authentication prompt when installing.
+4. Close another package manager if it is holding the Debian/Ubuntu package lock.
+5. If verification fails, do not bypass it. Download the `.deb` and `SHA256SUMS` from the same GitHub release and verify them manually.
+
+After a successful install, choose **Restart TuxDisplay**. If the old window remains, quit TuxDisplay from the tray and open it again from the application menu.
+
+## The app icon is missing or two TuxDisplay windows appear
+
+Version 0.4.7 registers the desktop launcher with the same ID as the GTK application and runs the manager and tray as one singleton. Log out and back in after upgrading so the old autostart process is replaced. If the desktop shell still caches an old launcher, remove it from favorites and add TuxDisplay again from the app grid.
 
 ## The display stops when the laptop lid closes
 

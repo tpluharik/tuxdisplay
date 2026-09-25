@@ -8,7 +8,8 @@ Terminal=false
 Categories=Network;RemoteAccess;
 Keywords=iPad;display;monitor;USB;Wayland;OpenDisplay;VNC;noVNC;
 StartupNotify=true
-
+StartupWMClass=io.github.tuxdisplay.Manager
+DBusActivatable=false
 
 Actions=Start;Close;
 

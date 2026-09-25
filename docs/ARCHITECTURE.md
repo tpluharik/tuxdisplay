@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.6. The project has two display backends and three receiver paths. Only the GNOME Wayland backend extends the user's current desktop.
+This document describes TuxDisplay 0.4.7. The project has two display backends and three receiver paths. Only the GNOME Wayland backend extends the user's current desktop.
 
 ## GNOME Wayland data flow
 
@@ -80,6 +80,23 @@ Set `TUXDISPLAY_FORCE_X11=1` in the user service environment to select this back
 
 When `KEEP_AWAKE_WITH_LID_CLOSED=1`, `tuxdisplay-session` re-executes itself below `systemd-inhibit` before selecting a display backend. The inhibitor blocks `sleep` and `handle-lid-switch` through logind and is owned by the TuxDisplay service process tree. Stopping or failing the service closes the inhibitor automatically, so no permanent system configuration is changed.
 
+## Desktop application and updates
+
+The manager and Ayatana application indicator are owned by one GTK 3 `Gtk.Application` with the ID `io.github.tuxdisplay.Manager`. The background login activation holds the application without opening a window; app-grid or tray activation presents the existing manager. The desktop filename matches the application ID so GNOME can associate the window, launcher, and packaged `tuxdisplay` icon.
+
+Update checks are outside the display data path and fail silently during automatic offline checks. A stable update follows this flow:
+
+~~~text
+GitHub latest-release API
+  └─ exact tuxdisplay_VERSION_all.deb + SHA256SUMS assets
+       └─ HTTPS host and size validation
+            └─ SHA-256 + optional GitHub asset-digest validation
+                 └─ dpkg package/name/version/architecture validation
+                      └─ explicit Install action → PolicyKit → apt-get
+~~~
+
+The display service does not require Internet access. Only checking for and downloading a release does.
+
 ## Optional USB network gadget
 
 `tuxdisplay-usb` can configure Linux ConfigFS, CDC ECM, address `10.55.0.1/24`, and a private dnsmasq instance. This gives the browser fallback a cable network on computers with a USB Device Controller.
@@ -90,7 +107,7 @@ The helper is privileged and launched through PolicyKit or its disabled-by-defau
 
 | Component | Responsibility |
 | --- | --- |
-| `/usr/bin/tuxdisplay` | CLI, GTK manager, tray, configuration, status, and service control |
+| `/usr/bin/tuxdisplay` | CLI, single-instance GTK manager/tray, verified updater, configuration, status, and service control |
 | `tuxdisplay.service` | Per-user lifecycle for the selected display backend |
 | `tuxdisplay-wayland` | Virtual monitor, PipeWire capture, encoding, browser server, and input |
 | `opendisplay_usb.py` | usbmuxd connection, OpenDisplay framing, reconnect, keyframe cache, and input translation |

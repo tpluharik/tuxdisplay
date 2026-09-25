@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
+import hashlib
 import os
 from pathlib import Path
 import tempfile
@@ -184,14 +185,97 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertIn("OpenDisplay connected", message)
         self.assertIsNone(url)
 
-    def test_tray_autostart_and_state_icons_are_packaged(self) -> None:
+    def test_single_graphical_application_and_state_icons_are_packaged(self) -> None:
         package_root = SCRIPT.parents[2]
         autostart = package_root / "etc" / "xdg" / "autostart" / "tuxdisplay-tray.desktop"
-        self.assertIn("Exec=tuxdisplay tray", autostart.read_text(encoding="utf-8"))
+        self.assertIn("Exec=tuxdisplay gui --background", autostart.read_text(encoding="utf-8"))
+        desktop = package_root / "usr" / "share" / "applications" / "io.github.tuxdisplay.Manager.desktop"
+        desktop_text = desktop.read_text(encoding="utf-8")
+        self.assertIn("Exec=tuxdisplay gui", desktop_text)
+        self.assertIn("Icon=tuxdisplay", desktop_text)
         icon_root = package_root / "usr" / "share" / "icons" / "hicolor" / "scalable" / "apps"
         for state in ("disconnected", "running", "connected"):
             self.assertTrue((icon_root / f"tuxdisplay-{state}.svg").exists())
-        self.assertIn("AyatanaAppIndicator3", SCRIPT.read_text(encoding="utf-8"))
+        manager = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('gi.require_version("Gtk", "3.0")', manager)
+        self.assertNotIn('gi.require_version("Gtk", "4.0")', manager)
+        self.assertIn("AyatanaAppIndicator3", manager)
+        arguments = MODULE.build_parser().parse_args(["gui", "--background"])
+        self.assertTrue(arguments.background)
+
+    def test_release_update_requires_exact_assets_and_safe_urls(self) -> None:
+        payload = {
+            "tag_name": "v9.9.9",
+            "draft": False,
+            "prerelease": False,
+            "html_url": "https://github.com/tpluharik/tuxdisplay/releases/tag/v9.9.9",
+            "assets": [
+                {
+                    "name": "tuxdisplay_9.9.9_all.deb",
+                    "browser_download_url": (
+                        "https://github.com/tpluharik/tuxdisplay/releases/download/v9.9.9/"
+                        "tuxdisplay_9.9.9_all.deb"
+                    ),
+                    "digest": "sha256:" + "0" * 64,
+                },
+                {
+                    "name": "SHA256SUMS",
+                    "browser_download_url": (
+                        "https://github.com/tpluharik/tuxdisplay/releases/download/v9.9.9/SHA256SUMS"
+                    ),
+                },
+            ],
+        }
+        update = MODULE.release_update_from_payload(payload)
+        self.assertIsNotNone(update)
+        assert update is not None
+        self.assertEqual(update["version"], "9.9.9")
+        payload["assets"][0]["browser_download_url"] = "https://example.invalid/tuxdisplay.deb"
+        with self.assertRaises(RuntimeError):
+            MODULE.release_update_from_payload(payload)
+
+    def test_update_checksum_and_github_digest_are_verified(self) -> None:
+        package_data = b"test Debian package bytes"
+        digest = hashlib.sha256(package_data).hexdigest()
+        update = {
+            "package_name": "tuxdisplay_9.9.9_all.deb",
+            "package_digest": f"sha256:{digest}",
+        }
+        checksums = f"{digest}  tuxdisplay_9.9.9_all.deb\n".encode()
+        self.assertEqual(MODULE.verify_update_assets(update, package_data, checksums), digest)
+        with self.assertRaises(RuntimeError):
+            MODULE.verify_update_assets(update, package_data + b"tampered", checksums)
+
+    def test_update_installer_validates_package_metadata_before_authentication(self) -> None:
+        package_data = b"test Debian package bytes"
+        digest = hashlib.sha256(package_data).hexdigest()
+        update = {
+            "version": "9.9.9",
+            "package_name": "tuxdisplay_9.9.9_all.deb",
+            "package_url": "https://github.com/example/package",
+            "checksum_url": "https://github.com/example/checksums",
+            "package_digest": f"sha256:{digest}",
+        }
+        checksums = f"{digest}  tuxdisplay_9.9.9_all.deb\n".encode()
+        metadata = mock.Mock(returncode=0, stdout="tuxdisplay\n9.9.9\nall\n", stderr="")
+        installed = mock.Mock(returncode=0)
+        with mock.patch.object(MODULE, "download_url", side_effect=[package_data, checksums]), mock.patch.object(
+            MODULE.subprocess, "run", side_effect=[metadata, installed]
+        ) as run:
+            success, _message = MODULE.install_update(update)
+        self.assertTrue(success)
+        install_command = run.call_args_list[1].args[0]
+        self.assertEqual(install_command[:4], ["pkexec", "/usr/bin/apt-get", "install", "--yes"])
+        self.assertTrue(install_command[4].endswith("tuxdisplay_9.9.9_all.deb"))
+
+        unexpected = mock.Mock(returncode=0, stdout="not-tuxdisplay\n9.9.9\nall\n", stderr="")
+        with mock.patch.object(MODULE, "download_url", side_effect=[package_data, checksums]), mock.patch.object(
+            MODULE.subprocess, "run", return_value=unexpected
+        ) as run:
+            success, message = MODULE.install_update(update)
+        self.assertFalse(success)
+        self.assertIn("unexpected metadata", message)
+        self.assertEqual(run.call_count, 1)
 
     def test_launch_rejects_empty_command(self) -> None:
         self.assertEqual(MODULE.launch([]), 2)

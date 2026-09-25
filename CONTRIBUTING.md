@@ -43,8 +43,8 @@ For a package candidate:
 
 ~~~sh
 ./build-deb.sh
-dpkg-deb --info dist/tuxdisplay_0.4.6_all.deb
-dpkg-deb --contents dist/tuxdisplay_0.4.6_all.deb
+dpkg-deb --info dist/tuxdisplay_0.4.7_all.deb
+dpkg-deb --contents dist/tuxdisplay_0.4.7_all.deb
 ~~~
 
 The build replaces the package for the current version and regenerates `dist/SHA256SUMS`. Do not commit a rebuilt binary unless the change is intended for a release asset.
@@ -61,6 +61,8 @@ For GNOME Wayland changes:
 6. Change between a 16:9 and 4:3 preset and verify recovery.
 7. Stop TuxDisplay and confirm the virtual output is removed without affecting GNOME.
 8. Test browser PIN entry, MJPEG video, input, and session invalidation.
+9. Confirm app-grid activation reuses the background tray process and shows the TuxDisplay icon.
+10. Exercise update checking with current, newer, malformed, and checksum-mismatched release fixtures; never install an unverified package.
 
 For fallback changes:
 

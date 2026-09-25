@@ -13,14 +13,23 @@
     <p>TuxDisplay creates a native GNOME Wayland extended monitor and streams it directly to the OpenDisplay iPad app over USB without requiring an IP network or Personal Hotspot.</p>
     <p>An authenticated browser receiver remains available for private networks and compatibility use.</p>
     <p>Desktop sessions without the required GNOME virtual-monitor APIs use an isolated X11 workspace rather than extending the current desktop.</p>
-    <p>The standalone manager and tray indicator show whether the display is stopped, waiting, or actively connected.</p>
+    <p>One graphical application provides the manager and tray indicator, including verified in-app updates from GitHub Releases.</p>
   </description>
   <content_rating type="oars-1.1"/>
-  <launchable type="desktop-id">tuxdisplay.desktop</launchable>
+  <launchable type="desktop-id">io.github.tuxdisplay.Manager.desktop</launchable>
   <provides>
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.7" date="2026-09-25">
+      <description>
+        <ul>
+          <li>Unify the manager and tray indicator in one single-instance application.</li>
+          <li>Register the application icon consistently with GNOME.</li>
+          <li>Add verified in-app updates from GitHub Releases.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.6" date="2026-09-25">
       <description>
         <ul>

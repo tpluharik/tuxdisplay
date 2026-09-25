@@ -1,3 +1,15 @@
+tuxdisplay (0.4.7) unstable; urgency=medium
+
+  * Merge the GTK manager and tray indicator into one single-instance desktop
+    application while retaining the old tray command as an alias.
+  * Match the desktop filename to the application ID so GNOME consistently uses
+    the packaged TuxDisplay icon in the app grid, window switcher, and dock.
+  * Add an in-app GitHub release updater with HTTPS-only downloads, strict
+    asset selection, size limits, SHA-256 and package-metadata verification,
+    and a PolicyKit authentication prompt for installation.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Fri, 25 Sep 2026 13:30:00 +0200
+
 tuxdisplay (0.4.6) unstable; urgency=medium
 
   * Add an opt-in manager switch that keeps the host awake when its lid is
