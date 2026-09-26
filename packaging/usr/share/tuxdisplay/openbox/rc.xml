@@ -4,7 +4,7 @@
   <focus><focusNew>yes</focusNew><followMouse>no</followMouse><raiseOnFocus>no</raiseOnFocus></focus>
   <placement><policy>Smart</policy><center>yes</center><monitor>Active</monitor></placement>
   <theme><name>Onyx</name><titleLayout>NLIMC</titleLayout><font place="ActiveWindow"><name>Sans</name><size>10</size><weight>Bold</weight></font></theme>
-  <desktops><number>2</number><firstdesk>1</firstdesk><names><name>iPad 1</name><name>iPad 2</name></names><popupTime>875</popupTime></desktops>
+  <desktops><number>2</number><firstdesk>1</firstdesk><names><name>Tablet 1</name><name>Tablet 2</name></names><popupTime>875</popupTime></desktops>
   <menu><file>/usr/share/tuxdisplay/openbox/menu.xml</file><hideDelay>200</hideDelay><middle>no</middle></menu>
   <keyboard>
     <keybind key="A-F2"><action name="Execute"><command>xterm</command></action></keybind>

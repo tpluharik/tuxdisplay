@@ -19,6 +19,49 @@ SPEC.loader.exec_module(MODULE)
 
 
 class OpenDisplayProtocolTests(unittest.TestCase):
+    def test_adb_device_parser_preserves_state_and_model(self) -> None:
+        output = (
+            "List of devices attached\n"
+            "ABC123 device usb:1-2 product:tangorpro model:Pixel_Tablet device:tangorpro transport_id:4\n"
+            "LOCKED unauthorized usb:1-3 transport_id:5\n"
+        )
+
+        self.assertEqual(
+            MODULE.parse_adb_devices(output),
+            [
+                {
+                    "serial": "ABC123",
+                    "state": "device",
+                    "usb": "1-2",
+                    "product": "tangorpro",
+                    "model": "Pixel_Tablet",
+                    "device": "tangorpro",
+                    "transport_id": "4",
+                },
+                {"serial": "LOCKED", "state": "unauthorized", "usb": "1-3", "transport_id": "5"},
+            ],
+        )
+
+    def test_android_forward_uses_selected_device_and_opendisplay_port(self) -> None:
+        completed = mock.Mock(returncode=0, stdout="37123\n", stderr="")
+        with mock.patch.object(MODULE.subprocess, "run", return_value=completed) as run:
+            local_port = MODULE.create_android_forward("ABC123")
+
+        self.assertEqual(local_port, 37123)
+        self.assertEqual(
+            run.call_args.args[0],
+            ["adb", "-s", "ABC123", "forward", "tcp:0", "tcp:9000"],
+        )
+
+    def test_failed_android_connection_removes_forward(self) -> None:
+        with mock.patch.object(MODULE, "create_android_forward", return_value=37123), mock.patch.object(
+            MODULE.socket, "create_connection", side_effect=ConnectionRefusedError
+        ), mock.patch.object(MODULE, "remove_android_forward") as remove:
+            with self.assertRaises(ConnectionRefusedError):
+                MODULE.connect_android_device("ABC123")
+
+        remove.assert_called_once_with("ABC123", 37123)
+
     def test_frame_prefix_is_big_endian(self) -> None:
         encoded = MODULE.encode_frame(b"hello")
         self.assertEqual(encoded[:4], struct.pack("!I", 5))
@@ -165,7 +208,7 @@ class OpenDisplayProtocolTests(unittest.TestCase):
                 raise MODULE.USBMuxError("wrong device")
             return FakeConnection()
 
-        def run_session(_connection: FakeConnection, _serial: str) -> None:
+        def run_session(_connection: FakeConnection, _receiver: str, _transport: str) -> None:
             sender.stop_event.set()
 
         devices = [
@@ -173,11 +216,44 @@ class OpenDisplayProtocolTests(unittest.TestCase):
             {"DeviceID": 2, "Properties": {"SerialNumber": "ipad"}},
         ]
         with mock.patch.object(MODULE, "list_usb_devices", return_value=devices), mock.patch.object(
-            MODULE, "connect_usb_device", side_effect=connect
+            MODULE, "list_android_devices", return_value=[]
+        ), mock.patch.object(MODULE, "connect_usb_device", side_effect=connect
         ), mock.patch.object(sender, "_run_session", side_effect=run_session):
             sender._run()
 
         self.assertEqual(attempts, [1, 2])
+
+    def test_connection_loop_uses_android_adb_forward(self) -> None:
+        sessions = []
+
+        class FakeConnection:
+            def close(self) -> None:
+                pass
+
+        sender = MODULE.OpenDisplayUSB(1920, 1080, 30, lambda _message: None, lambda _connected, _status: None, lambda: None)
+        android = {
+            "serial": "ABC123",
+            "state": "device",
+            "usb": "1-2",
+            "model": "Pixel_Tablet",
+        }
+
+        def run_session(_connection: FakeConnection, receiver: str, transport: str) -> None:
+            sessions.append((receiver, transport))
+            sender.stop_event.set()
+
+        with mock.patch.object(MODULE, "list_usb_devices", return_value=[]), mock.patch.object(
+            MODULE, "list_android_devices", return_value=[android]
+        ), mock.patch.object(
+            MODULE, "connect_android_device", return_value=(FakeConnection(), 37123)
+        ) as connect, mock.patch.object(
+            MODULE, "remove_android_forward"
+        ) as remove, mock.patch.object(sender, "_run_session", side_effect=run_session):
+            sender._run()
+
+        connect.assert_called_once_with("ABC123")
+        remove.assert_called_once_with("ABC123", 37123)
+        self.assertEqual(sessions, [("Android Pixel Tablet", "ADB USB")])
 
 
 class OpenDisplayPointerTranslatorTests(unittest.TestCase):

@@ -6,15 +6,17 @@ TuxDisplay controls a display capture and accepts remote input. Treat it like a 
 
 ### Direct OpenDisplay USB
 
-The preferred connection travels through usbmuxd between a computer and an iPad that has trusted that computer. This avoids LAN exposure and works offline, but OpenDisplay protocol version 3 does not add encryption, authentication, or per-session pairing of its own.
+The preferred connection travels through either usbmuxd to a paired iPad or a loopback-only ADB port forward to an Android device that has authorized the computer for USB debugging. This avoids LAN exposure and works offline, but OpenDisplay protocol version 3 does not add encryption, authentication, or per-session pairing of its own.
 
 Use direct USB only with:
 
-- a computer and iPad you control;
+- a computer and tablet you control;
 - a cable and USB path you trust;
-- an iPad pairing relationship you recognize.
+- an iPad pairing relationship or Android USB-debugging authorization you recognize.
 
-Lock or disconnect the iPad, revoke the trust relationship, or stop TuxDisplay when the display is unattended.
+Lock or disconnect the tablet, revoke its trust/USB-debugging authorization, or stop TuxDisplay when the display is unattended. Android's general USB-debugging authorization grants more than display access to the computer's ADB client, so enable it only for computers you trust and revoke it in Developer options when it is no longer needed.
+
+TuxDisplay passes the selected Android serial as a direct process argument, allocates a host port through ADB, binds the forwarding side to loopback, and removes that forward on disconnect. It does not invoke an Android shell command or install the receiver APK.
 
 ### Browser fallback
 
@@ -66,12 +68,12 @@ SHA-256 detects a damaged or substituted file relative to the published checksum
 
 The in-app updater applies the same policy before it requests system authentication. It accepts only a newer stable semantic version from the repository's latest-release API, requires the exact versioned `.deb` and `SHA256SUMS` assets, restricts metadata and downloads to HTTPS GitHub hosts, enforces response-size limits, verifies the published SHA-256 and any asset digest returned by GitHub, and checks the package name, version, and `all` architecture with `dpkg-deb`. The user must explicitly choose installation and approve the PolicyKit prompt; installation is delegated to `apt-get`.
 
-These checks protect against accidental corruption, unsafe redirects, and asset mix-ups. They do not protect against compromise of the GitHub repository or release account because the package and checksum share that trust root. The updater does not send the display stream, configuration, PIN, or iPad identifier to GitHub.
+These checks protect against accidental corruption, unsafe redirects, and asset mix-ups. They do not protect against compromise of the GitHub repository or release account because the package and checksum share that trust root. The updater does not send the display stream, configuration, PIN, or tablet identifier to GitHub.
 
 ## Hardening recommendations
 
 - Prefer direct USB over the browser fallback.
-- Keep TuxDisplay, OpenDisplay, iPadOS, GNOME, GStreamer, usbmuxd, and libimobiledevice updated.
+- Keep TuxDisplay, the selected OpenDisplay receiver, the tablet OS, GNOME, GStreamer, usbmuxd/libimobiledevice, and ADB updated.
 - Bind or firewall the browser port to trusted interfaces when using a persistent setup.
 - Use `tuxdisplay password --reset` after temporary browser sharing.
 - Do not run the display service as root.
@@ -84,7 +86,7 @@ These checks protect against accidental corruption, unsafe redirects, and asset 
 - OpenDisplay v3 provides no application-layer encryption or authentication.
 - Browser access is HTTP rather than HTTPS.
 - The six-digit browser PIN has a small brute-force space.
-- There is no persistent per-iPad allowlist above the operating system's pairing controls.
+- There is no persistent per-device allowlist above iPadOS pairing or Android ADB authorization.
 - The project does not yet publish signed or reproducible release attestations.
 
 Report security-sensitive issues privately to the repository owner rather than opening a public issue containing exploit details or secrets. The project does not currently publish a dedicated security-response SLA.

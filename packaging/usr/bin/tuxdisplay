@@ -24,7 +24,7 @@ import urllib.request
 
 
 APP_NAME = "TuxDisplay"
-VERSION = "0.4.7"
+VERSION = "0.4.8"
 SERVICE = "tuxdisplay.service"
 USB_GADGET_ADDRESS = "10.55.0.1"
 UPDATE_API = "https://api.github.com/repos/tpluharik/tuxdisplay/releases/latest"
@@ -312,6 +312,10 @@ def opendisplay_connected() -> bool:
     return bool(read_client_state().get("opendisplay_usb", False))
 
 
+def opendisplay_receiver() -> str:
+    return str(read_client_state().get("opendisplay_status", "")).strip()
+
+
 def service_action(action: str) -> int:
     ensure_config()
     try:
@@ -379,11 +383,49 @@ def usb_device_ids() -> list[str]:
     return [line.strip() for line in result.stdout.splitlines() if line.strip()]
 
 
+def android_device_states() -> list[dict[str, str]]:
+    try:
+        result = subprocess.run(
+            ["adb", "devices", "-l"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    if result.returncode:
+        return []
+    devices: list[dict[str, str]] = []
+    for raw_line in result.stdout.splitlines():
+        fields = raw_line.split()
+        if len(fields) < 2 or fields[0] == "List":
+            continue
+        device = {"serial": fields[0], "state": fields[1]}
+        for field in fields[2:]:
+            if ":" not in field:
+                continue
+            key, value = field.split(":", 1)
+            if key in {"usb", "product", "model", "device", "transport_id"}:
+                device[key] = value
+        devices.append(device)
+    return devices
+
+
 def usb_status() -> tuple[str, str, str | None]:
-    devices = usb_device_ids()
-    if devices:
-        if opendisplay_connected():
-            return "ready", "OpenDisplay connected directly through the USB cable", None
+    if opendisplay_connected():
+        receiver = opendisplay_receiver() or "OpenDisplay receiver"
+        return "ready", f"OpenDisplay connected directly through the USB cable ({receiver})", None
+    apple_devices = usb_device_ids()
+    android_devices = android_device_states()
+    authorized_android = [device for device in android_devices if device.get("state") == "device"]
+    if authorized_android:
+        model = authorized_android[0].get("model", "Android device").replace("_", " ")
+        return "android", f"{model} cable ready; open OpenDisplay Android", None
+    if any(device.get("state") == "unauthorized" for device in android_devices):
+        return "android-authorization", "Unlock Android and allow USB debugging for this computer", None
+    if apple_devices:
         return "cable", "iPad cable detected and trusted; open OpenDisplay on the iPad", None
     addresses = usb_network_addresses()
     if addresses:
@@ -393,7 +435,7 @@ def usb_status() -> tuple[str, str, str | None]:
     udc_path = Path("/sys/class/udc")
     if udc_path.is_dir() and any(udc_path.iterdir()):
         return "gadget", "Device-capable USB port available", None
-    return "absent", "No trusted iPad USB cable detected", None
+    return "absent", "No trusted iPad or authorized Android USB cable detected", None
 
 
 def usb_connect(wait_seconds: int = 12) -> tuple[int, str]:
@@ -404,27 +446,34 @@ def usb_connect(wait_seconds: int = 12) -> tuple[int, str]:
         result = 0 if is_active() else service_action("start")
         return result, f"USB connection ready: {url}" if result == 0 else "USB is ready, but the display could not start."
 
-    if status == "cable":
-        try:
-            validated = subprocess.run(
-                ["idevicepair", "validate"],
-                check=False,
-                text=True,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                timeout=8,
-            )
-            if validated.returncode:
-                subprocess.run(["idevicepair", "pair"], check=False, timeout=30)
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
+    if status == "android-authorization":
+        return 4, "Unlock Android and accept the Allow USB debugging prompt, then try again."
+
+    if status in {"cable", "android"}:
+        if status == "cable":
+            try:
+                validated = subprocess.run(
+                    ["idevicepair", "validate"],
+                    check=False,
+                    text=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=8,
+                )
+                if validated.returncode:
+                    subprocess.run(["idevicepair", "pair"], check=False, timeout=30)
+            except (FileNotFoundError, subprocess.TimeoutExpired):
+                pass
         result = 0 if is_active() else service_action("start")
         if result:
-            return result, "The iPad is trusted, but the display service could not start."
+            device = "iPad" if status == "cable" else "Android device"
+            return result, f"The {device} is ready, but the display service could not start."
         for _attempt in range(max(1, wait_seconds)):
             if opendisplay_connected():
                 return 0, "OpenDisplay connected directly through USB."
             time.sleep(1)
+        if status == "android":
+            return 0, "The USB display is ready. Open OpenDisplay Android and keep USB debugging enabled."
         return 0, "The USB display is ready. Open the OpenDisplay app on the iPad; Personal Hotspot is not required."
 
     if status == "gadget":
@@ -437,7 +486,7 @@ def usb_connect(wait_seconds: int = 12) -> tuple[int, str]:
         display_result = 0 if is_active() else service_action("start")
         return display_result, f"USB connection ready: http://{USB_GADGET_ADDRESS}:{ensure_config()['WEB_PORT']}/"
 
-    return 4, "Connect and trust the iPad with a USB data cable, then open OpenDisplay on the iPad."
+    return 4, "Connect an iPad or Android device with a USB data cable, then open its OpenDisplay app."
 
 
 def usb_disconnect() -> tuple[int, str]:
@@ -595,9 +644,9 @@ def doctor() -> int:
     desktop = os.environ.get("XDG_CURRENT_DESKTOP", "").lower()
     native_wayland = os.environ.get("XDG_SESSION_TYPE") == "wayland" and "gnome" in desktop
     if native_wayland:
-        commands = ("systemctl", "gst-inspect-1.0", "ip")
+        commands = ("systemctl", "gst-inspect-1.0", "ip", "adb")
     else:
-        commands = ("systemctl", "Xvfb", "x11vnc", "websockify", "openbox", "tint2", "ip")
+        commands = ("systemctl", "Xvfb", "x11vnc", "websockify", "openbox", "tint2", "ip", "adb")
     missing = [name for name in commands if not shutil_which(name)]
     print(f"Display mode: {'native GNOME Wayland monitor' if native_wayland else 'portable X11 workspace'}")
     print(f"Service: {'running' if is_active() else 'stopped'}")
@@ -608,7 +657,17 @@ def doctor() -> int:
         + ("blocked while TuxDisplay runs" if ensure_config()["KEEP_AWAKE_WITH_LID_CLOSED"] == "1" else "normal")
     )
     print(f"Browser fallback URL: {preferred_url()}")
-    print(f"OpenDisplay USB: {'connected' if opendisplay_connected() else 'waiting'}")
+    receiver_name = opendisplay_receiver()
+    print(f"OpenDisplay USB: {'connected to ' + receiver_name if opendisplay_connected() and receiver_name else 'connected' if opendisplay_connected() else 'waiting'}")
+    android_devices = android_device_states()
+    authorized_android = [device for device in android_devices if device.get("state") == "device"]
+    if authorized_android:
+        model = authorized_android[0].get("model", "Android device").replace("_", " ")
+        print(f"Android USB: authorized ({model})")
+    elif any(device.get("state") == "unauthorized" for device in android_devices):
+        print("Android USB: authorization required on the device")
+    else:
+        print("Android USB: not detected")
     receiver = read_client_state().get("receiver", {})
     if isinstance(receiver, dict) and receiver:
         print("Receiver health: " + ", ".join(f"{key}={value}" for key, value in receiver.items()))
@@ -678,7 +737,7 @@ def run_gui(background: bool = False) -> int:
             title.set_halign(Gtk.Align.START)
             add_css_class(title, "title")
             heading.pack_start(title, False, False, 0)
-            subtitle = Gtk.Label(label="Use an iPad as a real extended monitor on GNOME Wayland")
+            subtitle = Gtk.Label(label="Use an iPad or Android tablet as an extended monitor on GNOME Wayland")
             subtitle.set_halign(Gtk.Align.START)
             add_css_class(subtitle, "dim-label")
             heading.pack_start(subtitle, False, False, 0)
@@ -796,8 +855,9 @@ def run_gui(background: bool = False) -> int:
 
             usb_note = Gtk.Label(
                 label=(
-                    "Install and open OpenDisplay on the iPad, then connect a trusted USB data cable. "
-                    "The direct connection works without Wi-Fi, an IP address, or Personal Hotspot."
+                    "Install and open OpenDisplay on the tablet, then connect a USB data cable. "
+                    "On Android, enable USB debugging and approve this computer once. "
+                    "The direct connection works without Wi-Fi or an IP address."
                 )
             )
             usb_note.set_line_wrap(True)
@@ -833,8 +893,8 @@ def run_gui(background: bool = False) -> int:
         def refresh(self) -> bool:
             state = connection_state()
             labels = {
-                "connected": "● Connected — iPad is viewing the monitor",
-                "running": "● Running — waiting for iPad",
+                "connected": "● Connected — tablet is viewing the monitor",
+                "running": "● Running — waiting for an OpenDisplay tablet",
                 "disconnected": "○ Disconnected",
             }
             self.status.set_label(labels[state])
@@ -865,7 +925,7 @@ def run_gui(background: bool = False) -> int:
 
         def on_start(self, _button: Gtk.Button) -> None:
             result = service_action("start")
-            self.show_message("Display started. Open OpenDisplay on the iPad." if result == 0 else "The display could not start. Run ‘tuxdisplay status’ for details.")
+            self.show_message("Display started. Open OpenDisplay on the tablet." if result == 0 else "The display could not start. Run ‘tuxdisplay status’ for details.")
             self.refresh()
 
         def on_stop(self, _button: Gtk.Button) -> None:
@@ -910,7 +970,7 @@ def run_gui(background: bool = False) -> int:
                 self.show_message("Enter an application command first.")
                 return
             result = launch(command)
-            self.show_message("Application launched. Drag its window to the iPad monitor." if result == 0 else "The application could not be launched.")
+            self.show_message("Application launched. Drag its window to the tablet monitor." if result == 0 else "The application could not be launched.")
 
         def on_resolution_changed(self, dropdown: Gtk.ComboBoxText) -> None:
             selected = dropdown.get_active()
@@ -1055,8 +1115,8 @@ def run_gui(background: bool = False) -> int:
         def refresh_indicator(self) -> bool:
             state = connection_state()
             details = {
-                "connected": ("tuxdisplay-connected", "Connected — iPad is viewing"),
-                "running": ("tuxdisplay-running", "Running — waiting for iPad"),
+                "connected": ("tuxdisplay-connected", "Connected — tablet is viewing"),
+                "running": ("tuxdisplay-running", "Running — waiting for tablet"),
                 "disconnected": ("tuxdisplay-disconnected", "Disconnected — display stopped"),
             }
             icon, label = details[state]
@@ -1215,7 +1275,17 @@ def print_status() -> int:
         "Lid-close sleep: "
         + ("blocked while TuxDisplay runs" if ensure_config()["KEEP_AWAKE_WITH_LID_CLOSED"] == "1" else "normal")
     )
-    print(f"OpenDisplay USB: {'connected' if opendisplay_connected() else 'waiting'}")
+    receiver_name = opendisplay_receiver()
+    print(f"OpenDisplay USB: {'connected to ' + receiver_name if opendisplay_connected() and receiver_name else 'connected' if opendisplay_connected() else 'waiting'}")
+    android_devices = android_device_states()
+    authorized_android = [device for device in android_devices if device.get("state") == "device"]
+    if authorized_android:
+        model = authorized_android[0].get("model", "Android device").replace("_", " ")
+        print(f"Android USB: authorized ({model})")
+    elif any(device.get("state") == "unauthorized" for device in android_devices):
+        print("Android USB: authorization required on the device")
+    else:
+        print("Android USB: not detected")
     receiver = read_client_state().get("receiver", {})
     if isinstance(receiver, dict) and receiver:
         print("Receiver health: " + ", ".join(f"{key}={value}" for key, value in receiver.items()))
@@ -1232,7 +1302,7 @@ def print_status() -> int:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Use an iPad as a USB or browser-connected secondary Linux monitor.")
+    parser = argparse.ArgumentParser(description="Use an iPad or Android tablet as a USB secondary Linux monitor.")
     subparsers = parser.add_subparsers(dest="command")
     for command in ("start", "stop", "restart", "status", "url", "doctor", "tray"):
         subparsers.add_parser(command)

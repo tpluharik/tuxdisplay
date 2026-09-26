@@ -31,7 +31,7 @@ td_setup() {
     set -- /sys/class/udc/*
     if [ ! -e "$1" ]; then
         echo "No USB Device Controller was found. This USB port is probably host-only." >&2
-        echo "Use iPad tethering, Wi-Fi, or an Ethernet adapter instead." >&2
+        echo "Use direct OpenDisplay USB, Wi-Fi, or an Ethernet adapter instead." >&2
         exit 2
     fi
     td_udc=$(basename "$1")

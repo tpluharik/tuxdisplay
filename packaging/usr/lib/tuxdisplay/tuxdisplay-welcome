@@ -5,7 +5,7 @@ printf '%s\n' \
     '╭────────────────────────────────────────────────────────────────────╮' \
     '│                         TuxDisplay                                 │' \
     '│                                                                    │' \
-    '│  This terminal and every app started here appear on the iPad.     │' \
+    '│  This terminal and every app started here appear on the tablet.   │' \
     '│                                                                    │' \
     '│  Try:  firefox --new-instance                                     │' \
     '│        libreoffice --norestore                                    │' \

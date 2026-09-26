@@ -168,6 +168,8 @@ class TuxDisplayTests(unittest.TestCase):
         with mock.patch.object(MODULE, "usb_network_addresses", return_value=[]), mock.patch.object(
             MODULE, "usb_device_ids", return_value=["test-ipad"]
         ), mock.patch.object(
+            MODULE, "android_device_states", return_value=[]
+        ), mock.patch.object(
             MODULE, "opendisplay_connected", return_value=False
         ):
             status, message, url = MODULE.usb_status()
@@ -183,6 +185,36 @@ class TuxDisplayTests(unittest.TestCase):
             status, message, url = MODULE.usb_status()
         self.assertEqual(status, "ready")
         self.assertIn("OpenDisplay connected", message)
+        self.assertIsNone(url)
+
+    def test_usb_status_reports_authorized_android_device(self) -> None:
+        android = [{"serial": "ABC123", "state": "device", "usb": "1-2", "model": "Pixel_Tablet"}]
+        with mock.patch.object(MODULE, "usb_device_ids", return_value=[]), mock.patch.object(
+            MODULE, "android_device_states", return_value=android
+        ), mock.patch.object(MODULE, "opendisplay_connected", return_value=False):
+            status, message, url = MODULE.usb_status()
+        self.assertEqual(status, "android")
+        self.assertIn("Pixel Tablet", message)
+        self.assertIn("OpenDisplay Android", message)
+        self.assertIsNone(url)
+
+    def test_usb_status_reports_android_authorization_required(self) -> None:
+        android = [{"serial": "ABC123", "state": "unauthorized", "usb": "1-2"}]
+        with mock.patch.object(MODULE, "usb_device_ids", return_value=[]), mock.patch.object(
+            MODULE, "android_device_states", return_value=android
+        ), mock.patch.object(MODULE, "opendisplay_connected", return_value=False):
+            status, message, url = MODULE.usb_status()
+        self.assertEqual(status, "android-authorization")
+        self.assertIn("allow USB debugging", message)
+        self.assertIsNone(url)
+
+    def test_connected_status_names_android_receiver(self) -> None:
+        with mock.patch.object(MODULE, "opendisplay_connected", return_value=True), mock.patch.object(
+            MODULE, "opendisplay_receiver", return_value="Android Pixel Tablet"
+        ):
+            status, message, url = MODULE.usb_status()
+        self.assertEqual(status, "ready")
+        self.assertIn("Android Pixel Tablet", message)
         self.assertIsNone(url)
 
     def test_single_graphical_application_and_state_icons_are_packaged(self) -> None:
@@ -202,6 +234,13 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertIn("AyatanaAppIndicator3", manager)
         arguments = MODULE.build_parser().parse_args(["gui", "--background"])
         self.assertTrue(arguments.background)
+
+    def test_android_adb_transport_is_packaged(self) -> None:
+        package_root = SCRIPT.parents[2]
+        control = (package_root / "DEBIAN" / "control").read_text(encoding="utf-8")
+        self.assertIn(", adb", control)
+        desktop = package_root / "usr" / "share" / "applications" / "io.github.tuxdisplay.Manager.desktop"
+        self.assertIn("Android;tablet", desktop.read_text(encoding="utf-8"))
 
     def test_release_update_requires_exact_assets_and_safe_urls(self) -> None:
         payload = {

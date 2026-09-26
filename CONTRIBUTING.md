@@ -9,8 +9,8 @@ The primary supported environment is:
 - Debian or Ubuntu;
 - GNOME on Wayland;
 - PipeWire and the GStreamer plugin set declared in `packaging/DEBIAN/control`;
-- an iPad running OpenDisplay;
-- usbmuxd and libimobiledevice for direct USB testing.
+- an iPad running OpenDisplay and/or an Android 8+ device running OpenDisplay Android;
+- usbmuxd/libimobiledevice for iPadOS testing and ADB for Android USB testing.
 
 The X11/noVNC backend should continue to start on sessions without the required Mutter virtual-monitor APIs.
 
@@ -20,7 +20,7 @@ The X11/noVNC backend should continue to start on sessions without the required 
 | --- | --- |
 | `packaging/usr/bin/tuxdisplay` | CLI, GTK manager, tray, and configuration |
 | `packaging/usr/lib/tuxdisplay/tuxdisplay-wayland` | GNOME virtual monitor, capture, browser service, and input |
-| `packaging/usr/lib/tuxdisplay/opendisplay_usb.py` | OpenDisplay protocol and usbmuxd transport |
+| `packaging/usr/lib/tuxdisplay/opendisplay_usb.py` | OpenDisplay protocol plus usbmuxd and Android ADB transports |
 | `packaging/usr/lib/tuxdisplay/tuxdisplay-session` | X11 fallback session |
 | `packaging/usr/sbin/tuxdisplay-usb` | Optional privileged gadget helper |
 | `packaging/usr/share/tuxdisplay/` | Browser and fallback desktop assets |
@@ -43,8 +43,8 @@ For a package candidate:
 
 ~~~sh
 ./build-deb.sh
-dpkg-deb --info dist/tuxdisplay_0.4.7_all.deb
-dpkg-deb --contents dist/tuxdisplay_0.4.7_all.deb
+dpkg-deb --info dist/tuxdisplay_0.4.8_all.deb
+dpkg-deb --contents dist/tuxdisplay_0.4.8_all.deb
 ~~~
 
 The build replaces the package for the current version and regenerates `dist/SHA256SUMS`. Do not commit a rebuilt binary unless the change is intended for a release asset.
@@ -63,6 +63,7 @@ For GNOME Wayland changes:
 8. Test browser PIN entry, MJPEG video, input, and session invalidation.
 9. Confirm app-grid activation reuses the background tray process and shows the TuxDisplay icon.
 10. Exercise update checking with current, newer, malformed, and checksum-mismatched release fixtures; never install an unverified package.
+11. On Android, test unauthorized and authorized ADB states, receiver launch after service start, cable reconnect, and cleanup with `adb forward --list`.
 
 For fallback changes:
 

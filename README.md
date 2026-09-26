@@ -1,6 +1,6 @@
 # TuxDisplay
 
-TuxDisplay turns an iPad into a real extended monitor for a GNOME Wayland desktop. It creates a compositor-owned virtual output, captures that output with PipeWire, and streams H.264 directly to the free OpenDisplay iPad app over a normal USB data cable.
+TuxDisplay turns an iPad or Android tablet into a real extended monitor for a GNOME Wayland desktop. It creates a compositor-owned virtual output, captures that output with PipeWire, and streams H.264 directly to a compatible OpenDisplay app over a normal USB data cable.
 
 No IP address, Internet connection, Wi-Fi, cellular service, Personal Hotspot, account, or special USB dongle is required for the preferred connection.
 
@@ -12,7 +12,7 @@ The Debian package also includes:
 - an optional USB Ethernet gadget helper for hardware with a device-capable USB controller.
 
 > [!IMPORTANT]
-> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, and 0.4.4 can unnecessarily reconnect a healthy low-FPS OpenDisplay session. Install 0.4.7 or newer.
+> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, and 0.4.4 can unnecessarily reconnect a healthy low-FPS OpenDisplay session. Install 0.4.8 or newer for Android support.
 
 ## Documentation
 
@@ -25,21 +25,21 @@ The Debian package also includes:
 
 ## Support matrix
 
-| Host/session | Result | Preferred iPad receiver |
+| Host/session | Result | Preferred receiver |
 | --- | --- | --- |
-| GNOME on Wayland | Real extended monitor managed by Mutter | OpenDisplay over direct USB |
-| GNOME on Wayland, private LAN | Real extended monitor | Safari browser fallback |
-| Xorg or another Wayland compositor | Separate isolated X11 workspace; not an extension of the current desktop | Safari/noVNC |
-| Device-capable Linux hardware | Optional USB Ethernet for the browser fallback | Safari/noVNC |
+| GNOME on Wayland | Real extended monitor managed by Mutter | OpenDisplay on iPadOS or Android over direct USB |
+| GNOME on Wayland, private LAN | Real extended monitor | Safari/Chrome browser fallback |
+| Xorg or another Wayland compositor | Separate isolated X11 workspace; not an extension of the current desktop | Browser/noVNC |
+| Device-capable Linux hardware | Optional USB Ethernet for the browser fallback | Browser/noVNC |
 
-The packaged and tested target is Debian/Ubuntu. The direct OpenDisplay sender currently uses usbmuxd only; Wi-Fi OpenDisplay discovery and streaming are not implemented.
+The packaged and tested target is Debian/Ubuntu. Direct OpenDisplay uses usbmuxd for iPadOS and a device-scoped ADB port forward for Android. Wi-Fi OpenDisplay discovery and streaming are not implemented.
 
 ## What works
 
 - A real `Meta-0` extended monitor on GNOME Wayland.
-- Direct OpenDisplay USB transport through Apple's usbmuxd protocol.
+- Direct OpenDisplay USB through Apple usbmuxd or an Android ADB tunnel.
 - H.264 video with reconnect, periodic IDR frames, and cached keyframe recovery.
-- Tap, drag, scroll, and Apple Pencil-as-pointer input from OpenDisplay.
+- Tap, drag, and scroll input from OpenDisplay, plus Apple Pencil-as-pointer on iPadOS.
 - Pointer, scroll, touch, and keyboard input in the browser fallback.
 - Gray stopped, amber waiting, and green connected tray states.
 - Start, connect, disconnect, and manager actions from the tray.
@@ -54,12 +54,15 @@ Download the current `.deb` and `SHA256SUMS` from [GitHub Releases](https://gith
 
 ~~~sh
 sha256sum --ignore-missing --check SHA256SUMS
-sudo apt install ./tuxdisplay_0.4.7_all.deb
+sudo apt install ./tuxdisplay_0.4.8_all.deb
 ~~~
 
 The checksum file can include packages from several releases. The checksum for the package being installed must report `OK`.
 
-Install [OpenDisplay](https://apps.apple.com/us/app/opendisplay/id6780264891) on the iPad.
+Install one compatible receiver before going offline:
+
+- iPadOS: [OpenDisplay in the App Store](https://apps.apple.com/us/app/opendisplay/id6780264891).
+- Android 8 or newer: download the APK from [OpenDisplay Android releases](https://github.com/josepacelli/opendisplay-android/releases/latest). Android may ask you to allow installation from the app that opens the APK.
 
 ## Connect the iPad
 
@@ -70,17 +73,28 @@ Install [OpenDisplay](https://apps.apple.com/us/app/opendisplay/id6780264891) on
 5. Choose **Connect OpenDisplay** in TuxDisplay.
 6. Drag a window beyond the right edge of the computer display.
 
-TuxDisplay is a single application: the manager window and tray controls share one process and one connection state. The tray starts automatically at the next login. Opening TuxDisplay from the app grid brings up the existing manager instead of starting another copy. It is gray when stopped, amber while waiting for a viewer, and green while the iPad is viewing the display. **Close connection** stops streaming and removes the virtual monitor.
+## Connect Android
+
+1. On Android, enable **Developer options**, then enable **USB debugging**.
+2. Install and open **OpenDisplay Android**.
+3. Connect the tablet or phone with a data-capable USB cable.
+4. Unlock Android and approve **Allow USB debugging** for this computer. Selecting **Always allow** avoids repeating this step.
+5. Open **TuxDisplay**, start the display, and choose **Connect OpenDisplay**.
+6. Drag a window beyond the right edge of the computer display.
+
+The ADB authorization is the cable trust mechanism. TuxDisplay allocates a loopback-only host port and forwards it through ADB to OpenDisplay port 9000 on that specific Android device. After the APK and Debian dependencies are installed, this path works without Internet, Wi-Fi, tethering, or an IP address.
+
+TuxDisplay is a single application: the manager window and tray controls share one process and one connection state. The tray starts automatically at the next login. Opening TuxDisplay from the app grid brings up the existing manager instead of starting another copy. It is gray when stopped, amber while waiting for a viewer, and green while the tablet is viewing the display. **Close connection** stops streaming and removes the virtual monitor.
 
 ## In-app updates
 
-The manager checks GitHub Releases after it starts and shows **Install update** when a newer stable version is available. You can also choose **Check for updates** from the tray. Downloading an update requires Internet access, but using the iPad display does not.
+The manager checks GitHub Releases after it starts and shows **Install update** when a newer stable version is available. You can also choose **Check for updates** from the tray. Downloading an update requires Internet access, but using a configured tablet display does not.
 
 Before requesting system authentication, TuxDisplay requires the exact versioned Debian package and `SHA256SUMS` from the official release, restricts downloads to HTTPS GitHub hosts, verifies the SHA-256 checksum and any GitHub asset digest, and checks the package name, version, and architecture. Installation uses the normal system package manager so dependencies and upgrades remain tracked by Debian/Ubuntu. Restart TuxDisplay from the offered button after installation.
 
 Change the monitor arrangement in **Settings → Displays** if the virtual output is not on the expected edge.
 
-## Resolution and iPad aspect ratio
+## Resolution and tablet aspect ratio
 
 Choose a preset in the manager before starting or reconnecting:
 
@@ -93,13 +107,13 @@ Choose a preset in the manager before starting or reconnecting:
 | 2048×1536 | 4:3 | Most 4:3 iPads |
 | 2160×1620 | 4:3 | Higher-detail 4:3 iPads |
 
-TuxDisplay does not yet read the iPad's aspect ratio and select a mode automatically. A 4:3 preset fills most traditional iPad panels more closely than 16:9 or 16:10. Safari and iPadOS may still reserve browser chrome or apply safe-area insets.
+TuxDisplay does not yet read the receiver's aspect ratio and select a mode automatically. A 4:3 preset fills most traditional iPad panels more closely than 16:9 or 16:10; many Android tablets fit a 16:10 preset better. A browser may still reserve chrome or apply safe-area insets.
 
-Changing resolution restarts the virtual monitor. The image will pause briefly, OpenDisplay will reconnect, and GNOME may move windows from the removed virtual monitor back to the laptop display. Move them back after the new monitor appears. If the iPad keeps the last frame, reopen OpenDisplay or use **Close connection**, then start again.
+Changing resolution restarts the virtual monitor. The image will pause briefly, OpenDisplay will reconnect, and GNOME may move windows from the removed virtual monitor back to the laptop display. Move them back after the new monitor appears. If the tablet keeps the last frame, reopen OpenDisplay or use **Close connection**, then start again.
 
 ## Closed-lid operation
 
-Enable **Keep awake with lid closed** in the TuxDisplay manager when the iPad should remain usable after closing the laptop. TuxDisplay then blocks system sleep and lid-switch handling for exactly as long as its user service runs. Stopping TuxDisplay releases the inhibitor and restores normal sleep behavior.
+Enable **Keep awake with lid closed** in the TuxDisplay manager when the tablet should remain usable after closing the laptop. TuxDisplay then blocks system sleep and lid-switch handling for exactly as long as its user service runs. Stopping TuxDisplay releases the inhibitor and restores normal sleep behavior.
 
 This option also blocks manual and idle suspend while TuxDisplay is running. A closed laptop can retain more heat, so keep it connected to power when appropriate and make sure its vents are not obstructed. Firmware-level thermal shutdown and critical-battery actions can still override the inhibitor.
 
@@ -128,9 +142,9 @@ In GNOME Wayland mode, `launch` starts the application in the current desktop. I
 
 ### Direct OpenDisplay USB
 
-This is the normal offline mode. TuxDisplay asks the local usbmuxd service for a transparent connection to OpenDisplay port 9000. The app and host exchange the public OpenDisplay protocol greeting, then TuxDisplay sends framed H.264 Annex-B access units and receives pointer/scroll events on the same cable.
+This is the normal offline mode. For iPadOS, TuxDisplay asks the local usbmuxd service for a transparent connection to OpenDisplay port 9000. For Android, it discovers an authorized device with ADB and creates a dynamically allocated loopback port forward to the same receiver port. The app and host then exchange the public OpenDisplay protocol greeting; TuxDisplay sends framed H.264 Annex-B access units and receives pointer/scroll events on the same cable.
 
-The connection retries when the cable is attached or OpenDisplay is reopened. It does not create a network interface and does not use the browser PIN.
+The connection retries when the cable is attached or OpenDisplay is reopened. It does not create a network interface and does not use the browser PIN. Android must remain authorized for USB debugging; no shell command is run on the Android device.
 
 ### Browser fallback
 
@@ -174,13 +188,13 @@ python3 -m unittest discover -s tests -v
 ./build-deb.sh
 ~~~
 
-The package is written to `dist/tuxdisplay_0.4.7_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
+The package is written to `dist/tuxdisplay_0.4.8_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
 
 Development and release conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Security
 
-Direct OpenDisplay traffic stays on the trusted usbmuxd cable channel, but protocol v3 does not add encryption or authentication. Browser access uses a PIN over ordinary HTTP and must not be exposed to the public Internet. Read the [security model and recommendations](docs/SECURITY.md).
+Direct OpenDisplay traffic stays on a trusted usbmuxd channel or a loopback-only ADB forward, but protocol v3 does not add encryption or authentication. Browser access uses a PIN over ordinary HTTP and must not be exposed to the public Internet. Read the [security model and recommendations](docs/SECURITY.md).
 
 ## Remove
 
@@ -192,4 +206,4 @@ Per-user configuration remains in `~/.config/tuxdisplay/` so that reinstalling p
 
 ## License and attribution
 
-TuxDisplay is released under the [MIT License](LICENSE). It independently implements the public [OpenDisplay protocol](https://github.com/peetzweg/opendisplay/blob/main/PROTOCOL.md); it is not affiliated with Apple or the OpenDisplay project.
+TuxDisplay is released under the [MIT License](LICENSE). It independently implements the public [OpenDisplay protocol](https://github.com/peetzweg/opendisplay/blob/main/PROTOCOL.md); it is not affiliated with Apple, Google, or the OpenDisplay projects. The Android receiver is a separate GPL-3.0 project.

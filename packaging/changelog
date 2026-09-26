@@ -1,3 +1,14 @@
+tuxdisplay (0.4.8) unstable; urgency=medium
+
+  * Add Android OpenDisplay receiver discovery through ADB and create a
+    device-scoped, dynamically allocated USB tunnel to receiver port 9000.
+  * Reuse the OpenDisplay v3 video, reconnect, touch, drag, and scroll path on
+    both iPadOS and Android without requiring Wi-Fi or an IP address.
+  * Report Android authorization, ready, connected, and diagnostic states in
+    the manager, tray, command line, documentation, and package metadata.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Sat, 26 Sep 2026 12:00:00 +0200
+
 tuxdisplay (0.4.7) unstable; urgency=medium
 
   * Merge the GTK manager and tray indicator into one single-instance desktop

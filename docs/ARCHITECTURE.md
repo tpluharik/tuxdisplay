@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.7. The project has two display backends and three receiver paths. Only the GNOME Wayland backend extends the user's current desktop.
+This document describes TuxDisplay 0.4.8. The project has two display backends and four receiver paths. Only the GNOME Wayland backend extends the user's current desktop.
 
 ## GNOME Wayland data flow
 
@@ -11,9 +11,10 @@ GNOME Shell / Mutter
             └─ GStreamer pipeline
                  ├─ x264 H.264 Annex B
                  │    └─ OpenDisplay framing
-                 │         └─ usbmuxd → USB cable → OpenDisplay on iPad
+                 │         ├─ usbmuxd → USB cable → OpenDisplay on iPadOS
+                 │         └─ ADB forward → USB cable → OpenDisplay on Android
                  └─ JPEG frames
-                      └─ authenticated HTTP/MJPEG → Safari on iPad
+                      └─ authenticated HTTP/MJPEG → tablet browser
 
 OpenDisplay touch / Pencil / scroll
   └─ guarded single-pointer translation
@@ -37,11 +38,13 @@ Queues are deliberately small and leaky so latency is preferred over delivering 
 
 ### Direct USB transport
 
-TuxDisplay speaks the public OpenDisplay protocol version 3. It asks usbmuxd to connect to port 9000 on a paired iPad, receives the app's JSON hello, replies with the stream configuration, and sends length-prefixed H.264 Annex-B access units. Control and input messages travel over the same connection.
+TuxDisplay speaks the public OpenDisplay protocol version 3. For Apple devices, it asks usbmuxd to connect to port 9000 on a paired iPad. For Android devices, it asks ADB for a dynamic loopback port forward to TCP 9000 on one authorized device. Both paths receive the app's JSON hello, reply with the stream configuration, and send length-prefixed H.264 Annex-B access units. Control and input messages travel over the same connection.
 
 The OpenDisplay transport is not IP networking. It does not require an address, DHCP, Personal Hotspot, Wi-Fi, or the optional USB gadget service.
 
-TuxDisplay checks every attached Apple USB device, validates the receiver hello, and retries with a bounded backoff. Receiver telemetry drives staged recovery: first request a fresh IDR, then rebuild the cable session if real packet loss or active-stream underperformance persists. OpenDisplay's decoder-starvation counter is retained for diagnostics but does not trigger recovery because quiet damage-driven desktops can raise it during a healthy session.
+TuxDisplay checks every attached Apple USB device and every ADB-authorized Android device. Apple candidates are tried through usbmuxd, followed by Android candidates through a serial-scoped ADB forward. Each temporary Android forward is removed after connection failure, disconnect, or shutdown. The sender validates the receiver hello and retries with a bounded backoff.
+
+Receiver telemetry drives staged recovery: first request a fresh IDR, then rebuild the cable session if real packet loss or active-stream underperformance persists. OpenDisplay's decoder-starvation counter is retained for diagnostics but does not trigger recovery because quiet damage-driven desktops can raise it during a healthy session.
 
 ### Input safety
 
@@ -110,7 +113,7 @@ The helper is privileged and launched through PolicyKit or its disabled-by-defau
 | `/usr/bin/tuxdisplay` | CLI, single-instance GTK manager/tray, verified updater, configuration, status, and service control |
 | `tuxdisplay.service` | Per-user lifecycle for the selected display backend |
 | `tuxdisplay-wayland` | Virtual monitor, PipeWire capture, encoding, browser server, and input |
-| `opendisplay_usb.py` | usbmuxd connection, OpenDisplay framing, reconnect, keyframe cache, and input translation |
+| `opendisplay_usb.py` | usbmuxd and ADB transports, OpenDisplay framing, reconnect, keyframe cache, and input translation |
 | `tuxdisplay-session` | X11/Xvfb compatibility workspace |
 | `/usr/sbin/tuxdisplay-usb` | Privileged optional USB Ethernet gadget |
 
@@ -138,7 +141,7 @@ Per-user secrets and configuration are created with mode `0600`. Runtime files a
 
 - Native extension is coupled to GNOME/Mutter's private virtual-monitor interfaces.
 - Encoding is currently software x264 rather than VA-API/NVENC/V4L2 hardware encoding.
-- Direct OpenDisplay discovery and transport currently use USB only.
+- Direct OpenDisplay discovery and transport currently use USB only: usbmuxd on iPadOS and ADB forwarding on Android.
 - The configured resolution is fixed for a service run; receiver dimensions do not reconfigure the monitor.
 - One direct OpenDisplay receiver is supported at a time.
 - OpenDisplay protocol v3 has no application-level encryption or authentication.

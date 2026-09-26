@@ -2,7 +2,7 @@
 <component type="desktop-application">
   <id>io.github.tuxdisplay.Manager</id>
   <name>TuxDisplay</name>
-  <summary>Extend a GNOME Wayland desktop to an iPad over USB</summary>
+  <summary>Extend a GNOME Wayland desktop to an iPad or Android tablet over USB</summary>
   <metadata_license>MIT</metadata_license>
   <developer id="io.github.tpluharik"><name>TuxDisplay contributors</name></developer>
   <url type="homepage">https://github.com/tpluharik/tuxdisplay</url>
@@ -10,7 +10,7 @@
   <url type="bugtracker">https://github.com/tpluharik/tuxdisplay/issues</url>
   <project_license>MIT</project_license>
   <description>
-    <p>TuxDisplay creates a native GNOME Wayland extended monitor and streams it directly to the OpenDisplay iPad app over USB without requiring an IP network or Personal Hotspot.</p>
+    <p>TuxDisplay creates a native GNOME Wayland extended monitor and streams it directly to compatible OpenDisplay apps on iPadOS and Android over USB without requiring an IP network.</p>
     <p>An authenticated browser receiver remains available for private networks and compatibility use.</p>
     <p>Desktop sessions without the required GNOME virtual-monitor APIs use an isolated X11 workspace rather than extending the current desktop.</p>
     <p>One graphical application provides the manager and tray indicator, including verified in-app updates from GitHub Releases.</p>
@@ -21,6 +21,15 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.8" date="2026-09-26">
+      <description>
+        <ul>
+          <li>Add Android OpenDisplay support through a device-scoped ADB USB tunnel.</li>
+          <li>Show Android authorization and receiver connection states.</li>
+          <li>Keep video, input, reconnect, and offline behavior consistent across iPadOS and Android.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.7" date="2026-09-25">
       <description>
         <ul>

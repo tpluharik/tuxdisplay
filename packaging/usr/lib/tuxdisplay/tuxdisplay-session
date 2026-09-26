@@ -38,7 +38,7 @@ if [ "$td_keep_awake" = "1" ] && [ "${TUXDISPLAY_INHIBITED:-0}" != "1" ]; then
     exec systemd-inhibit \
         --what=handle-lid-switch:sleep \
         --who=TuxDisplay \
-        --why="Keep the iPad display active while the laptop lid is closed" \
+        --why="Keep the tablet display active while the laptop lid is closed" \
         --mode=block \
         "$0"
 fi

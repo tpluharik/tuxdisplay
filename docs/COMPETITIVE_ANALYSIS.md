@@ -1,8 +1,8 @@
 # Competitive analysis
 
-**Snapshot date:** 2026-09-25
+**Snapshot date:** 2026-09-26
 
-TuxDisplay serves a narrow combination that many second-display products do not: a Debian/Ubuntu GNOME Wayland host, an iPad receiver, a real extended desktop, and operation through an ordinary USB data cable without Internet access or IP networking.
+TuxDisplay serves a narrow combination that many second-display products do not: a Debian/Ubuntu GNOME Wayland host, an iPadOS or Android receiver, a real extended desktop, and operation through an ordinary USB data cable without Internet access or IP networking.
 
 This is a feature and positioning review based on public first-party documentation. It is not a latency, image-quality, battery, or reliability benchmark. Commercial pricing changes frequently and is intentionally not reproduced here.
 
@@ -12,7 +12,7 @@ The comparison emphasizes:
 
 1. Linux as the display host.
 2. A real extended desktop rather than only mirroring or remote control.
-3. iPad receiver support.
+3. iPadOS and Android receiver support.
 4. Direct USB operation without Wi-Fi, tethering, or a cable IP network.
 5. Wayland integration.
 6. Touch/Pencil behavior.
@@ -22,9 +22,9 @@ The comparison emphasizes:
 
 ## Comparison
 
-| Product | Linux host | Real extra desktop | iPad receiver | Offline cable path | Input | Main trade-off |
+| Product | Linux host | Real extra desktop | Tablet receiver | Offline cable path | Input | Main trade-off |
 | --- | --- | --- | --- | --- | --- | --- |
-| **TuxDisplay** | Yes; Debian/Ubuntu, GNOME Wayland focus | Yes on GNOME Wayland; isolated workspace elsewhere | OpenDisplay or Safari | Yes; direct usbmuxd, no IP | Tap, drag, scroll, Pencil as pointer | GNOME-specific native path; software encoding; no native multi-touch |
+| **TuxDisplay** | Yes; Debian/Ubuntu, GNOME Wayland focus | Yes on GNOME Wayland; isolated workspace elsewhere | OpenDisplay on iPadOS/Android or a browser | Yes; usbmuxd or Android ADB, no IP | Tap, drag, scroll; Pencil as pointer on iPadOS | GNOME-specific native path; software encoding; no native multi-touch |
 | **OpenDisplay Linux sender** | Yes; KDE Plasma Wayland and Hyprland documented | Yes on documented compositors | OpenDisplay | Yes; usbmuxd, plus Wi-Fi | Project-dependent | Closest open-source alternative, but explicitly experimental and not GNOME-focused |
 | **Weylus** | Yes, plus macOS and Windows | Conditional; needs a host-created output/region | Any modern browser | Network transport; can use an existing tethered network | Strong stylus, pressure, tilt, and multi-touch support | Broad input support, but not a turnkey native GNOME extra monitor |
 | **Deskreen** | Yes, plus macOS and Windows | Conditional; a virtual output or dummy plug supplies a second screen | Any modern browser | Network/WebRTC | Browser interaction model | Very broad receiver compatibility; second-monitor setup is separate |
@@ -38,7 +38,7 @@ The comparison emphasizes:
 
 ### OpenDisplay and the Linux sender
 
-The official [OpenDisplay repository](https://github.com/peetzweg/opendisplay) describes an open protocol and a macOS-to-iPad product with USB and Wi-Fi connections. Its [protocol specification](https://github.com/peetzweg/opendisplay/blob/main/PROTOCOL.md) defines H.264 video, control/input messages, and direct USB forwarding through usbmuxd port 9000.
+The official [OpenDisplay repository](https://github.com/peetzweg/opendisplay) describes an open protocol and a macOS-to-iPad product with USB and Wi-Fi connections. Its [protocol specification](https://github.com/peetzweg/opendisplay/blob/main/PROTOCOL.md) defines H.264 video, control/input messages, and a transport-independent TCP receiver on port 9000. The project lists [OpenDisplay Android](https://github.com/josepacelli/opendisplay-android) as a compatible third-party receiver; that receiver publishes Android 8+ APK releases and documents ADB forwarding for USB use.
 
 TuxDisplay is an independent Linux sender for that public protocol. The separate [opendisplay-linux project](https://github.com/tixwho/opendisplay-linux) documents KDE Plasma Wayland and Hyprland support, USB and Wi-Fi transport, PipeWire/FFmpeg capture, hardware-encoder options, and an experimental Qt interface. Its own README calls the project highly experimental and does not list GNOME as a supported compositor. It is the closest technical alternative and also a useful adjacent implementation, not merely a generic competitor.
 
@@ -72,9 +72,9 @@ The [spacedesk system requirements](https://manual.spacedesk.net/SystemRequireme
 
 ## Where TuxDisplay is stronger
 
-### 1. Offline Linux-to-iPad USB is the core path
+### 1. Offline Linux-to-tablet USB is the core path
 
-TuxDisplay does not treat cable use as USB Ethernet. usbmuxd carries the OpenDisplay connection directly, so it works when the iPad has no Internet, Wi-Fi, cellular data, or Personal Hotspot. This avoids the most common failure in browser-only approaches: obtaining and reaching a cable network address.
+TuxDisplay does not treat cable use as USB Ethernet. usbmuxd carries the iPadOS connection and ADB forwards the Android receiver port over the trusted cable. Both work when the tablet has no Internet, Wi-Fi, cellular data, or tethering. This avoids the most common failure in browser-only approaches: obtaining and reaching a cable network address.
 
 ### 2. GNOME receives a real output
 
@@ -82,7 +82,7 @@ The virtual monitor belongs to Mutter and participates in GNOME's display layout
 
 ### 3. No account, subscription, or display dongle
 
-The host is MIT-licensed, the receiver is the free OpenDisplay app, and the preferred connection uses an ordinary data cable. The product can be installed and used entirely offline after the iPad app and Debian dependencies are present.
+The host is MIT-licensed, compatible OpenDisplay receivers are available without a subscription, and the preferred connection uses an ordinary data cable. The product can be used entirely offline after the receiver app and Debian dependencies are present. The third-party Android receiver is separately licensed under GPL-3.0.
 
 ### 4. Compatibility paths are included
 
@@ -112,13 +112,13 @@ Safari/MJPEG and X11/noVNC are not as efficient as the OpenDisplay route, but th
 
 ## Recommended positioning
 
-> **Use your iPad as a real GNOME Wayland monitor over a normal USB cable—offline, without tethering, an account, or a dongle.**
+> **Use an iPad or Android tablet as a real GNOME Wayland monitor over a normal USB cable—offline, without tethering, an account, or a dongle.**
 
 This statement is specific and supportable. TuxDisplay should not claim universal Linux compositor support, full touch-display semantics, native-resolution negotiation, or superiority on latency until those areas are implemented and benchmarked.
 
 ## Suggested roadmap priorities
 
-1. Negotiate an iPad-appropriate aspect ratio from the OpenDisplay hello and make mode changes reconnect cleanly.
+1. Negotiate a receiver-appropriate aspect ratio from the OpenDisplay hello and make mode changes reconnect cleanly.
 2. Add hardware H.264 encoding with a tested software fallback.
 3. Add a secure optional Wi-Fi OpenDisplay transport.
 4. Provide native KDE Plasma and Hyprland backends, potentially sharing findings with the existing OpenDisplay Linux sender.
@@ -129,4 +129,4 @@ This statement is specific and supportable. TuxDisplay should not claim universa
 
 ## Bottom line
 
-For a Linux user who specifically has GNOME Wayland, an iPad, and no usable network, TuxDisplay occupies a defensible gap: native desktop extension over direct USB with no extra hardware. Its most important engineering priorities are smoother resolution lifecycle, hardware encoding, broader compositor support, and stronger input/security semantics. Users who value stylus richness or cross-platform reach more than turnkey GNOME extension should also evaluate Weylus; KDE/Hyprland users should evaluate the experimental OpenDisplay Linux sender; Mac users should start with Sidecar.
+For a Linux user who specifically has GNOME Wayland, an iPad or Android tablet, and no usable network, TuxDisplay occupies a defensible gap: native desktop extension over direct USB with no extra hardware. Its most important engineering priorities are smoother resolution lifecycle, hardware encoding, broader compositor support, and stronger input/security semantics. Users who value stylus richness or cross-platform reach more than turnkey GNOME extension should also evaluate Weylus; KDE/Hyprland users should evaluate the experimental OpenDisplay Linux sender; Mac users with an iPad should start with Sidecar.

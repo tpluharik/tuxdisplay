@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""OpenDisplay protocol v3 sender over Apple's usbmuxd transport.
+"""OpenDisplay protocol v3 sender over Apple usbmuxd and Android ADB.
 
 This is an independent implementation of the public OpenDisplay wire protocol:
 https://github.com/peetzweg/opendisplay/blob/main/PROTOCOL.md
@@ -12,6 +12,7 @@ import plistlib
 import queue
 import socket
 import struct
+import subprocess
 import sys
 import threading
 import time
@@ -25,10 +26,112 @@ USBMUX_HEADER = struct.Struct("<IIII")
 FRAME_HEADER = struct.Struct("!I")
 MAX_CONTROL_SIZE = (1 << 20) - 1
 MAX_USBMUX_MESSAGE_SIZE = 1 << 20
+ADB_TIMEOUT = 8
 
 
 class USBMuxError(RuntimeError):
     """Raised when usbmuxd cannot create a connection to the receiver."""
+
+
+class ADBError(RuntimeError):
+    """Raised when ADB cannot create a connection to an Android receiver."""
+
+
+def parse_adb_devices(output: str) -> list[dict[str, str]]:
+    """Parse `adb devices -l` without trusting device-provided properties."""
+    devices: list[dict[str, str]] = []
+    for raw_line in output.splitlines():
+        fields = raw_line.split()
+        if len(fields) < 2 or fields[0] == "List":
+            continue
+        serial, state = fields[:2]
+        properties: dict[str, str] = {"serial": serial, "state": state}
+        for field in fields[2:]:
+            if ":" not in field:
+                continue
+            key, value = field.split(":", 1)
+            if key in {"usb", "product", "model", "device", "transport_id"}:
+                properties[key] = value
+        devices.append(properties)
+    return devices
+
+
+def list_android_devices() -> list[dict[str, str]]:
+    """Return Android devices visible to the desktop user's ADB server."""
+    try:
+        result = subprocess.run(
+            ["adb", "devices", "-l"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=ADB_TIMEOUT,
+        )
+    except FileNotFoundError as error:
+        raise ADBError("adb is not installed") from error
+    except subprocess.TimeoutExpired as error:
+        raise ADBError("adb device discovery timed out") from error
+    if result.returncode:
+        detail = result.stderr.strip() or "unknown adb error"
+        raise ADBError(f"adb device discovery failed: {detail}")
+    return parse_adb_devices(result.stdout)
+
+
+def create_android_forward(serial: str, port: int = OPENDISPLAY_PORT) -> int:
+    """Forward a dynamically allocated host TCP port to Android port 9000."""
+    try:
+        result = subprocess.run(
+            ["adb", "-s", serial, "forward", "tcp:0", f"tcp:{port}"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=ADB_TIMEOUT,
+        )
+    except FileNotFoundError as error:
+        raise ADBError("adb is not installed") from error
+    except subprocess.TimeoutExpired as error:
+        raise ADBError("adb port forwarding timed out") from error
+    if result.returncode:
+        detail = result.stderr.strip() or "unknown adb error"
+        raise ADBError(f"adb could not reach the Android device: {detail}")
+    try:
+        local_port = int(result.stdout.strip())
+    except ValueError as error:
+        raise ADBError("adb returned an invalid forwarded port") from error
+    if not 1024 <= local_port <= 65535:
+        raise ADBError("adb returned an out-of-range forwarded port")
+    return local_port
+
+
+def remove_android_forward(serial: str, local_port: int) -> None:
+    try:
+        subprocess.run(
+            ["adb", "-s", serial, "forward", "--remove", f"tcp:{local_port}"],
+            check=False,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=ADB_TIMEOUT,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+
+def connect_android_device(serial: str, port: int = OPENDISPLAY_PORT) -> tuple[socket.socket, int]:
+    """Open a TCP stream to OpenDisplay Android through an ADB USB tunnel."""
+    local_port = create_android_forward(serial, port)
+    try:
+        connection = socket.create_connection(("127.0.0.1", local_port), timeout=4.0)
+        connection.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        return connection, local_port
+    except Exception:
+        remove_android_forward(serial, local_port)
+        raise
+
+
+def android_device_label(device: dict[str, str]) -> str:
+    model = device.get("model", "").replace("_", " ").strip()
+    return f"Android {model}" if model else "Android device"
 
 
 class OpenDisplayPointerTranslator:
@@ -162,7 +265,7 @@ def list_usb_devices() -> list[dict[str, Any]]:
             connection,
             {
                 "MessageType": "ListDevices",
-                "ClientVersionString": "tuxdisplay-0.4.7",
+                "ClientVersionString": "tuxdisplay-0.4.8",
                 "ProgName": "tuxdisplay",
                 "kLibUSBMuxVersion": 3,
             },
@@ -190,7 +293,7 @@ def connect_usb_device(device_id: int, port: int = OPENDISPLAY_PORT) -> socket.s
             connection,
             {
                 "MessageType": "Connect",
-                "ClientVersionString": "tuxdisplay-0.4.7",
+                "ClientVersionString": "tuxdisplay-0.4.8",
                 "ProgName": "tuxdisplay",
                 "DeviceID": int(device_id),
                 # usbmuxd's plist protocol carries the TCP port in network order.
@@ -255,7 +358,7 @@ def normalize_annex_b(data: bytes) -> tuple[bytes, bool]:
 
 
 class OpenDisplayUSB:
-    """Reconnectable OpenDisplay sender for one directly attached iPad."""
+    """Reconnectable OpenDisplay sender for one attached Apple or Android device."""
 
     def __init__(
         self,
@@ -293,7 +396,7 @@ class OpenDisplayUSB:
     def start(self) -> None:
         if self.thread and self.thread.is_alive():
             return
-        self.thread = threading.Thread(target=self._run, name="tuxdisplay-opendisplay-usb", daemon=True)
+        self.thread = threading.Thread(target=self._run, name="tuxdisplay-opendisplay-transport", daemon=True)
         self.thread.start()
 
     def stop(self) -> None:
@@ -469,7 +572,7 @@ class OpenDisplayUSB:
             raise ConnectionError("OpenDisplay hello was not the first message")
         return message
 
-    def _run_session(self, connection: socket.socket, serial: str) -> None:
+    def _run_session(self, connection: socket.socket, receiver: str, transport: str = "USB") -> None:
         connection.settimeout(5.0)
         hello = self._receive_hello(connection)
         receiver_version = hello.get("pv", 1)
@@ -498,8 +601,8 @@ class OpenDisplayUSB:
         self.request_keyframe()
         writer = threading.Thread(target=self._writer, name="tuxdisplay-opendisplay-writer", daemon=True)
         writer.start()
-        self.on_connected(True, serial)
-        print("TuxDisplay OpenDisplay USB connected", file=sys.stderr, flush=True)
+        self.on_connected(True, receiver)
+        print(f"TuxDisplay OpenDisplay connected through {transport}", file=sys.stderr, flush=True)
         self.on_control(hello)
         connection.settimeout(0.5)
         last_received = time.monotonic()
@@ -536,25 +639,33 @@ class OpenDisplayUSB:
         finally:
             self.session_failed.set()
             writer.join(timeout=2)
-            print("TuxDisplay OpenDisplay USB disconnected", file=sys.stderr, flush=True)
+            print(f"TuxDisplay OpenDisplay disconnected from {transport}", file=sys.stderr, flush=True)
 
     def _run(self) -> None:
         last_status = ""
         retry_delay = 0.5
         while not self.stop_event.is_set():
+            discovery_errors: list[str] = []
             try:
-                devices = list_usb_devices()
+                apple_devices = list_usb_devices()
             except Exception as error:
-                devices = []
-                status = f"usbmuxd error: {error}"
-                if status != last_status:
-                    self.on_connected(False, status)
-                    last_status = status
-                self.stop_event.wait(min(4.0, retry_delay))
-                retry_delay = min(4.0, retry_delay * 2)
-                continue
-            if not devices:
-                status = "Waiting for a trusted iPad USB cable"
+                apple_devices = []
+                discovery_errors.append(f"usbmuxd: {error}")
+            try:
+                android_devices = list_android_devices()
+            except Exception as error:
+                android_devices = []
+                discovery_errors.append(f"adb: {error}")
+
+            authorized_android = [device for device in android_devices if device.get("state") == "device"]
+            blocked_android = [device for device in android_devices if device.get("state") != "device"]
+            if not apple_devices and not authorized_android:
+                if any(device.get("state") == "unauthorized" for device in blocked_android):
+                    status = "Android detected; unlock it and allow USB debugging"
+                elif blocked_android:
+                    status = "Android detected but unavailable; reconnect it and check USB debugging"
+                else:
+                    status = "Waiting for an iPad or Android USB data cable"
                 if status != last_status:
                     self.on_connected(False, status)
                     last_status = status
@@ -562,17 +673,27 @@ class OpenDisplayUSB:
                 self.stop_event.wait(1.0)
                 continue
 
-            errors: list[str] = []
+            errors = discovery_errors
             session_ran = False
-            for device in devices:
+            candidates: list[tuple[str, dict[str, Any]]] = [
+                ("usbmuxd", device) for device in apple_devices
+            ] + [("ADB USB", device) for device in authorized_android]
+            for transport, device in candidates:
                 if self.stop_event.is_set():
                     break
                 connection: socket.socket | None = None
-                properties = device.get("Properties", {})
-                serial = str(properties.get("SerialNumber", "iPad"))
+                android_forward: tuple[str, int] | None = None
                 try:
-                    connection = connect_usb_device(int(device["DeviceID"]))
-                    self._run_session(connection, serial)
+                    if transport == "usbmuxd":
+                        properties = device.get("Properties", {})
+                        receiver = str(properties.get("DeviceName") or properties.get("ProductType") or "iPad")
+                        connection = connect_usb_device(int(device["DeviceID"]))
+                    else:
+                        serial = str(device["serial"])
+                        receiver = android_device_label(device)
+                        connection, local_port = connect_android_device(serial)
+                        android_forward = (serial, local_port)
+                    self._run_session(connection, receiver, transport)
                     session_ran = True
                     retry_delay = 0.5
                     break
@@ -587,6 +708,8 @@ class OpenDisplayUSB:
                             connection.close()
                         except OSError:
                             pass
+                    if android_forward is not None:
+                        remove_android_forward(*android_forward)
                     if session_ran and not self.stop_event.is_set():
                         self.on_connected(False, "Waiting for OpenDisplay")
 
@@ -597,7 +720,7 @@ class OpenDisplayUSB:
                 self.stop_event.wait(0.5)
                 continue
             detail = "; ".join(errors[:2]) or "receiver unavailable"
-            status = f"Open OpenDisplay on the iPad ({detail})"
+            status = f"Open OpenDisplay on the connected iPad or Android device ({detail})"
             if status != last_status:
                 self.on_connected(False, status)
                 last_status = status

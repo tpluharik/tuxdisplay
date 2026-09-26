@@ -1,6 +1,6 @@
-.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.7" "User Commands"
+.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.8" "User Commands"
 .SH NAME
-tuxdisplay \- use an iPad as a secondary Linux display
+tuxdisplay \- use an iPad or Android tablet as a secondary Linux display
 .SH SYNOPSIS
 .B tuxdisplay
 .RI [ command ]
@@ -16,16 +16,17 @@ tuxdisplay \- use an iPad as a secondary Linux display
 .SH DESCRIPTION
 .B TuxDisplay
 creates a compositor-owned virtual monitor in a GNOME Wayland session and
-streams it to the OpenDisplay iPad app through usbmuxd. This direct USB mode
-requires no IP address, Internet connection, Wi-Fi, cellular service, or
-Personal Hotspot. Windows can be moved between the physical display and iPad.
+streams it to a compatible OpenDisplay app. iPadOS uses usbmuxd and Android
+uses a device-scoped ADB port forward. This direct USB mode requires no IP
+address, Internet connection, Wi-Fi, cellular service, or tethering. Windows
+can be moved between the physical display and tablet.
 .PP
 An authenticated browser viewer is available on trusted private networks.
 Xorg and unsupported Wayland compositors use an isolated X11/noVNC workspace;
 that workspace is not an extension of the current desktop.
 .PP
 Version 0.4.0 must not be used on GNOME Wayland because its touch path could
-abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions. Use 0.4.7 or newer.
+abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions. Use 0.4.8 or newer for Android support.
 .PP
 The GTK manager and three-state indicator are one single-instance application.
 The manager can check GitHub Releases and install a verified update after an
@@ -66,8 +67,9 @@ it in the isolated workspace.
 .TP
 .B usb connect
 Start the display if necessary and wait for OpenDisplay on a trusted,
-cable-connected iPad. When no iPad is paired, TuxDisplay may offer the optional
-USB gadget fallback on supported device-capable hardware.
+cable-connected iPad or an ADB-authorized Android device. When no receiver is
+available, TuxDisplay may offer the optional USB gadget fallback on supported
+device-capable hardware.
 .TP
 .B usb disconnect
 Stop the display connection and tear down a TuxDisplay USB gadget if one was
@@ -84,7 +86,7 @@ when a receiver is viewing.
 .TP
 .B doctor
 Check the selected display mode, required programs, networking, trusted iPad,
-and USB gadget capability.
+Android ADB authorization, and USB gadget capability.
 .SH DISPLAY MODES
 .SS GNOME Wayland
 Mutter creates a real virtual output named
@@ -92,9 +94,11 @@ Mutter creates a real virtual output named
 PipeWire captures only that output. GStreamer supplies H.264 to OpenDisplay
 and JPEG frames to the browser fallback.
 .SS OpenDisplay USB
-TuxDisplay connects through usbmuxd to OpenDisplay port 9000. Video and input
-use the public OpenDisplay version 3 framing protocol over the USB cable. No
-network interface or browser PIN is involved.
+TuxDisplay connects to OpenDisplay port 9000 through usbmuxd on iPadOS or a
+dynamically allocated ADB loopback forward on Android. Video and input use the
+public OpenDisplay version 3 framing protocol over the USB cable. No network
+interface or browser PIN is involved. Android requires USB debugging and an
+approved computer fingerprint.
 .SS Browser fallback
 GNOME Wayland serves an authenticated MJPEG viewer over HTTP. Use it only on
 a trusted private LAN or cable network.
@@ -106,9 +110,10 @@ The supported presets are 1024x768, 1280x800, 1366x768, 1920x1080,
 2048x1536, and 2160x1620. The default is 1920x1080.
 .PP
 Most traditional iPads are close to 4:3. Use 2048x1536 or 2160x1620 to reduce
-letterboxing, or 1024x768 for lower CPU and bandwidth use.
+letterboxing. Many Android tablets are close to 16:10, for which 1280x800 is
+appropriate. Use 1024x768 for lower CPU and bandwidth use.
 .PP
-Changing resolution restarts and replaces the virtual monitor. The iPad can
+Changing resolution restarts and replaces the virtual monitor. The tablet can
 show its last frame briefly, and GNOME can move windows from the removed output
 back to a physical monitor. Reopen OpenDisplay if it does not reconnect.
 .SH INPUT
@@ -170,9 +175,9 @@ systemctl --user status tuxdisplay.service
 journalctl --user -u tuxdisplay.service --since "10 minutes ago"
 .fi
 .SH SECURITY
-OpenDisplay traffic uses the operating system's trusted-device usbmuxd channel,
-but OpenDisplay protocol version 3 adds no encryption or authentication.
-Trust only computers and iPads you control.
+OpenDisplay traffic uses the operating system's trusted-device usbmuxd channel
+or a loopback-only ADB forward, but OpenDisplay protocol version 3 adds no
+encryption or authentication. Trust only computers and tablets you control.
 .PP
 The browser service listens on local interfaces and uses PIN authentication
 over ordinary HTTP. Never expose port 6080 to the public Internet or an
