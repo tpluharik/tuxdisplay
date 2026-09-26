@@ -109,6 +109,17 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertLess(run.index('self.prepare_opendisplay()'), run.index('self.start_pipeline()'))
         self.assertLess(run.index('self.start_pipeline()'), run.index('self.start_opendisplay()'))
 
+    def test_wayland_layout_is_restored_before_capture_and_changes_refresh_video(self) -> None:
+        daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"
+        text = daemon.read_text(encoding="utf-8")
+        run = text[text.index("    def run(self) -> None:") :]
+        self.assertLess(run.index("self.restore_monitor_layout()"), run.index("self.start_pipeline()"))
+        self.assertLess(run.index("self.start_layout_tracking()"), run.index("self.start_pipeline()"))
+        self.assertIn('"MonitorsChanged"', text)
+        self.assertIn("self.save_monitor_layout()", text)
+        self.assertIn("self.pipeline.set_state(Gst.State.PAUSED)", text)
+        self.assertIn("self.opendisp.recover_video()", text)
+
     def test_lid_close_sleep_inhibitor_is_opt_in_and_scoped_to_service(self) -> None:
         session = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-session"
         text = session.read_text(encoding="utf-8")

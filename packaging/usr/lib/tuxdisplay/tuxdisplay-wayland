@@ -24,6 +24,7 @@ gi.require_version("GstApp", "1.0")
 gi.require_version("GstVideo", "1.0")
 from gi.repository import Gio, GLib, Gst, GstVideo  # type: ignore  # noqa: E402
 
+from display_layout import capture_placement, current_mode_id, restore_placement  # noqa: E402
 from opendisplay_usb import OpenDisplayPointerTranslator, OpenDisplayUSB  # noqa: E402
 
 
@@ -36,6 +37,9 @@ CAST_ROOT = "/org/gnome/Mutter/ScreenCast"
 CAST_ROOT_IFACE = "org.gnome.Mutter.ScreenCast"
 CAST_SESSION_IFACE = "org.gnome.Mutter.ScreenCast.Session"
 CAST_STREAM_IFACE = "org.gnome.Mutter.ScreenCast.Stream"
+DISPLAY_DEST = "org.gnome.Mutter.DisplayConfig"
+DISPLAY_ROOT = "/org/gnome/Mutter/DisplayConfig"
+DISPLAY_IFACE = "org.gnome.Mutter.DisplayConfig"
 PROPERTIES_IFACE = "org.freedesktop.DBus.Properties"
 
 
@@ -271,6 +275,11 @@ class WaylandDisplay:
         self.stream_path = ""
         self.mapping_id = ""
         self.node_id: int | None = None
+        self.display_signal_subscription = 0
+        self.layout_change_source = 0
+        self.pipeline_resume_source = 0
+        config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
+        self.layout_path = config_home / "tuxdisplay" / "monitor-layout.json"
         self.loop = GLib.MainLoop()
         self.bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
         viewer = Path("/usr/share/tuxdisplay/wayland-viewer.html")
@@ -357,6 +366,158 @@ class WaylandDisplay:
         GLib.source_remove(timeout_id)
         if self.node_id is None:
             raise RuntimeError("Timed out waiting for Mutter's PipeWire stream")
+
+    def get_display_state(self) -> tuple[int, Any, Any, Any]:
+        serial, monitors, logical_monitors, properties = self.call(
+            DISPLAY_DEST,
+            DISPLAY_ROOT,
+            DISPLAY_IFACE,
+            "GetCurrentState",
+        ).unpack()
+        return int(serial), monitors, logical_monitors, properties
+
+    def load_monitor_layout(self) -> dict[str, Any] | None:
+        try:
+            value = json.loads(self.layout_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError, UnicodeDecodeError):
+            return None
+        return value if isinstance(value, dict) else None
+
+    def save_monitor_layout(self) -> bool:
+        """Remember Meta-0 relative to a stable physical-monitor identity."""
+        try:
+            _serial, monitors, logical_monitors, _properties = self.get_display_state()
+            placement = capture_placement(monitors, logical_monitors)
+            if placement is None:
+                return False
+            self.layout_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+            temporary = self.layout_path.with_suffix(".tmp")
+            temporary.write_text(json.dumps(placement, indent=2) + "\n", encoding="utf-8")
+            temporary.chmod(0o600)
+            temporary.replace(self.layout_path)
+            return True
+        except (GLib.Error, OSError, TypeError, ValueError) as error:
+            print(f"TuxDisplay could not remember monitor arrangement: {error}", file=sys.stderr)
+            return False
+
+    def apply_monitor_layout(self, serial: int, monitors: Any, logical_monitors: Any, properties: Any) -> None:
+        configuration = []
+        for logical in logical_monitors:
+            x, y, scale, transform, primary, monitor_specs, _logical_properties = logical
+            configured_monitors = []
+            for monitor_spec in monitor_specs:
+                mode_id = current_mode_id(monitors, monitor_spec)
+                if mode_id is None:
+                    raise RuntimeError(f"Mutter did not report an active mode for {monitor_spec[0]}")
+                configured_monitors.append((str(monitor_spec[0]), mode_id, {}))
+            configuration.append(
+                (
+                    int(x),
+                    int(y),
+                    float(scale),
+                    int(transform),
+                    bool(primary),
+                    configured_monitors,
+                )
+            )
+        layout_mode = int(unpack(properties.get("layout-mode", 1)))
+        self.call(
+            DISPLAY_DEST,
+            DISPLAY_ROOT,
+            DISPLAY_IFACE,
+            "ApplyMonitorsConfig",
+            GLib.Variant(
+                "(uua(iiduba(ssa{sv}))a{sv})",
+                (
+                    serial,
+                    1,  # Temporary: TuxDisplay persists Meta-0's stable relative placement itself.
+                    configuration,
+                    {"layout-mode": GLib.Variant("u", layout_mode)},
+                ),
+            ),
+        )
+
+    def restore_monitor_layout(self) -> None:
+        """Place a newly identified virtual monitor where the user left it."""
+        placement = self.load_monitor_layout()
+        if placement is None:
+            return
+        try:
+            serial, monitors, logical_monitors, properties = self.get_display_state()
+            restored = restore_placement(monitors, logical_monitors, placement)
+            if restored is None:
+                return
+            self.apply_monitor_layout(serial, monitors, restored, properties)
+            print("TuxDisplay restored the saved virtual-monitor arrangement", file=sys.stderr, flush=True)
+        except (GLib.Error, RuntimeError, TypeError, ValueError) as error:
+            # A missing dock/anchor must never stop the display from starting.
+            print(f"TuxDisplay could not restore monitor arrangement: {error}", file=sys.stderr)
+
+    def start_layout_tracking(self) -> None:
+        def monitors_changed(
+            _connection: Gio.DBusConnection,
+            _sender: str,
+            _path: str,
+            _interface: str,
+            _signal: str,
+            _values: GLib.Variant,
+        ) -> None:
+            if self.stopping:
+                return
+            if self.layout_change_source:
+                GLib.source_remove(self.layout_change_source)
+            self.layout_change_source = GLib.timeout_add(650, self.handle_monitor_layout_changed)
+
+        self.display_signal_subscription = self.bus.signal_subscribe(
+            DISPLAY_DEST,
+            DISPLAY_IFACE,
+            "MonitorsChanged",
+            DISPLAY_ROOT,
+            None,
+            Gio.DBusSignalFlags.NONE,
+            monitors_changed,
+        )
+        # Establish a first preference for new installations. Later signals
+        # replace it with the user's chosen position.
+        self.save_monitor_layout()
+
+    def handle_monitor_layout_changed(self) -> bool:
+        self.layout_change_source = 0
+        if self.stopping:
+            return GLib.SOURCE_REMOVE
+        self.save_monitor_layout()
+        self.refresh_capture_after_layout_change()
+        return GLib.SOURCE_REMOVE
+
+    def refresh_capture_after_layout_change(self) -> None:
+        """Make PipeWire emit a fresh frame without recreating Meta-0."""
+        self.last_capture_timestamp = -1
+        if self.pipeline is None:
+            return
+        print("TuxDisplay monitor arrangement changed; refreshing the video stream", file=sys.stderr, flush=True)
+        if self.pipeline_resume_source:
+            GLib.source_remove(self.pipeline_resume_source)
+            self.pipeline_resume_source = 0
+        result = self.pipeline.set_state(Gst.State.PAUSED)
+        if result == Gst.StateChangeReturn.FAILURE:
+            self.force_keyframe()
+            return
+        self.pipeline_resume_source = GLib.timeout_add(120, self.resume_capture_after_layout_change)
+
+    def resume_capture_after_layout_change(self) -> bool:
+        self.pipeline_resume_source = 0
+        if self.stopping or self.pipeline is None:
+            return GLib.SOURCE_REMOVE
+        result = self.pipeline.set_state(Gst.State.PLAYING)
+        if result == Gst.StateChangeReturn.FAILURE:
+            self.fatal_error = "video pipeline could not resume after the monitor arrangement changed"
+            self.loop.quit()
+            return GLib.SOURCE_REMOVE
+        if self.opendisp is not None:
+            self.opendisp.recover_video()
+        else:
+            self.force_keyframe()
+        return GLib.SOURCE_REMOVE
 
     def start_pipeline(self) -> None:
         Gst.init(None)
@@ -738,6 +899,15 @@ class WaylandDisplay:
             self.write_client_state()
         with self.frame_ready:
             self.frame_ready.notify_all()
+        if self.layout_change_source:
+            GLib.source_remove(self.layout_change_source)
+            self.layout_change_source = 0
+        if self.pipeline_resume_source:
+            GLib.source_remove(self.pipeline_resume_source)
+            self.pipeline_resume_source = 0
+        if self.display_signal_subscription:
+            self.bus.signal_unsubscribe(self.display_signal_subscription)
+            self.display_signal_subscription = 0
         if self.pipeline is not None:
             self.pipeline.set_state(Gst.State.NULL)
             self.pipeline = None
@@ -760,6 +930,8 @@ class WaylandDisplay:
         try:
             self.write_client_state()
             self.create_monitor()
+            self.restore_monitor_layout()
+            self.start_layout_tracking()
             self.prepare_opendisplay()
             self.start_pipeline()
             self.start_opendisplay()

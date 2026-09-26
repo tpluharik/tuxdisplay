@@ -1,3 +1,14 @@
+tuxdisplay (0.4.9) unstable; urgency=high
+
+  * Remember the virtual monitor relative to a stable physical display so its
+    arrangement survives TuxDisplay restarts and Mutter's changing Meta-0 ID.
+  * Observe GNOME monitor-topology changes and refresh the existing PipeWire
+    capture in place instead of leaving OpenDisplay on a frozen frame.
+  * Gate the refreshed H.264 prediction chain on a new IDR while showing the
+    cached frame during the short capture transition.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Sat, 26 Sep 2026 15:30:00 +0200
+
 tuxdisplay (0.4.8) unstable; urgency=medium
 
   * Add Android OpenDisplay receiver discovery through ADB and create a

@@ -127,6 +127,25 @@ class OpenDisplayProtocolTests(unittest.TestCase):
         self.assertEqual(sender.video_queue.qsize(), 2)
         self.assertFalse(sender.waiting_for_idr)
 
+    def test_topology_recovery_primes_cached_frame_and_requests_fresh_idr(self) -> None:
+        recoveries = []
+        sender = MODULE.OpenDisplayUSB(
+            1920,
+            1080,
+            30,
+            lambda _message: None,
+            lambda _connected, _status: None,
+            lambda: recoveries.append("idr"),
+        )
+        keyframe = b"\x00\x00\x00\x01\x67sps\x00\x00\x00\x01\x68pps\x00\x00\x00\x01\x65idr"
+        sender.submit_video(keyframe, 1)
+
+        sender.recover_video()
+
+        self.assertEqual(recoveries, ["idr"])
+        self.assertTrue(sender.waiting_for_idr)
+        self.assertEqual(sender.video_queue.qsize(), 1)
+
     def test_invalid_protocol_version_is_a_recoverable_connection_error(self) -> None:
         packet = MODULE.encode_frame(json.dumps({"type": "hello", "pv": None}).encode())
 

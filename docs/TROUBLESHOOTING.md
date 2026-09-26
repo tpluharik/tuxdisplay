@@ -14,14 +14,14 @@ The first three commands are safe to paste into a bug report. Review logs before
 
 ## Do not run 0.4.0 on GNOME Wayland
 
-TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. TuxDisplay 0.4.3 could reject GNOME's negotiated PipeWire rate, while 0.4.4 could periodically reconnect a healthy low-FPS stream. Upgrade to 0.4.8 or newer:
+TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. TuxDisplay 0.4.3 could reject GNOME's negotiated PipeWire rate, while 0.4.4 could periodically reconnect a healthy low-FPS stream. Upgrade to 0.4.9 or newer:
 
 ~~~sh
-sudo apt install ./tuxdisplay_0.4.8_all.deb
+sudo apt install ./tuxdisplay_0.4.9_all.deb
 tuxdisplay restart
 ~~~
 
-Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate. Version 0.4.5 prevents false watchdog reconnects on quiet or low-FPS desktops. Version 0.4.6 adds optional closed-lid operation. Version 0.4.7 unifies the desktop application and adds verified in-app updates. Version 0.4.8 adds Android OpenDisplay over an ADB USB tunnel.
+Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate. Version 0.4.5 prevents false watchdog reconnects on quiet or low-FPS desktops. Version 0.4.6 adds optional closed-lid operation. Version 0.4.7 unifies the desktop application and adds verified in-app updates. Version 0.4.8 adds Android OpenDisplay over an ADB USB tunnel. Version 0.4.9 remembers monitor placement and refreshes capture after a GNOME display-layout change.
 
 ## OpenDisplay shows a black screen
 
@@ -55,14 +55,20 @@ Enable **Keep awake with lid closed** in the TuxDisplay manager. The manager res
 
 The inhibitor is released when TuxDisplay stops. It intentionally blocks manual and idle suspend as well as lid-triggered sleep, but firmware thermal protection and critical-battery handling may still shut down or suspend the computer. Keep a closed laptop ventilated.
 
-## The image freezes after changing resolution
+## The image freezes after rearranging displays
+
+Version 0.4.9 listens for GNOME monitor-topology changes and refreshes the existing PipeWire and OpenDisplay stream in place. It also saves `Meta-0` relative to the nearest physical monitor, so a new virtual-monitor identity can return to the same side and offset after restart. Upgrade if rearranging screens leaves the tablet on its previous frame.
+
+On 0.4.9 or newer, wait about one second after pressing **Apply** in GNOME Displays. The log should contain `monitor arrangement changed; refreshing the video stream`. If the image remains frozen, run `tuxdisplay restart` and include the service log in a bug report.
+
+## The image pauses after changing TuxDisplay resolution
 
 A resolution change restarts the virtual monitor and the video session. During that transition the tablet can continue displaying its last decoded frame.
 
 1. Wait a few seconds for the amber tray state to return.
 2. Reopen OpenDisplay if it did not reconnect.
 3. If necessary, choose **Close connection**, start TuxDisplay again, and reconnect.
-4. Look on the laptop display for applications GNOME moved away from the removed virtual output.
+4. Look on the laptop display for applications GNOME moved away from the removed virtual output. TuxDisplay will restore the saved monitor placement when `Meta-0` returns.
 
 This is a lifecycle limitation, not a tablet network problem. Dynamic in-place mode switching is not implemented.
 

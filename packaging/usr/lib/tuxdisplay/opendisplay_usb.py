@@ -265,7 +265,7 @@ def list_usb_devices() -> list[dict[str, Any]]:
             connection,
             {
                 "MessageType": "ListDevices",
-                "ClientVersionString": "tuxdisplay-0.4.8",
+                "ClientVersionString": "tuxdisplay-0.4.9",
                 "ProgName": "tuxdisplay",
                 "kLibUSBMuxVersion": 3,
             },
@@ -293,7 +293,7 @@ def connect_usb_device(device_id: int, port: int = OPENDISPLAY_PORT) -> socket.s
             connection,
             {
                 "MessageType": "Connect",
-                "ClientVersionString": "tuxdisplay-0.4.8",
+                "ClientVersionString": "tuxdisplay-0.4.9",
                 "ProgName": "tuxdisplay",
                 "DeviceID": int(device_id),
                 # usbmuxd's plist protocol carries the TCP port in network order.
@@ -479,6 +479,10 @@ class OpenDisplayUSB:
     def _request_recovery_keyframe(self, prime_cached: bool = False) -> None:
         self._reset_video_stream(prime_cached=prime_cached)
         self.request_keyframe()
+
+    def recover_video(self) -> None:
+        """Refresh a live receiver after the desktop monitor topology changes."""
+        self._request_recovery_keyframe(prime_cached=True)
 
     def _send_packet(self, payload: bytes) -> None:
         with self.connection_lock:

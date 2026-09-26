@@ -12,7 +12,7 @@ The Debian package also includes:
 - an optional USB Ethernet gadget helper for hardware with a device-capable USB controller.
 
 > [!IMPORTANT]
-> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, and 0.4.4 can unnecessarily reconnect a healthy low-FPS OpenDisplay session. Install 0.4.8 or newer for Android support.
+> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, and 0.4.4 can unnecessarily reconnect a healthy low-FPS OpenDisplay session. Install 0.4.9 or newer for remembered monitor arrangement and layout-change recovery.
 
 ## Documentation
 
@@ -39,6 +39,7 @@ The packaged and tested target is Debian/Ubuntu. Direct OpenDisplay uses usbmuxd
 - A real `Meta-0` extended monitor on GNOME Wayland.
 - Direct OpenDisplay USB through Apple usbmuxd or an Android ADB tunnel.
 - H.264 video with reconnect, periodic IDR frames, and cached keyframe recovery.
+- Remembered tablet placement and in-place video refresh after GNOME display rearrangement.
 - Tap, drag, and scroll input from OpenDisplay, plus Apple Pencil-as-pointer on iPadOS.
 - Pointer, scroll, touch, and keyboard input in the browser fallback.
 - Gray stopped, amber waiting, and green connected tray states.
@@ -54,7 +55,7 @@ Download the current `.deb` and `SHA256SUMS` from [GitHub Releases](https://gith
 
 ~~~sh
 sha256sum --ignore-missing --check SHA256SUMS
-sudo apt install ./tuxdisplay_0.4.8_all.deb
+sudo apt install ./tuxdisplay_0.4.9_all.deb
 ~~~
 
 The checksum file can include packages from several releases. The checksum for the package being installed must report `OK`.
@@ -92,7 +93,7 @@ The manager checks GitHub Releases after it starts and shows **Install update** 
 
 Before requesting system authentication, TuxDisplay requires the exact versioned Debian package and `SHA256SUMS` from the official release, restricts downloads to HTTPS GitHub hosts, verifies the SHA-256 checksum and any GitHub asset digest, and checks the package name, version, and architecture. Installation uses the normal system package manager so dependencies and upgrades remain tracked by Debian/Ubuntu. Restart TuxDisplay from the offered button after installation.
 
-Change the monitor arrangement in **Settings → Displays** if the virtual output is not on the expected edge.
+Change the monitor arrangement in **Settings → Displays** if the virtual output is not on the expected edge. TuxDisplay remembers `Meta-0` relative to the nearest physical monitor and reapplies that placement the next time the virtual monitor is created. Rearranging screens refreshes the active video stream without disconnecting the tablet.
 
 ## Resolution and tablet aspect ratio
 
@@ -109,7 +110,7 @@ Choose a preset in the manager before starting or reconnecting:
 
 TuxDisplay does not yet read the receiver's aspect ratio and select a mode automatically. A 4:3 preset fills most traditional iPad panels more closely than 16:9 or 16:10; many Android tablets fit a 16:10 preset better. A browser may still reserve chrome or apply safe-area insets.
 
-Changing resolution restarts the virtual monitor. The image will pause briefly, OpenDisplay will reconnect, and GNOME may move windows from the removed virtual monitor back to the laptop display. Move them back after the new monitor appears. If the tablet keeps the last frame, reopen OpenDisplay or use **Close connection**, then start again.
+Changing resolution still restarts the virtual monitor because Mutter cannot change that virtual mode in place. The image pauses briefly and OpenDisplay reconnects, but TuxDisplay reapplies the saved relative placement when the monitor returns. GNOME may move windows from the removed output to a physical monitor during the restart; move them back after `Meta-0` appears.
 
 ## Closed-lid operation
 
@@ -188,7 +189,7 @@ python3 -m unittest discover -s tests -v
 ./build-deb.sh
 ~~~
 
-The package is written to `dist/tuxdisplay_0.4.8_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
+The package is written to `dist/tuxdisplay_0.4.9_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
 
 Development and release conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 

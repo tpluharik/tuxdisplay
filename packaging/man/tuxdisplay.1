@@ -1,4 +1,4 @@
-.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.8" "User Commands"
+.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.9" "User Commands"
 .SH NAME
 tuxdisplay \- use an iPad or Android tablet as a secondary Linux display
 .SH SYNOPSIS
@@ -26,7 +26,7 @@ Xorg and unsupported Wayland compositors use an isolated X11/noVNC workspace;
 that workspace is not an extension of the current desktop.
 .PP
 Version 0.4.0 must not be used on GNOME Wayland because its touch path could
-abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions. Use 0.4.8 or newer for Android support.
+abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions. Use 0.4.9 or newer for remembered monitor arrangement and stream refresh after layout changes.
 .PP
 The GTK manager and three-state indicator are one single-instance application.
 The manager can check GitHub Releases and install a verified update after an
@@ -93,6 +93,11 @@ Mutter creates a real virtual output named
 .BR Meta-0 .
 PipeWire captures only that output. GStreamer supplies H.264 to OpenDisplay
 and JPEG frames to the browser fallback.
+.PP
+TuxDisplay remembers Meta-0 relative to the nearest physical monitor because
+Mutter gives each new virtual output a different identity. Rearranging displays
+in GNOME saves that placement and refreshes the live capture without removing
+the virtual monitor or USB connection.
 .SS OpenDisplay USB
 TuxDisplay connects to OpenDisplay port 9000 through usbmuxd on iPadOS or a
 dynamically allocated ADB loopback forward on Android. Video and input use the
@@ -115,7 +120,8 @@ appropriate. Use 1024x768 for lower CPU and bandwidth use.
 .PP
 Changing resolution restarts and replaces the virtual monitor. The tablet can
 show its last frame briefly, and GNOME can move windows from the removed output
-back to a physical monitor. Reopen OpenDisplay if it does not reconnect.
+back to a physical monitor. TuxDisplay restores the saved relative placement
+when Meta-0 returns. Reopen OpenDisplay if it does not reconnect.
 .SH INPUT
 OpenDisplay touch and Apple Pencil events are translated into a guarded
 single-pointer stream. Tap, drag, pointer movement, and scrolling are

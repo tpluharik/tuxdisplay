@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.8. The project has two display backends and four receiver paths. Only the GNOME Wayland backend extends the user's current desktop.
+This document describes TuxDisplay 0.4.9. The project has two display backends and four receiver paths. Only the GNOME Wayland backend extends the user's current desktop.
 
 ## GNOME Wayland data flow
 
@@ -24,6 +24,10 @@ OpenDisplay touch / Pencil / scroll
 ### Virtual monitor
 
 `tuxdisplay-wayland` asks Mutter's display configuration API to create a virtual monitor with the configured width and height. GNOME owns the output and exposes it to normal display settings, so windows can be moved between physical monitors and `Meta-0`.
+
+Mutter assigns a new serial number to each virtual output, so GNOME's normal monitor configuration cannot identify the next `Meta-0` as the same device. TuxDisplay stores the tablet's side and offset relative to the nearest stable physical-monitor identity in `~/.config/tuxdisplay/monitor-layout.json`. On the next start it reapplies that relative placement while preserving the current physical-monitor layout. If the saved anchor is absent, startup continues with Mutter's default placement.
+
+The daemon observes Mutter's `MonitorsChanged` signal. After a user rearranges screens, it debounces the topology update, saves the new relative placement, briefly cycles the existing PipeWire pipeline through paused/playing state, and requests a fresh OpenDisplay IDR. The virtual monitor and USB session remain alive; a cached keyframe covers the short refresh transition.
 
 Creating and removing the monitor changes the GNOME monitor topology. A resolution change therefore removes the old output and creates a new one; applications on the removed output may be returned to a physical monitor.
 
