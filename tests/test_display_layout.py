@@ -25,7 +25,7 @@ def monitor(spec: tuple[str, str, str, str], mode_id: str, width: int, height: i
                 height,
                 60.0,
                 1.0,
-                [1.0],
+                [1.0, 1.5, 1.6666666269302368],
                 {"is-current": True, "is-preferred": True},
             )
         ],
@@ -39,6 +39,7 @@ def logical(x: int, y: int, scale: float, primary: bool, spec: tuple[str, str, s
 
 class DisplayLayoutTests(unittest.TestCase):
     laptop = ("eDP-1", "BOE", "Internal Panel", "internal")
+    side_monitor = ("DP-8", "AOP", "22SA2Q", "441301EC42X00")
     external = ("HDMI-1", "DEL", "U2720Q", "ABC123")
     old_virtual = ("Meta-0", "MetaVendor", "Virtual remote monitor", "0x000005")
     new_virtual = ("Meta-0", "MetaVendor", "Virtual remote monitor", "0x000006")
@@ -150,6 +151,45 @@ class DisplayLayoutTests(unittest.TestCase):
 
         self.assertIsNotNone(restored)
         self.assertEqual(restored[2][:2], (50, 2160))
+
+    def test_complete_layout_restores_physical_and_virtual_positions_together(self) -> None:
+        monitors = [
+            monitor(self.side_monitor, "1920x1080@60", 1920, 1080),
+            monitor(self.external, "3840x2160@60", 3840, 2160),
+            monitor(self.laptop, "2880x1800@60", 2880, 1800),
+            monitor(self.old_virtual, "2048x1536@30", 2048, 1536),
+        ]
+        desired = [
+            logical(4480, 0, 1.0, False, self.old_virtual),
+            logical(0, 0, 1.0, False, self.side_monitor),
+            logical(2752, 1440, 1.6666666269302368, True, self.laptop),
+            logical(1920, 0, 1.5, False, self.external),
+        ]
+        saved = MODULE.capture_layout(monitors, desired)
+        self.assertEqual(saved["version"], 2)
+
+        new_monitors = [
+            monitor(self.side_monitor, "1920x1080@60", 1920, 1080),
+            monitor(self.external, "3840x2160@60", 3840, 2160),
+            monitor(self.laptop, "2880x1800@60", 2880, 1800),
+            monitor(self.new_virtual, "2048x1536@30", 2048, 1536),
+        ]
+        default = [
+            logical(0, 0, 1.6666666269302368, True, self.laptop),
+            logical(1728, 0, 1.0, False, self.side_monitor),
+            logical(3648, 0, 1.5, False, self.external),
+            logical(6208, 0, 1.0, False, self.new_virtual),
+        ]
+
+        restored = MODULE.restore_layout(new_monitors, default, saved)
+
+        self.assertIsNotNone(restored)
+        positions = {item[5][0][0]: item[:5] for item in restored}
+        self.assertEqual(positions["DP-8"][:2], (0, 0))
+        self.assertEqual(positions["HDMI-1"][:2], (1920, 0))
+        self.assertEqual(positions["eDP-1"][:2], (2752, 1440))
+        self.assertEqual(positions["Meta-0"][:2], (4480, 0))
+        self.assertTrue(positions["eDP-1"][4])
 
     def test_mirrored_virtual_monitor_is_not_saved(self) -> None:
         mirrored = [(0, 0, 1.0, 0, True, [self.laptop, self.old_virtual], {})]

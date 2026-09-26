@@ -117,8 +117,12 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertLess(run.index("self.start_layout_tracking()"), run.index("self.start_pipeline()"))
         self.assertIn('"MonitorsChanged"', text)
         self.assertIn("self.save_monitor_layout()", text)
-        self.assertIn("self.pipeline.set_state(Gst.State.PAUSED)", text)
         self.assertIn("self.opendisp.recover_video()", text)
+        refresh = text[text.index("    def refresh_capture_after_layout_change(self) -> None:") :]
+        refresh = refresh[: refresh.index("    def start_pipeline(self) -> None:")]
+        self.assertIn("previous_pipeline.set_state(Gst.State.NULL)", refresh)
+        self.assertIn("self.start_pipeline()", refresh)
+        self.assertNotIn("Gst.State.PAUSED", refresh)
 
     def test_lid_close_sleep_inhibitor_is_opt_in_and_scoped_to_service(self) -> None:
         session = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-session"

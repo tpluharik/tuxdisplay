@@ -1,3 +1,24 @@
+tuxdisplay (0.4.11) unstable; urgency=critical
+
+  * Reopen the PipeWire capture pipeline after Mutter applies a topology
+    change while preserving the virtual monitor and OpenDisplay USB session.
+  * Persist the complete logical monitor layout under stable hardware
+    identities so restoring Meta-0 cannot overlap a physical monitor.
+  * Validate every restored scale and rectangle before asking Mutter to apply
+    the saved configuration, falling back safely when hardware has changed.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Sat, 26 Sep 2026 12:45:00 +0200
+
+tuxdisplay (0.4.10) unstable; urgency=critical
+
+  * Stop pausing and resuming the live GStreamer pipeline after GNOME monitor
+    arrangement changes because PipeWire can leave that transition pending.
+  * Refresh OpenDisplay through the existing cached-frame and fresh-IDR path,
+    preserving both the virtual monitor and USB connection.
+  * Restore prompt service shutdown after a display arrangement change.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Sat, 26 Sep 2026 12:30:00 +0200
+
 tuxdisplay (0.4.9) unstable; urgency=high
 
   * Remember the virtual monitor relative to a stable physical display so its

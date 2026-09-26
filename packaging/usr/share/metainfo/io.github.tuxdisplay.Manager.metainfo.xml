@@ -21,6 +21,25 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.11" date="2026-09-26">
+      <description>
+        <ul>
+          <li>Reopen capture on the same PipeWire node after topology changes.</li>
+          <li>Restore the complete monitor layout under stable identities.</li>
+          <li>Validate saved geometry before applying it through Mutter.</li>
+          <li>Prevent restored tablet placement from overlapping another display.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.4.10" date="2026-09-26">
+      <description>
+        <ul>
+          <li>Keep PipeWire running while GNOME display positions change.</li>
+          <li>Refresh OpenDisplay without a GStreamer state transition.</li>
+          <li>Prevent frozen video and slow shutdown after rearrangement.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.9" date="2026-09-26">
       <description>
         <ul>

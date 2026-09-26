@@ -14,14 +14,14 @@ The first three commands are safe to paste into a bug report. Review logs before
 
 ## Do not run 0.4.0 on GNOME Wayland
 
-TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. TuxDisplay 0.4.3 could reject GNOME's negotiated PipeWire rate, while 0.4.4 could periodically reconnect a healthy low-FPS stream. Upgrade to 0.4.9 or newer:
+TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. TuxDisplay 0.4.3 could reject GNOME's negotiated PipeWire rate, 0.4.4 could periodically reconnect a healthy low-FPS stream, and 0.4.9 could leave the GStreamer pipeline in a pending state after displays were rearranged. Upgrade to 0.4.11 or newer:
 
 ~~~sh
-sudo apt install ./tuxdisplay_0.4.9_all.deb
+sudo apt install ./tuxdisplay_0.4.11_all.deb
 tuxdisplay restart
 ~~~
 
-Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate. Version 0.4.5 prevents false watchdog reconnects on quiet or low-FPS desktops. Version 0.4.6 adds optional closed-lid operation. Version 0.4.7 unifies the desktop application and adds verified in-app updates. Version 0.4.8 adds Android OpenDisplay over an ADB USB tunnel. Version 0.4.9 remembers monitor placement and refreshes capture after a GNOME display-layout change.
+Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate. Version 0.4.5 prevents false watchdog reconnects on quiet or low-FPS desktops. Version 0.4.6 adds optional closed-lid operation. Version 0.4.7 unifies the desktop application and adds verified in-app updates. Version 0.4.8 adds Android OpenDisplay over an ADB USB tunnel. Version 0.4.9 introduced monitor-placement persistence. Version 0.4.10 keeps PipeWire running during layout refresh. Version 0.4.11 restores the complete validated layout instead of reconstructing the tablet from one anchor.
 
 ## OpenDisplay shows a black screen
 
@@ -57,9 +57,9 @@ The inhibitor is released when TuxDisplay stops. It intentionally blocks manual 
 
 ## The image freezes after rearranging displays
 
-Version 0.4.9 listens for GNOME monitor-topology changes and refreshes the existing PipeWire and OpenDisplay stream in place. It also saves `Meta-0` relative to the nearest physical monitor, so a new virtual-monitor identity can return to the same side and offset after restart. Upgrade if rearranging screens leaves the tablet on its previous frame.
+Version 0.4.11 listens for GNOME monitor-topology changes, saves the complete logical layout under stable monitor identities, and reopens capture on the same Mutter PipeWire node. It keeps the virtual monitor and USB connection alive, primes OpenDisplay with a cached frame, and requests a fresh H.264 keyframe. Upgrade if rearranging screens leaves the tablet on its previous frame.
 
-On 0.4.9 or newer, wait about one second after pressing **Apply** in GNOME Displays. The log should contain `monitor arrangement changed; refreshing the video stream`. If the image remains frozen, run `tuxdisplay restart` and include the service log in a bug report.
+On 0.4.11 or newer, wait about one second after pressing **Apply** in GNOME Displays. The log should contain `monitor arrangement changed; refreshing the video stream`. If the image remains frozen, run `tuxdisplay restart` and include the service log in a bug report.
 
 ## The image pauses after changing TuxDisplay resolution
 

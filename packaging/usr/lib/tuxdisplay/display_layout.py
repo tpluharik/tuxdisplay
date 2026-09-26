@@ -46,6 +46,7 @@ def current_modes(monitors: list[Any] | tuple[Any, ...]) -> dict[tuple[str, str,
                 "id": str(mode_id),
                 "width": int(width),
                 "height": int(height),
+                "scales": [float(_unpack(value)) for value in _scales],
             }
             if _flag(properties, "is-current"):
                 selected = candidate
@@ -138,6 +139,35 @@ def capture_placement(monitors: list[Any] | tuple[Any, ...], logical_monitors: l
     }
 
 
+def capture_layout(monitors: list[Any] | tuple[Any, ...], logical_monitors: list[Any] | tuple[Any, ...]) -> dict[str, Any] | None:
+    """Capture the complete extended layout using stable monitor identities."""
+    placement = capture_placement(monitors, logical_monitors)
+    if placement is None:
+        return None
+    saved_logicals = []
+    for logical in logical_monitors:
+        identity = _logical_spec(logical)
+        if identity is None:
+            # Mirrored groups require additional policy and are deliberately
+            # left to Mutter instead of risking an invalid configuration.
+            return None
+        saved_logicals.append(
+            {
+                "monitor": list(identity),
+                "x": int(logical[0]),
+                "y": int(logical[1]),
+                "scale": float(logical[2]),
+                "transform": int(logical[3]),
+                "primary": bool(logical[4]),
+            }
+        )
+    return {
+        "version": 2,
+        "logical_monitors": saved_logicals,
+        "virtual_placement": placement,
+    }
+
+
 def _anchor_match_score(identity: tuple[str, str, str, str], saved: tuple[str, str, str, str]) -> int:
     if identity == saved:
         return 3
@@ -223,3 +253,95 @@ def restore_placement(
     if all(int(before[0]) == int(after[0]) and int(before[1]) == int(after[1]) for before, after in zip(logical_monitors, updated)):
         return None
     return updated
+
+
+def _restore_complete_layout(
+    monitors: list[Any] | tuple[Any, ...],
+    logical_monitors: list[Any] | tuple[Any, ...],
+    saved_layout: dict[str, Any],
+) -> tuple[bool, list[Any] | None]:
+    saved_logicals = saved_layout.get("logical_monitors")
+    if not isinstance(saved_logicals, list) or len(saved_logicals) != len(logical_monitors):
+        return False, None
+
+    modes = current_modes(monitors)
+    current: list[tuple[int, Any, tuple[str, str, str, str]]] = []
+    for index, logical in enumerate(logical_monitors):
+        identity = _logical_spec(logical)
+        if identity is None or identity not in modes:
+            return False, None
+        current.append((index, logical, identity))
+
+    used: set[int] = set()
+    updated = list(logical_monitors)
+    try:
+        for saved in saved_logicals:
+            if not isinstance(saved, dict):
+                return False, None
+            saved_identity = _spec(saved["monitor"])
+            candidates = [
+                (score, index, logical, identity)
+                for index, logical, identity in current
+                if index not in used
+                if (score := _anchor_match_score(identity, saved_identity)) > 0
+            ]
+            if not candidates:
+                return False, None
+            _score, index, logical, identity = max(candidates, key=lambda item: item[0])
+            scale = float(saved["scale"])
+            supported_scales = modes[identity].get("scales", [])
+            if scale <= 0 or not any(abs(scale - candidate) < 0.001 for candidate in supported_scales):
+                return False, None
+            x = int(saved["x"])
+            y = int(saved["y"])
+            transform = int(saved["transform"])
+            if x < 0 or y < 0 or x > 100_000 or y > 100_000 or transform not in range(8):
+                return False, None
+            values = list(logical)
+            values[0] = x
+            values[1] = y
+            values[2] = scale
+            values[3] = transform
+            values[4] = bool(saved["primary"])
+            updated[index] = tuple(values)
+            used.add(index)
+    except (KeyError, TypeError, ValueError):
+        return False, None
+
+    if len(used) != len(current) or sum(bool(item[4]) for item in updated) != 1:
+        return False, None
+
+    rectangles = []
+    for logical in updated:
+        geometry = _logical_geometry(logical, modes)
+        if geometry is None:
+            return False, None
+        rectangles.append(geometry)
+    for index, first in enumerate(rectangles):
+        ax, ay, aw, ah = first
+        for bx, by, bw, bh in rectangles[index + 1 :]:
+            if min(ax + aw, bx + bw) > max(ax, bx) and min(ay + ah, by + bh) > max(ay, by):
+                return False, None
+
+    unchanged = all(
+        tuple(before[:5]) == tuple(after[:5])
+        for before, after in zip(logical_monitors, updated)
+    )
+    return True, None if unchanged else updated
+
+
+def restore_layout(
+    monitors: list[Any] | tuple[Any, ...],
+    logical_monitors: list[Any] | tuple[Any, ...],
+    saved_layout: dict[str, Any],
+) -> list[Any] | None:
+    """Restore a full stable-identity layout, with v1 placement fallback."""
+    if saved_layout.get("version") == 2:
+        matched, restored = _restore_complete_layout(monitors, logical_monitors, saved_layout)
+        if matched:
+            return restored
+        fallback = saved_layout.get("virtual_placement")
+        if isinstance(fallback, dict):
+            return restore_placement(monitors, logical_monitors, fallback)
+        return None
+    return restore_placement(monitors, logical_monitors, saved_layout)

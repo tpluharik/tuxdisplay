@@ -12,7 +12,7 @@ The Debian package also includes:
 - an optional USB Ethernet gadget helper for hardware with a device-capable USB controller.
 
 > [!IMPORTANT]
-> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, and 0.4.4 can unnecessarily reconnect a healthy low-FPS OpenDisplay session. Install 0.4.9 or newer for remembered monitor arrangement and layout-change recovery.
+> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, 0.4.4 can unnecessarily reconnect a healthy low-FPS session, and 0.4.9 can stall capture while displays are rearranged. Install 0.4.11 or newer.
 
 ## Documentation
 
@@ -55,7 +55,7 @@ Download the current `.deb` and `SHA256SUMS` from [GitHub Releases](https://gith
 
 ~~~sh
 sha256sum --ignore-missing --check SHA256SUMS
-sudo apt install ./tuxdisplay_0.4.9_all.deb
+sudo apt install ./tuxdisplay_0.4.11_all.deb
 ~~~
 
 The checksum file can include packages from several releases. The checksum for the package being installed must report `OK`.
@@ -93,7 +93,7 @@ The manager checks GitHub Releases after it starts and shows **Install update** 
 
 Before requesting system authentication, TuxDisplay requires the exact versioned Debian package and `SHA256SUMS` from the official release, restricts downloads to HTTPS GitHub hosts, verifies the SHA-256 checksum and any GitHub asset digest, and checks the package name, version, and architecture. Installation uses the normal system package manager so dependencies and upgrades remain tracked by Debian/Ubuntu. Restart TuxDisplay from the offered button after installation.
 
-Change the monitor arrangement in **Settings → Displays** if the virtual output is not on the expected edge. TuxDisplay remembers `Meta-0` relative to the nearest physical monitor and reapplies that placement the next time the virtual monitor is created. Rearranging screens refreshes the active video stream without disconnecting the tablet.
+Change the monitor arrangement in **Settings → Displays** if the virtual output is not on the expected edge. TuxDisplay remembers the complete logical layout using stable physical-monitor identities and reapplies it when Mutter creates a new `Meta-0` identity. Rearranging screens reopens capture on the same PipeWire node without recreating the virtual monitor or disconnecting the tablet.
 
 ## Resolution and tablet aspect ratio
 
@@ -189,7 +189,7 @@ python3 -m unittest discover -s tests -v
 ./build-deb.sh
 ~~~
 
-The package is written to `dist/tuxdisplay_0.4.9_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
+The package is written to `dist/tuxdisplay_0.4.11_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
 
 Development and release conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 

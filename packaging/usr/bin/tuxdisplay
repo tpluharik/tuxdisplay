@@ -24,7 +24,7 @@ import urllib.request
 
 
 APP_NAME = "TuxDisplay"
-VERSION = "0.4.9"
+VERSION = "0.4.11"
 SERVICE = "tuxdisplay.service"
 USB_GADGET_ADDRESS = "10.55.0.1"
 UPDATE_API = "https://api.github.com/repos/tpluharik/tuxdisplay/releases/latest"

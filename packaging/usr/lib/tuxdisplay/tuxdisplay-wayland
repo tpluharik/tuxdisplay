@@ -24,7 +24,7 @@ gi.require_version("GstApp", "1.0")
 gi.require_version("GstVideo", "1.0")
 from gi.repository import Gio, GLib, Gst, GstVideo  # type: ignore  # noqa: E402
 
-from display_layout import capture_placement, current_mode_id, restore_placement  # noqa: E402
+from display_layout import capture_layout, current_mode_id, restore_layout  # noqa: E402
 from opendisplay_usb import OpenDisplayPointerTranslator, OpenDisplayUSB  # noqa: E402
 
 
@@ -277,7 +277,6 @@ class WaylandDisplay:
         self.node_id: int | None = None
         self.display_signal_subscription = 0
         self.layout_change_source = 0
-        self.pipeline_resume_source = 0
         config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
         self.layout_path = config_home / "tuxdisplay" / "monitor-layout.json"
         self.loop = GLib.MainLoop()
@@ -387,12 +386,12 @@ class WaylandDisplay:
         """Remember Meta-0 relative to a stable physical-monitor identity."""
         try:
             _serial, monitors, logical_monitors, _properties = self.get_display_state()
-            placement = capture_placement(monitors, logical_monitors)
-            if placement is None:
+            layout = capture_layout(monitors, logical_monitors)
+            if layout is None:
                 return False
             self.layout_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
             temporary = self.layout_path.with_suffix(".tmp")
-            temporary.write_text(json.dumps(placement, indent=2) + "\n", encoding="utf-8")
+            temporary.write_text(json.dumps(layout, indent=2) + "\n", encoding="utf-8")
             temporary.chmod(0o600)
             temporary.replace(self.layout_path)
             return True
@@ -444,7 +443,7 @@ class WaylandDisplay:
             return
         try:
             serial, monitors, logical_monitors, properties = self.get_display_state()
-            restored = restore_placement(monitors, logical_monitors, placement)
+            restored = restore_layout(monitors, logical_monitors, placement)
             if restored is None:
                 return
             self.apply_monitor_layout(serial, monitors, restored, properties)
@@ -477,9 +476,10 @@ class WaylandDisplay:
             Gio.DBusSignalFlags.NONE,
             monitors_changed,
         )
-        # Establish a first preference for new installations. Later signals
-        # replace it with the user's chosen position.
-        self.save_monitor_layout()
+        # Establish a first preference for new installations. Preserve an
+        # existing preference if its anchor is temporarily disconnected.
+        if self.load_monitor_layout() is None:
+            self.save_monitor_layout()
 
     def handle_monitor_layout_changed(self) -> bool:
         self.layout_change_source = 0
@@ -490,34 +490,29 @@ class WaylandDisplay:
         return GLib.SOURCE_REMOVE
 
     def refresh_capture_after_layout_change(self) -> None:
-        """Make PipeWire emit a fresh frame without recreating Meta-0."""
+        """Reopen the PipeWire node without recreating Meta-0 or USB."""
         self.last_capture_timestamp = -1
-        if self.pipeline is None:
-            return
         print("TuxDisplay monitor arrangement changed; refreshing the video stream", file=sys.stderr, flush=True)
-        if self.pipeline_resume_source:
-            GLib.source_remove(self.pipeline_resume_source)
-            self.pipeline_resume_source = 0
-        result = self.pipeline.set_state(Gst.State.PAUSED)
-        if result == Gst.StateChangeReturn.FAILURE:
-            self.force_keyframe()
-            return
-        self.pipeline_resume_source = GLib.timeout_add(120, self.resume_capture_after_layout_change)
-
-    def resume_capture_after_layout_change(self) -> bool:
-        self.pipeline_resume_source = 0
-        if self.stopping or self.pipeline is None:
-            return GLib.SOURCE_REMOVE
-        result = self.pipeline.set_state(Gst.State.PLAYING)
-        if result == Gst.StateChangeReturn.FAILURE:
-            self.fatal_error = "video pipeline could not resume after the monitor arrangement changed"
+        previous_pipeline = self.pipeline
+        if previous_pipeline is not None:
+            previous_pipeline.get_bus().remove_signal_watch()
+            result = previous_pipeline.set_state(Gst.State.NULL)
+            self.pipeline = None
+            if result == Gst.StateChangeReturn.FAILURE:
+                self.fatal_error = "video pipeline could not stop after the monitor arrangement changed"
+                self.loop.quit()
+                return
+        try:
+            self.start_pipeline()
+        except (GLib.Error, RuntimeError) as error:
+            self.fatal_error = f"video pipeline could not refresh after the monitor arrangement changed: {error}"
+            print(f"TuxDisplay {self.fatal_error}", file=sys.stderr)
             self.loop.quit()
-            return GLib.SOURCE_REMOVE
+            return
         if self.opendisp is not None:
             self.opendisp.recover_video()
         else:
             self.force_keyframe()
-        return GLib.SOURCE_REMOVE
 
     def start_pipeline(self) -> None:
         Gst.init(None)
@@ -902,9 +897,6 @@ class WaylandDisplay:
         if self.layout_change_source:
             GLib.source_remove(self.layout_change_source)
             self.layout_change_source = 0
-        if self.pipeline_resume_source:
-            GLib.source_remove(self.pipeline_resume_source)
-            self.pipeline_resume_source = 0
         if self.display_signal_subscription:
             self.bus.signal_unsubscribe(self.display_signal_subscription)
             self.display_signal_subscription = 0
