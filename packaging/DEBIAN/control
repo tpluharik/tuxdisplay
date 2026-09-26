@@ -1,5 +1,5 @@
 Package: tuxdisplay
-Version: 0.4.12
+Version: 0.4.13
 Section: net
 Priority: optional
 Architecture: all
@@ -8,8 +8,9 @@ Depends: python3, python3-gi, gir1.2-gtk-3.0, gir1.2-ayatanaappindicator3-0.1, g
 Recommends: gnome-shell-extension-appindicator, firefox | chromium | chromium-browser
 Homepage: https://github.com/tpluharik/tuxdisplay
 Description: use an iPad or Android tablet as a GNOME Wayland monitor over USB
- TuxDisplay creates a real extended monitor in GNOME Wayland and streams it
- directly to a compatible OpenDisplay receiver over a normal USB cable. Apple
+ TuxDisplay creates a real extended monitor or mirrors the primary GNOME
+ Wayland screen and streams it directly to a compatible OpenDisplay receiver
+ over a normal USB cable. Apple
  devices use usbmuxd and Android devices use an ADB tunnel. No IP network or
  Internet connection is required. An authenticated browser client remains
  available on private networks. Other desktop sessions use an isolated X11

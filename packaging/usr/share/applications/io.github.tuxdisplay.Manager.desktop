@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=TuxDisplay
-Comment=Extend a GNOME Wayland desktop to a tablet over USB
+Comment=Extend or mirror a GNOME Wayland desktop to a tablet over USB
 Exec=tuxdisplay gui
 Icon=tuxdisplay
 Terminal=false

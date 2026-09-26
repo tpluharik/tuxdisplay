@@ -19,7 +19,8 @@ The X11/noVNC backend should continue to start on sessions without the required 
 | Path | Purpose |
 | --- | --- |
 | `packaging/usr/bin/tuxdisplay` | CLI, GTK manager, tray, and configuration |
-| `packaging/usr/lib/tuxdisplay/tuxdisplay-wayland` | GNOME virtual monitor, capture, browser service, and input |
+| `packaging/usr/lib/tuxdisplay/tuxdisplay-wayland` | GNOME extension/mirroring, capture, browser service, and input |
+| `packaging/usr/lib/tuxdisplay/display_source.py` | Primary-monitor selection and mirrored touch mapping |
 | `packaging/usr/lib/tuxdisplay/opendisplay_usb.py` | OpenDisplay protocol plus usbmuxd and Android ADB transports |
 | `packaging/usr/lib/tuxdisplay/tuxdisplay-session` | X11 fallback session |
 | `packaging/usr/sbin/tuxdisplay-usb` | Optional privileged gadget helper |
@@ -34,6 +35,7 @@ The X11/noVNC backend should continue to start on sessions without the required 
 python3 -m unittest discover -s tests -v
 python3 -m py_compile \
   packaging/usr/bin/tuxdisplay \
+  packaging/usr/lib/tuxdisplay/display_source.py \
   packaging/usr/lib/tuxdisplay/opendisplay_usb.py \
   packaging/usr/lib/tuxdisplay/tuxdisplay-wayland
 git diff --check
@@ -43,8 +45,8 @@ For a package candidate:
 
 ~~~sh
 ./build-deb.sh
-dpkg-deb --info dist/tuxdisplay_0.4.12_all.deb
-dpkg-deb --contents dist/tuxdisplay_0.4.12_all.deb
+dpkg-deb --info dist/tuxdisplay_0.4.13_all.deb
+dpkg-deb --contents dist/tuxdisplay_0.4.13_all.deb
 ~~~
 
 The build replaces the package for the current version and regenerates `dist/SHA256SUMS`. Do not commit a rebuilt binary unless the change is intended for a release asset.
@@ -53,7 +55,7 @@ The build replaces the package for the current version and regenerates `dist/SHA
 
 For GNOME Wayland changes:
 
-1. Start TuxDisplay and confirm `Meta-0` appears as an extended monitor.
+1. In Extend mode, start TuxDisplay and confirm `Meta-0` appears as an extended monitor.
 2. Open OpenDisplay before and after connecting the cable.
 3. Confirm the first image appears when the virtual desktop is completely static.
 4. Test disconnect and reconnect without restarting the service.
@@ -64,6 +66,7 @@ For GNOME Wayland changes:
 9. Confirm app-grid activation reuses the background tray process and shows the TuxDisplay icon.
 10. Exercise update checking with current, newer, malformed, and checksum-mismatched release fixtures; never install an unverified package.
 11. On Android, test unauthorized and authorized ADB states, receiver launch after service start, cable reconnect, and cleanup with `adb forward --list`.
+12. In Mirror mode, verify the current primary physical monitor is captured, no `Meta-0` is created, and tap/drag/scroll land correctly with both matching and mismatched aspect ratios.
 
 For fallback changes:
 

@@ -1,4 +1,4 @@
-.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.12" "User Commands"
+.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.13" "User Commands"
 .SH NAME
 tuxdisplay \- use an iPad or Android tablet as a secondary Linux display
 .SH SYNOPSIS
@@ -15,11 +15,13 @@ tuxdisplay \- use an iPad or Android tablet as a secondary Linux display
 .BR connect | disconnect | status
 .SH DESCRIPTION
 .B TuxDisplay
-creates a compositor-owned virtual monitor in a GNOME Wayland session and
-streams it to a compatible OpenDisplay app. iPadOS uses usbmuxd and Android
+creates a compositor-owned virtual monitor or captures the primary physical
+monitor in a GNOME Wayland session and streams it to a compatible OpenDisplay
+app. iPadOS uses usbmuxd and Android
 uses a device-scoped ADB port forward. This direct USB mode requires no IP
 address, Internet connection, Wi-Fi, cellular service, or tethering. Windows
-can be moved between the physical display and tablet.
+can be moved between the physical display and tablet in Extend mode. Mirror
+mode shows and controls the existing primary desktop.
 .PP
 An authenticated browser viewer is available on trusted private networks.
 Xorg and unsupported Wayland compositors use an isolated X11/noVNC workspace;
@@ -42,7 +44,7 @@ command is given.
 Start the per-user service and create the selected display backend.
 .TP
 .B stop
-Stop streaming and remove the virtual monitor or fallback workspace.
+Stop streaming and remove the virtual monitor, when present, or fallback workspace.
 .TP
 .B restart
 Stop and recreate the display. OpenDisplay and browser viewers must reconnect.
@@ -88,7 +90,7 @@ when a receiver is viewing.
 Check the selected display mode, required programs, networking, trusted iPad,
 Android ADB authorization, and USB gadget capability.
 .SH DISPLAY MODES
-.SS GNOME Wayland
+.SS GNOME Wayland Extend
 Mutter creates a real virtual output named
 .BR Meta-0 .
 PipeWire captures only that output. GStreamer supplies H.264 to OpenDisplay
@@ -99,6 +101,11 @@ monitor identities because Mutter gives each new virtual output a different
 identity. Rearranging displays in GNOME saves that layout and refreshes
 capture on the same PipeWire node without recreating the monitor or USB
 connection.
+.SS GNOME Wayland Mirror
+Mutter captures the current primary physical monitor without creating or
+reconfiguring a virtual output. TuxDisplay preserves the source aspect ratio
+inside the selected stream resolution and maps OpenDisplay touch through any
+letterbox borders to the mirrored monitor.
 .SS OpenDisplay USB
 TuxDisplay connects to OpenDisplay port 9000 through usbmuxd on iPadOS or a
 dynamically allocated ADB loopback forward on Android. Video and input use the
@@ -119,10 +126,11 @@ Most traditional iPads are close to 4:3. Use 2048x1536 or 2160x1620 to reduce
 letterboxing. Many Android tablets are close to 16:10, for which 1280x800 is
 appropriate. Use 1024x768 for lower CPU and bandwidth use.
 .PP
-Changing resolution restarts and replaces the virtual monitor. The tablet can
-show its last frame briefly, and GNOME can move windows from the removed output
-back to a physical monitor. TuxDisplay restores the saved relative placement
-when Meta-0 returns. Reopen OpenDisplay if it does not reconnect.
+Changing resolution restarts the video service. In Extend mode it also replaces
+the virtual monitor, so GNOME can move windows from the removed output back to
+a physical monitor. TuxDisplay restores the saved relative placement when
+Meta-0 returns. In Mirror mode the physical monitor remains active and only the
+encoded stream resolution changes. Reopen OpenDisplay if it does not reconnect.
 .SH INPUT
 OpenDisplay touch and Apple Pencil events are translated into a guarded
 single-pointer stream. Tap, drag, pointer movement, and scrolling are
@@ -135,6 +143,7 @@ subject to Safari and iPadOS restrictions.
 accepts:
 .PP
 .nf
+DISPLAY_MODE=extend
 RESOLUTION=1920x1080
 FPS=30
 KEEP_AWAKE_WITH_LID_CLOSED=0
@@ -142,6 +151,18 @@ DISPLAY_NUMBER=48
 WEB_PORT=6080
 VNC_PORT=5900
 .fi
+.PP
+.B DISPLAY_MODE
+accepts
+.B extend
+or
+.BR mirror .
+Mirror captures the current primary physical monitor and maps tablet input to
+it; Extend creates the separate Meta-0 output.
+.PP
+.B RESOLUTION
+sets the virtual-monitor mode in Extend mode and the encoded raster in Mirror
+mode.
 .PP
 .B DISPLAY_NUMBER
 and
@@ -163,7 +184,8 @@ Force the isolated X11/noVNC backend instead of GNOME Wayland mode.
 .SH FILES
 .TP
 .I ~/.config/tuxdisplay/config
-Resolution and port settings, created with private permissions.
+Display mode, resolution, frame-rate, lid behavior, and port settings, created
+with private permissions.
 .TP
 .I ~/.config/tuxdisplay/password
 Generated browser PIN.
@@ -190,9 +212,9 @@ The browser service listens on local interfaces and uses PIN authentication
 over ordinary HTTP. Never expose port 6080 to the public Internet or an
 untrusted network.
 .SH LIMITATIONS
-Native desktop extension requires GNOME Wayland. Direct OpenDisplay transport
-is currently USB-only. Encoding is software x264. Receiver dimensions are not
-used to select or dynamically resize the virtual monitor.
+Native desktop extension and primary-screen mirroring require GNOME Wayland.
+Direct OpenDisplay transport is currently USB-only. Encoding is software x264.
+Receiver dimensions are not used to select or dynamically resize the stream.
 .SH SEE ALSO
 .BR tuxdisplay-usb (8),
 .BR systemctl (1),

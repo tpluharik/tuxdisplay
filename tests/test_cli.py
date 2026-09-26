@@ -39,6 +39,7 @@ class TuxDisplayTests(unittest.TestCase):
 
     def test_default_config_is_created_privately(self) -> None:
         config = MODULE.ensure_config()
+        self.assertEqual(config["DISPLAY_MODE"], "extend")
         self.assertEqual(config["RESOLUTION"], "1920x1080")
         self.assertEqual(config["FPS"], "30")
         self.assertEqual(config["KEEP_AWAKE_WITH_LID_CLOSED"], "0")
@@ -48,6 +49,7 @@ class TuxDisplayTests(unittest.TestCase):
 
     def test_invalid_config_values_fall_back(self) -> None:
         values = {
+            "DISPLAY_MODE": "unsafe",
             "RESOLUTION": "bad;command",
             "FPS": "144",
             "KEEP_AWAKE_WITH_LID_CLOSED": "yes",
@@ -56,6 +58,7 @@ class TuxDisplayTests(unittest.TestCase):
             "VNC_PORT": "5900",
         }
         validated = MODULE.validate_config(values)
+        self.assertEqual(validated["DISPLAY_MODE"], "extend")
         self.assertEqual(validated["RESOLUTION"], "1920x1080")
         self.assertEqual(validated["FPS"], "30")
         self.assertEqual(validated["KEEP_AWAKE_WITH_LID_CLOSED"], "0")
@@ -89,6 +92,19 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertIn('"modes": GLib.Variant("aa{sv}", [mode])', text)
         self.assertIn('"size": GLib.Variant("(uu)", (self.width, self.height))', text)
         self.assertIn('"refresh-rate": GLib.Variant("d", float(self.frames_per_second))', text)
+
+    def test_wayland_mirror_mode_records_primary_monitor_and_maps_touch(self) -> None:
+        daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"
+        text = daemon.read_text(encoding="utf-8")
+        self.assertIn('if self.display_mode == "mirror":', text)
+        self.assertIn('"RecordMonitor"', text)
+        self.assertIn('primary_monitor_connector(logical_monitors)', text)
+        self.assertIn('map_letterboxed_point(', text)
+        self.assertIn('videoscale add-borders=true', text)
+        self.assertIn('"display_mode": self.display_mode', text)
+        manager = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('(\"mirror\", \"Mirror main screen\")', manager)
+        self.assertIn('configuration["DISPLAY_MODE"] = mode', manager)
 
     def test_wayland_pipeline_does_not_hold_a_damage_driven_first_frame(self) -> None:
         daemon = SCRIPT.parents[1] / 'lib' / 'tuxdisplay' / 'tuxdisplay-wayland'

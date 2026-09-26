@@ -32,6 +32,12 @@ Consequences:
 
 The PIN reduces accidental access; six digits are not a substitute for encrypted transport or a strong account credential.
 
+### Display source
+
+Extend mode captures only the compositor-owned `Meta-0` output. Mirror mode captures the complete current primary monitor, which can expose notifications, documents, messages, and other visible content already present on that screen. Switching modes requires an explicit manager selection and service restart, and the active mode is included in status output.
+
+Before using Mirror mode, close or move sensitive windows, disable notification previews when appropriate, and keep the attached tablet under your control. TuxDisplay does not attempt to identify or redact sensitive pixels.
+
 ### Privileged USB gadget helper
 
 The optional `tuxdisplay-usb` helper changes ConfigFS USB gadget state, creates a network interface, assigns `10.55.0.1/24`, and runs a private dnsmasq process. It requires root through a narrowly scoped PolicyKit action or system service.
@@ -52,7 +58,7 @@ The Debian package installs system files as root-owned, while the display servic
 
 ## Input implications
 
-An attached receiver can move the pointer, click, scroll, and—in the browser path—send keyboard input. This can interact with applications under the desktop user's authority. GNOME's own permission and session boundaries still apply, but TuxDisplay should not be left connected to an untrusted receiver.
+An attached receiver can move the pointer, click, scroll, and—in the browser path—send keyboard input. In Mirror mode those events target the primary physical monitor; in Extend mode they target `Meta-0`. This can interact with applications under the desktop user's authority. GNOME's own permission and session boundaries still apply, but TuxDisplay should not be left connected to an untrusted receiver.
 
 OpenDisplay input is reduced to a guarded single-pointer stream. This protects compositor stability; it is not an authorization mechanism.
 

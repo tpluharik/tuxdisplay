@@ -1,6 +1,6 @@
 # TuxDisplay
 
-TuxDisplay turns an iPad or Android tablet into a real extended monitor for a GNOME Wayland desktop. It creates a compositor-owned virtual output, captures that output with PipeWire, and streams H.264 directly to a compatible OpenDisplay app over a normal USB data cable.
+TuxDisplay turns an iPad or Android tablet into an extended monitor or a touch-controlled mirror of the primary screen on GNOME Wayland. It captures through Mutter and PipeWire, then streams H.264 directly to a compatible OpenDisplay app over a normal USB data cable.
 
 No IP address, Internet connection, Wi-Fi, cellular service, Personal Hotspot, account, or special USB dongle is required for the preferred connection.
 
@@ -27,8 +27,8 @@ The Debian package also includes:
 
 | Host/session | Result | Preferred receiver |
 | --- | --- | --- |
-| GNOME on Wayland | Real extended monitor managed by Mutter | OpenDisplay on iPadOS or Android over direct USB |
-| GNOME on Wayland, private LAN | Real extended monitor | Safari/Chrome browser fallback |
+| GNOME on Wayland | Real extended monitor or primary-screen mirror managed by Mutter | OpenDisplay on iPadOS or Android over direct USB |
+| GNOME on Wayland, private LAN | Extended monitor or primary-screen mirror | Safari/Chrome browser fallback |
 | Xorg or another Wayland compositor | Separate isolated X11 workspace; not an extension of the current desktop | Browser/noVNC |
 | Device-capable Linux hardware | Optional USB Ethernet for the browser fallback | Browser/noVNC |
 
@@ -37,6 +37,7 @@ The packaged and tested target is Debian/Ubuntu. Direct OpenDisplay uses usbmuxd
 ## What works
 
 - A real `Meta-0` extended monitor on GNOME Wayland.
+- A touch-controlled mirror of the current primary physical monitor, without creating `Meta-0`.
 - Direct OpenDisplay USB through Apple usbmuxd or an Android ADB tunnel.
 - H.264 video with reconnect, periodic IDR frames, and cached keyframe recovery.
 - Remembered tablet placement and in-place video refresh after GNOME display rearrangement.
@@ -55,7 +56,7 @@ Download the current `.deb` and `SHA256SUMS` from [GitHub Releases](https://gith
 
 ~~~sh
 sha256sum --ignore-missing --check SHA256SUMS
-sudo apt install ./tuxdisplay_0.4.12_all.deb
+sudo apt install ./tuxdisplay_0.4.13_all.deb
 ~~~
 
 The checksum file can include packages from several releases. The checksum for the package being installed must report `OK`.
@@ -68,24 +69,26 @@ Install one compatible receiver before going offline:
 ## Connect the iPad
 
 1. Open **TuxDisplay** from the Linux application menu and start the display.
-2. Open **OpenDisplay** on the iPad.
-3. Connect the iPad with a data-capable USB cable.
-4. Unlock the iPad and choose **Trust** if prompted.
-5. Choose **Connect OpenDisplay** in TuxDisplay.
-6. Drag a window beyond the right edge of the computer display.
+2. Choose **Extend desktop** for a separate workspace or **Mirror main screen** to see and control the primary monitor.
+3. Open **OpenDisplay** on the iPad.
+4. Connect the iPad with a data-capable USB cable.
+5. Unlock the iPad and choose **Trust** if prompted.
+6. Choose **Connect OpenDisplay** in TuxDisplay.
+7. In Extend mode, drag a window onto the tablet monitor. In Mirror mode, touch the iPad to control the mirrored desktop.
 
 ## Connect Android
 
 1. On Android, enable **Developer options**, then enable **USB debugging**.
 2. Install and open **OpenDisplay Android**.
-3. Connect the tablet or phone with a data-capable USB cable.
-4. Unlock Android and approve **Allow USB debugging** for this computer. Selecting **Always allow** avoids repeating this step.
-5. Open **TuxDisplay**, start the display, and choose **Connect OpenDisplay**.
-6. Drag a window beyond the right edge of the computer display.
+3. Choose **Extend desktop** or **Mirror main screen** in TuxDisplay.
+4. Connect the tablet or phone with a data-capable USB cable.
+5. Unlock Android and approve **Allow USB debugging** for this computer. Selecting **Always allow** avoids repeating this step.
+6. Start the display and choose **Connect OpenDisplay**.
+7. In Extend mode, drag a window onto the tablet monitor. In Mirror mode, touch the tablet to control the mirrored desktop.
 
 The ADB authorization is the cable trust mechanism. TuxDisplay allocates a loopback-only host port and forwards it through ADB to OpenDisplay port 9000 on that specific Android device. After the APK and Debian dependencies are installed, this path works without Internet, Wi-Fi, tethering, or an IP address.
 
-TuxDisplay is a single application: the manager window and tray controls share one process and one connection state. The tray starts automatically at the next login. Opening TuxDisplay from the app grid brings up the existing manager instead of starting another copy. It is gray when stopped, amber while waiting for a viewer, and green while the tablet is viewing the display. **Close connection** stops streaming and removes the virtual monitor.
+TuxDisplay is a single application: the manager window and tray controls share one process and one connection state. The tray starts automatically at the next login. Opening TuxDisplay from the app grid brings up the existing manager instead of starting another copy. It is gray when stopped, amber while waiting for a viewer, and green while the tablet is viewing the display. **Close connection** stops streaming and, in Extend mode, removes the virtual monitor.
 
 ## In-app updates
 
@@ -94,6 +97,15 @@ The manager checks GitHub Releases after it starts and shows **Install update** 
 Before requesting system authentication, TuxDisplay requires the exact versioned Debian package and `SHA256SUMS` from the official release, restricts downloads to HTTPS GitHub hosts, verifies the SHA-256 checksum and any GitHub asset digest, and checks the package name, version, and architecture. Installation uses the normal system package manager so dependencies and upgrades remain tracked by Debian/Ubuntu. Restart TuxDisplay from the offered button after installation.
 
 Change the monitor arrangement in **Settings → Displays** if the virtual output is not on the expected edge. TuxDisplay remembers the complete logical layout using stable physical-monitor identities and reapplies it when Mutter creates a new `Meta-0` identity. Rearranging screens reopens capture on the same PipeWire node without recreating the virtual monitor or disconnecting the tablet.
+
+## Extend or mirror
+
+Choose a mode in the manager before starting the display:
+
+- **Extend desktop** creates a separate `Meta-0` monitor. Windows can be moved between the computer and tablet, and TuxDisplay remembers the arrangement.
+- **Mirror main screen** captures the physical monitor currently marked primary in GNOME. The tablet shows the same desktop and its tap, drag, scroll, and Pencil events control that monitor.
+
+Changing the mode while TuxDisplay is running performs one controlled service restart, then OpenDisplay reconnects automatically. Mirror mode scales the primary monitor into the selected stream resolution without cropping. If the monitor and tablet use different aspect ratios, the video is letterboxed and input coordinates are mapped only to the visible desktop area.
 
 ## Resolution and tablet aspect ratio
 
@@ -110,7 +122,7 @@ Choose a preset in the manager before starting or reconnecting:
 
 TuxDisplay does not yet read the receiver's aspect ratio and select a mode automatically. A 4:3 preset fills most traditional iPad panels more closely than 16:9 or 16:10; many Android tablets fit a 16:10 preset better. A browser may still reserve chrome or apply safe-area insets.
 
-Changing resolution still restarts the virtual monitor because Mutter cannot change that virtual mode in place. The image pauses briefly and OpenDisplay reconnects, but TuxDisplay reapplies the saved relative placement when the monitor returns. GNOME may move windows from the removed output to a physical monitor during the restart; move them back after `Meta-0` appears.
+Changing resolution restarts the display service and OpenDisplay reconnects. In Extend mode this also recreates the virtual monitor because Mutter cannot change that mode in place; TuxDisplay reapplies the saved relative placement when `Meta-0` returns. In Mirror mode the physical monitor is never removed—the selected value is only the encoded stream resolution.
 
 ## Closed-lid operation
 
@@ -151,7 +163,7 @@ The connection retries when the cable is attached or OpenDisplay is reopened. It
 
 The manager shows a **Browser fallback URL** and PIN. Open that URL in Safari only when the iPad and computer already share a trusted private network. GNOME Wayland sends an authenticated MJPEG view; the X11 compatibility mode uses authenticated noVNC/websockify.
 
-Browser fullscreen depends on Safari/iPadOS. Use TuxDisplay's in-page fullscreen control, **Add to Home Screen**, or hide Safari's toolbar where supported. Browser fullscreen does not change the virtual monitor resolution.
+Browser fullscreen depends on Safari/iPadOS. Use TuxDisplay's in-page fullscreen control, **Add to Home Screen**, or hide Safari's toolbar where supported. Browser fullscreen does not change the selected stream resolution.
 
 ### Optional USB Ethernet gadget
 
@@ -168,6 +180,7 @@ Most x86 laptop USB ports are host-only and cannot use gadget mode. This is expe
 TuxDisplay creates `~/.config/tuxdisplay/config` with private permissions:
 
 ~~~ini
+DISPLAY_MODE=extend
 RESOLUTION=1920x1080
 FPS=30
 KEEP_AWAKE_WITH_LID_CLOSED=0
@@ -176,7 +189,7 @@ WEB_PORT=6080
 VNC_PORT=5900
 ~~~
 
-`FPS` accepts `15`, `30`, or `60` and controls the requested virtual-monitor cadence, a non-buffering capture limiter, the encoder keyframe interval, and the advertised OpenDisplay cadence; `30` is the stability-oriented default. TuxDisplay accepts the actual PipeWire rate chosen by GNOME and safely drops excess frames before encoding. `KEEP_AWAKE_WITH_LID_CLOSED=1` enables the service-lifetime sleep inhibitor; the default `0` preserves normal sleep behavior. `DISPLAY_NUMBER` and `VNC_PORT` apply only to the X11 compatibility workspace. `WEB_PORT` and the PIN apply only to browser access. Restart TuxDisplay after changing a value.
+`DISPLAY_MODE` accepts `extend` or `mirror`. `FPS` accepts `15`, `30`, or `60` and controls the capture limiter, encoder keyframe interval, and advertised OpenDisplay cadence; `30` is the stability-oriented default. TuxDisplay accepts the actual PipeWire rate chosen by GNOME and safely drops excess frames before encoding. `KEEP_AWAKE_WITH_LID_CLOSED=1` enables the service-lifetime sleep inhibitor; the default `0` preserves normal sleep behavior. `DISPLAY_NUMBER` and `VNC_PORT` apply only to the X11 compatibility workspace. `WEB_PORT` and the PIN apply only to browser access. Restart TuxDisplay after changing a value.
 
 Set `TUXDISPLAY_FORCE_X11=1` in the user service environment to force the isolated X11 fallback.
 
@@ -189,7 +202,7 @@ python3 -m unittest discover -s tests -v
 ./build-deb.sh
 ~~~
 
-The package is written to `dist/tuxdisplay_0.4.12_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
+The package is written to `dist/tuxdisplay_0.4.13_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
 
 Development and release conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 

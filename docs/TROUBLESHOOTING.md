@@ -17,17 +17,17 @@ The first three commands are safe to paste into a bug report. Review logs before
 TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. TuxDisplay 0.4.3 could reject GNOME's negotiated PipeWire rate, 0.4.4 could periodically reconnect a healthy low-FPS stream, 0.4.9 could leave the GStreamer pipeline in a pending state after displays were rearranged, and 0.4.11 could repeatedly recreate the virtual monitor after a capture failure. Upgrade to 0.4.12 or newer:
 
 ~~~sh
-sudo apt install ./tuxdisplay_0.4.12_all.deb
+sudo apt install ./tuxdisplay_0.4.13_all.deb
 tuxdisplay restart
 ~~~
 
-Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate. Version 0.4.5 prevents false watchdog reconnects on quiet or low-FPS desktops. Version 0.4.6 adds optional closed-lid operation. Version 0.4.7 unifies the desktop application and adds verified in-app updates. Version 0.4.8 adds Android OpenDisplay over an ADB USB tunnel. Version 0.4.9 introduced monitor-placement persistence. Version 0.4.10 keeps PipeWire running during layout refresh. Version 0.4.11 restores the complete validated layout instead of reconstructing the tablet from one anchor. Version 0.4.12 suppresses duplicate topology events, settles real changes before refreshing capture, and prevents service failures from creating a virtual-monitor restart loop.
+Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate. Version 0.4.5 prevents false watchdog reconnects on quiet or low-FPS desktops. Version 0.4.6 adds optional closed-lid operation. Version 0.4.7 unifies the desktop application and adds verified in-app updates. Version 0.4.8 adds Android OpenDisplay over an ADB USB tunnel. Version 0.4.9 introduced monitor-placement persistence. Version 0.4.10 keeps PipeWire running during layout refresh. Version 0.4.11 restores the complete validated layout instead of reconstructing the tablet from one anchor. Version 0.4.12 suppresses duplicate topology events, settles real changes before refreshing capture, and prevents service failures from creating a virtual-monitor restart loop. Version 0.4.13 adds touch-controlled primary-screen mirroring.
 
 ## OpenDisplay shows a black screen
 
 1. Confirm `tuxdisplay status` reports GNOME Wayland mode and a running service.
 2. Confirm the package version is at least 0.4.8 when using Android.
-3. Move the pointer or a window onto `Meta-0` to create screen damage.
+3. In Extend mode, move the pointer or a window onto `Meta-0` to create screen damage. In Mirror mode, change something on the primary screen.
 4. Close and reopen OpenDisplay so the sender performs a new handshake.
 5. Run `tuxdisplay restart` if the app does not reconnect.
 
@@ -63,18 +63,24 @@ On 0.4.12 or newer, wait about two seconds after pressing **Apply** in GNOME Dis
 
 ## The image pauses after changing TuxDisplay resolution
 
-A resolution change restarts the virtual monitor and the video session. During that transition the tablet can continue displaying its last decoded frame.
+A resolution change restarts the video service. During that transition the tablet can continue displaying its last decoded frame. Extend mode also recreates the virtual monitor; Mirror mode leaves the physical monitor unchanged and only changes the encoded stream raster.
 
 1. Wait a few seconds for the amber tray state to return.
 2. Reopen OpenDisplay if it did not reconnect.
 3. If necessary, choose **Close connection**, start TuxDisplay again, and reconnect.
-4. Look on the laptop display for applications GNOME moved away from the removed virtual output. TuxDisplay will restore the saved monitor placement when `Meta-0` returns.
+4. In Extend mode, look on the laptop display for applications GNOME moved away from the removed virtual output. TuxDisplay will restore the saved monitor placement when `Meta-0` returns.
 
 This is a lifecycle limitation, not a tablet network problem. Dynamic in-place mode switching is not implemented.
 
+## Mirror mode shows the wrong monitor
+
+**Mirror main screen** captures the physical monitor marked primary in GNOME when TuxDisplay starts. Open **Settings → Displays**, select the intended monitor as primary, and restart TuxDisplay. The mirror path never selects the virtual `Meta-0` connector.
+
+If the image has borders, choose a stream resolution with an aspect ratio closer to the primary monitor. Borders preserve the complete desktop instead of cropping it. Touches inside the visible image are mapped back to the physical monitor; touching a border safely targets the nearest screen edge.
+
 ## The image does not fill the tablet
 
-The default 1920×1080 mode is 16:9. Most traditional iPads are closer to 4:3, so select 2048×1536 or 2160×1620. Many Android tablets are closer to 16:10, so try 1280×800. Use 1024×768 if performance matters more than detail.
+The default 1920×1080 mode is 16:9. Most traditional iPads are closer to 4:3, so select 2048×1536 or 2160×1620. Many Android tablets are closer to 16:10, so try 1280×800. Use 1024×768 if performance matters more than detail. In Mirror mode, the source monitor is fitted inside this stream resolution without cropping, so a source/stream aspect-ratio mismatch intentionally produces borders.
 
 TuxDisplay does not yet negotiate the receiver's native dimensions. Browser chrome and OS safe areas can also leave borders even when the aspect ratio matches.
 

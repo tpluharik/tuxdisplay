@@ -24,7 +24,7 @@ import urllib.request
 
 
 APP_NAME = "TuxDisplay"
-VERSION = "0.4.12"
+VERSION = "0.4.13"
 SERVICE = "tuxdisplay.service"
 USB_GADGET_ADDRESS = "10.55.0.1"
 UPDATE_API = "https://api.github.com/repos/tpluharik/tuxdisplay/releases/latest"
@@ -32,6 +32,7 @@ UPDATE_HOSTS = {"api.github.com", "github.com", "objects.githubusercontent.com",
 MAX_UPDATE_METADATA = 1 << 20
 MAX_UPDATE_PACKAGE = 100 << 20
 DEFAULTS = {
+    "DISPLAY_MODE": "extend",
     "RESOLUTION": "1920x1080",
     "FPS": "30",
     "KEEP_AWAKE_WITH_LID_CLOSED": "0",
@@ -39,6 +40,10 @@ DEFAULTS = {
     "WEB_PORT": "6080",
     "VNC_PORT": "5900",
 }
+DISPLAY_MODES = (
+    ("extend", "Extend desktop"),
+    ("mirror", "Mirror main screen"),
+)
 RESOLUTIONS = (
     "1024x768",
     "1280x800",
@@ -219,6 +224,8 @@ def ensure_config() -> dict[str, str]:
 
 def validate_config(values: dict[str, str]) -> dict[str, str]:
     result = dict(DEFAULTS)
+    if values.get("DISPLAY_MODE") in {mode for mode, _label in DISPLAY_MODES}:
+        result["DISPLAY_MODE"] = values["DISPLAY_MODE"]
     if re.fullmatch(r"[0-9]{3,5}x[0-9]{3,5}", values.get("RESOLUTION", "")):
         result["RESOLUTION"] = values["RESOLUTION"]
     if values.get("FPS") in {"15", "30", "60"}:
@@ -648,7 +655,9 @@ def doctor() -> int:
     else:
         commands = ("systemctl", "Xvfb", "x11vnc", "websockify", "openbox", "tint2", "ip", "adb")
     missing = [name for name in commands if not shutil_which(name)]
-    print(f"Display mode: {'native GNOME Wayland monitor' if native_wayland else 'portable X11 workspace'}")
+    configured_mode = ensure_config()["DISPLAY_MODE"]
+    wayland_description = "primary-screen mirror" if configured_mode == "mirror" else "native GNOME Wayland monitor"
+    print(f"Display mode: {wayland_description if native_wayland else 'portable X11 workspace'}")
     print(f"Service: {'running' if is_active() else 'stopped'}")
     print(f"Resolution: {ensure_config()['RESOLUTION']}")
     print(f"Frame rate: {ensure_config()['FPS']} FPS")
@@ -737,7 +746,7 @@ def run_gui(background: bool = False) -> int:
             title.set_halign(Gtk.Align.START)
             add_css_class(title, "title")
             heading.pack_start(title, False, False, 0)
-            subtitle = Gtk.Label(label="Use an iPad or Android tablet as an extended monitor on GNOME Wayland")
+            subtitle = Gtk.Label(label="Extend or mirror GNOME Wayland on an iPad or Android tablet")
             subtitle.set_halign(Gtk.Align.START)
             add_css_class(subtitle, "dim-label")
             heading.pack_start(subtitle, False, False, 0)
@@ -768,44 +777,59 @@ def run_gui(background: bool = False) -> int:
             self.pin_entry.set_visibility(True)
             grid.attach(self.pin_entry, 1, 1, 1, 1)
 
-            resolution_label = Gtk.Label(label="Resolution")
+            display_mode_label = Gtk.Label(label="Display mode")
+            display_mode_label.set_halign(Gtk.Align.END)
+            grid.attach(display_mode_label, 0, 2, 1, 1)
+            self.display_mode = Gtk.ComboBoxText()
+            for _value, label in DISPLAY_MODES:
+                self.display_mode.append_text(label)
+            configured_mode = ensure_config()["DISPLAY_MODE"]
+            configured_index = next(
+                (index for index, (value, _label) in enumerate(DISPLAY_MODES) if value == configured_mode),
+                0,
+            )
+            self.display_mode.set_active(configured_index)
+            self.display_mode.connect("changed", self.on_display_mode_changed)
+            grid.attach(self.display_mode, 1, 2, 1, 1)
+
+            resolution_label = Gtk.Label(label="Stream resolution")
             resolution_label.set_halign(Gtk.Align.END)
-            grid.attach(resolution_label, 0, 2, 1, 1)
+            grid.attach(resolution_label, 0, 3, 1, 1)
             self.resolution = Gtk.ComboBoxText()
             for resolution in RESOLUTIONS:
                 self.resolution.append_text(resolution)
             current = ensure_config()["RESOLUTION"]
             self.resolution.set_active(RESOLUTIONS.index(current) if current in RESOLUTIONS else 3)
             self.resolution.connect("changed", self.on_resolution_changed)
-            grid.attach(self.resolution, 1, 2, 1, 1)
+            grid.attach(self.resolution, 1, 3, 1, 1)
 
             frame_rate_label = Gtk.Label(label="Frame rate")
             frame_rate_label.set_halign(Gtk.Align.END)
-            grid.attach(frame_rate_label, 0, 3, 1, 1)
+            grid.attach(frame_rate_label, 0, 4, 1, 1)
             self.frame_rate = Gtk.ComboBoxText()
             for value in FRAME_RATES:
                 self.frame_rate.append_text(f"{value} FPS")
             current_fps = ensure_config()["FPS"]
             self.frame_rate.set_active(FRAME_RATES.index(current_fps) if current_fps in FRAME_RATES else 1)
             self.frame_rate.connect("changed", self.on_frame_rate_changed)
-            grid.attach(self.frame_rate, 1, 3, 1, 1)
+            grid.attach(self.frame_rate, 1, 4, 1, 1)
 
             keep_awake_label = Gtk.Label(label="Keep awake with lid closed")
             keep_awake_label.set_halign(Gtk.Align.END)
-            grid.attach(keep_awake_label, 0, 4, 1, 1)
+            grid.attach(keep_awake_label, 0, 5, 1, 1)
             self.keep_awake = Gtk.Switch()
             self.keep_awake.set_halign(Gtk.Align.START)
             self.keep_awake.set_active(ensure_config()["KEEP_AWAKE_WITH_LID_CLOSED"] == "1")
             self.keep_awake.connect("notify::active", self.on_keep_awake_changed)
-            grid.attach(self.keep_awake, 1, 4, 1, 1)
+            grid.attach(self.keep_awake, 1, 5, 1, 1)
 
             usb_label = Gtk.Label(label="USB cable")
             usb_label.set_halign(Gtk.Align.END)
-            grid.attach(usb_label, 0, 5, 1, 1)
+            grid.attach(usb_label, 0, 6, 1, 1)
             self.usb_status_label = Gtk.Label()
             self.usb_status_label.set_halign(Gtk.Align.START)
             self.usb_status_label.set_line_wrap(True)
-            grid.attach(self.usb_status_label, 1, 5, 1, 1)
+            grid.attach(self.usb_status_label, 1, 6, 1, 1)
 
             lid_note = Gtk.Label(
                 label=(
@@ -970,7 +994,15 @@ def run_gui(background: bool = False) -> int:
                 self.show_message("Enter an application command first.")
                 return
             result = launch(command)
-            self.show_message("Application launched. Drag its window to the tablet monitor." if result == 0 else "The application could not be launched.")
+            if result == 0:
+                message = (
+                    "Application launched on the mirrored desktop."
+                    if ensure_config()["DISPLAY_MODE"] == "mirror"
+                    else "Application launched. Drag its window to the tablet monitor."
+                )
+            else:
+                message = "The application could not be launched."
+            self.show_message(message)
 
         def on_resolution_changed(self, dropdown: Gtk.ComboBoxText) -> None:
             selected = dropdown.get_active()
@@ -983,6 +1015,23 @@ def run_gui(background: bool = False) -> int:
             save_config(configuration)
             if is_active():
                 self.schedule_display_restart("Resolution")
+
+        def on_display_mode_changed(self, dropdown: Gtk.ComboBoxText) -> None:
+            selected = dropdown.get_active()
+            if not 0 <= selected < len(DISPLAY_MODES):
+                return
+            configuration = ensure_config()
+            mode = DISPLAY_MODES[selected][0]
+            if configuration["DISPLAY_MODE"] == mode:
+                return
+            configuration["DISPLAY_MODE"] = mode
+            save_config(configuration)
+            if is_active():
+                self.schedule_display_restart("Display mode")
+            elif mode == "mirror":
+                self.show_message("Mirror mode will show and control the current primary screen.")
+            else:
+                self.show_message("Extend mode will create a separate tablet monitor.")
 
         def on_frame_rate_changed(self, dropdown: Gtk.ComboBoxText) -> None:
             selected = dropdown.get_active()
@@ -1269,7 +1318,11 @@ def print_status() -> int:
         mode = mode_path.read_text(encoding="utf-8").strip()
     except OSError:
         mode = "unknown"
-    labels = {"wayland": "native GNOME Wayland extended monitor", "x11": "portable X11 workspace"}
+    configured_mode = ensure_config()["DISPLAY_MODE"]
+    labels = {
+        "wayland": "GNOME Wayland primary-screen mirror" if configured_mode == "mirror" else "native GNOME Wayland extended monitor",
+        "x11": "portable X11 workspace",
+    }
     print(f"Mode: {labels.get(mode, mode)}")
     print(f"Frame rate: {ensure_config()['FPS']} FPS")
     print(

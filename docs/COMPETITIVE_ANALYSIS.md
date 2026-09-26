@@ -2,7 +2,7 @@
 
 **Snapshot date:** 2026-09-26
 
-TuxDisplay serves a narrow combination that many second-display products do not: a Debian/Ubuntu GNOME Wayland host, an iPadOS or Android receiver, a real extended desktop, and operation through an ordinary USB data cable without Internet access or IP networking.
+TuxDisplay serves a narrow combination that many second-display products do not: a Debian/Ubuntu GNOME Wayland host, an iPadOS or Android receiver, a real extended desktop or touch-controlled primary-screen mirror, and operation through an ordinary USB data cable without Internet access or IP networking.
 
 This is a feature and positioning review based on public first-party documentation. It is not a latency, image-quality, battery, or reliability benchmark. Commercial pricing changes frequently and is intentionally not reproduced here.
 
@@ -24,7 +24,7 @@ The comparison emphasizes:
 
 | Product | Linux host | Real extra desktop | Tablet receiver | Offline cable path | Input | Main trade-off |
 | --- | --- | --- | --- | --- | --- | --- |
-| **TuxDisplay** | Yes; Debian/Ubuntu, GNOME Wayland focus | Yes on GNOME Wayland; isolated workspace elsewhere | OpenDisplay on iPadOS/Android or a browser | Yes; usbmuxd or Android ADB, no IP | Tap, drag, scroll; Pencil as pointer on iPadOS | GNOME-specific native path; software encoding; no native multi-touch |
+| **TuxDisplay** | Yes; Debian/Ubuntu, GNOME Wayland focus | Yes on GNOME Wayland, plus primary-screen mirroring; isolated workspace elsewhere | OpenDisplay on iPadOS/Android or a browser | Yes; usbmuxd or Android ADB, no IP | Tap, drag, scroll; Pencil as pointer on iPadOS | GNOME-specific native path; software encoding; no native multi-touch |
 | **OpenDisplay Linux sender** | Yes; KDE Plasma Wayland and Hyprland documented | Yes on documented compositors | OpenDisplay | Yes; usbmuxd, plus Wi-Fi | Project-dependent | Closest open-source alternative, but explicitly experimental and not GNOME-focused |
 | **Weylus** | Yes, plus macOS and Windows | Conditional; needs a host-created output/region | Any modern browser | Network transport; can use an existing tethered network | Strong stylus, pressure, tilt, and multi-touch support | Broad input support, but not a turnkey native GNOME extra monitor |
 | **Deskreen** | Yes, plus macOS and Windows | Conditional; a virtual output or dummy plug supplies a second screen | Any modern browser | Network/WebRTC | Browser interaction model | Very broad receiver compatibility; second-monitor setup is separate |
@@ -76,9 +76,9 @@ The [spacedesk system requirements](https://manual.spacedesk.net/SystemRequireme
 
 TuxDisplay does not treat cable use as USB Ethernet. usbmuxd carries the iPadOS connection and ADB forwards the Android receiver port over the trusted cable. Both work when the tablet has no Internet, Wi-Fi, cellular data, or tethering. This avoids the most common failure in browser-only approaches: obtaining and reaching a cable network address.
 
-### 2. GNOME receives a real output
+### 2. GNOME receives a real output and can mirror the primary screen
 
-The virtual monitor belongs to Mutter and participates in GNOME's display layout. Users can move ordinary existing windows onto it. That is materially different from an isolated virtual desktop, mirroring a region, or remotely controlling the laptop's existing panel.
+In Extend mode the virtual monitor belongs to Mutter and participates in GNOME's display layout, so ordinary windows can move onto it. Mirror mode instead records the primary physical monitor through Mutter and maps tablet input through letterboxing back to that screen. The choice covers both a genuine extra workspace and a direct touch-controlled view without changing the offline USB transport.
 
 ### 3. No account, subscription, or display dongle
 
@@ -112,7 +112,7 @@ Safari/MJPEG and X11/noVNC are not as efficient as the OpenDisplay route, but th
 
 ## Recommended positioning
 
-> **Use an iPad or Android tablet as a real GNOME Wayland monitor over a normal USB cable—offline, without tethering, an account, or a dongle.**
+> **Extend or mirror GNOME Wayland to an iPad or Android tablet over a normal USB cable—offline, with touch control and no tethering, account, or dongle.**
 
 This statement is specific and supportable. TuxDisplay should not claim universal Linux compositor support, full touch-display semantics, native-resolution negotiation, or superiority on latency until those areas are implemented and benchmarked.
 
@@ -129,4 +129,4 @@ This statement is specific and supportable. TuxDisplay should not claim universa
 
 ## Bottom line
 
-For a Linux user who specifically has GNOME Wayland, an iPad or Android tablet, and no usable network, TuxDisplay occupies a defensible gap: native desktop extension over direct USB with no extra hardware. Its most important engineering priorities are smoother resolution lifecycle, hardware encoding, broader compositor support, and stronger input/security semantics. Users who value stylus richness or cross-platform reach more than turnkey GNOME extension should also evaluate Weylus; KDE/Hyprland users should evaluate the experimental OpenDisplay Linux sender; Mac users with an iPad should start with Sidecar.
+For a Linux user who specifically has GNOME Wayland, an iPad or Android tablet, and no usable network, TuxDisplay occupies a defensible gap: native desktop extension or primary-screen mirroring over direct USB with no extra hardware. Its most important engineering priorities are smoother resolution lifecycle, hardware encoding, broader compositor support, and stronger input/security semantics. Users who value stylus richness or cross-platform reach more than turnkey GNOME integration should also evaluate Weylus; KDE/Hyprland users should evaluate the experimental OpenDisplay Linux sender; Mac users with an iPad should start with Sidecar.

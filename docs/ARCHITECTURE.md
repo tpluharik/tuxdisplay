@@ -1,24 +1,28 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.12. The project has two display backends and four receiver paths. Only the GNOME Wayland backend extends the user's current desktop.
+This document describes TuxDisplay 0.4.13. The project has two display backends and four receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
 
 ## GNOME Wayland data flow
 
 ~~~text
 GNOME Shell / Mutter
-  └─ virtual monitor (Meta-0)
-       └─ ScreenCast + PipeWire
-            └─ GStreamer pipeline
-                 ├─ x264 H.264 Annex B
-                 │    └─ OpenDisplay framing
-                 │         ├─ usbmuxd → USB cable → OpenDisplay on iPadOS
-                 │         └─ ADB forward → USB cable → OpenDisplay on Android
-                 └─ JPEG frames
-                      └─ authenticated HTTP/MJPEG → tablet browser
+  ├─ Extend: virtual monitor (Meta-0)
+  └─ Mirror: current primary physical monitor
+
+Selected monitor
+  └─ ScreenCast + PipeWire
+       └─ GStreamer pipeline
+            ├─ x264 H.264 Annex B
+            │    └─ OpenDisplay framing
+            │         ├─ usbmuxd → USB cable → OpenDisplay on iPadOS
+            │         └─ ADB forward → USB cable → OpenDisplay on Android
+            └─ JPEG frames
+                 └─ authenticated HTTP/MJPEG → tablet browser
 
 OpenDisplay touch / Pencil / scroll
   └─ guarded single-pointer translation
-       └─ Mutter RemoteDesktop pointer events → Meta-0
+       └─ letterbox-aware coordinate mapping
+            └─ Mutter RemoteDesktop pointer events → selected monitor
 ~~~
 
 ### Virtual monitor
@@ -31,9 +35,17 @@ The daemon observes Mutter's `MonitorsChanged` signal. After a user rearranges s
 
 Creating and removing the monitor changes the GNOME monitor topology. A resolution change therefore removes the old output and creates a new one; applications on the removed output may be returned to a physical monitor.
 
+### Primary-screen mirror
+
+When `DISPLAY_MODE=mirror`, `tuxdisplay-wayland` does not create `Meta-0`. It asks `org.gnome.Mutter.DisplayConfig` for the active logical monitors, selects the primary physical connector, and passes that connector to the ScreenCast session's `RecordMonitor` method. If GNOME does not mark a primary monitor, the first active physical connector is used. A virtual connector is never selected as the mirror source.
+
+The stream parameters report the source size in compositor coordinates. TuxDisplay scales that source into the configured stream resolution with aspect ratio preserved and borders added when necessary. OpenDisplay and browser input arrives in encoded-raster coordinates; `map_letterboxed_point` removes the borders and maps the remaining point into the source-monitor coordinate space before the RemoteDesktop call. Touching a border clamps safely to the nearest desktop edge.
+
+Switching between Extend and Mirror performs one explicit service restart. The physical monitor is never reconfigured or removed in Mirror mode.
+
 ### Capture and encoding
 
-Mutter provides a PipeWire stream for the virtual monitor. One GStreamer pipeline splits the captured frames:
+Mutter provides a PipeWire stream for the selected virtual or physical monitor. One GStreamer pipeline scales it into the configured stream raster and splits the frames:
 
 - the OpenDisplay branch uses software x264 at 8 Mbit/s, byte-stream output, no B-frames, and an IDR interval of at most one second;
 - the browser branch produces JPEG frames for the authenticated MJPEG endpoint and is paused while no browser is viewing.
@@ -116,7 +128,8 @@ The helper is privileged and launched through PolicyKit or its disabled-by-defau
 | --- | --- |
 | `/usr/bin/tuxdisplay` | CLI, single-instance GTK manager/tray, verified updater, configuration, status, and service control |
 | `tuxdisplay.service` | Per-user lifecycle for the selected display backend |
-| `tuxdisplay-wayland` | Virtual monitor, PipeWire capture, encoding, browser server, and input |
+| `tuxdisplay-wayland` | Virtual-monitor or primary-monitor capture, encoding, browser server, and input |
+| `display_source.py` | Primary physical-monitor selection and aspect-aware mirrored input mapping |
 | `opendisplay_usb.py` | usbmuxd and ADB transports, OpenDisplay framing, reconnect, keyframe cache, and input translation |
 | `tuxdisplay-session` | X11/Xvfb compatibility workspace |
 | `/usr/sbin/tuxdisplay-usb` | Privileged optional USB Ethernet gadget |
@@ -133,7 +146,7 @@ The tray derives three user-facing states:
 
 | Path | Contents |
 | --- | --- |
-| `~/.config/tuxdisplay/config` | Resolution, frame rate, lid-close behavior, display number, and ports |
+| `~/.config/tuxdisplay/config` | Extend/mirror selection, resolution, frame rate, lid-close behavior, display number, and ports |
 | `~/.config/tuxdisplay/password` | Browser PIN |
 | `~/.config/tuxdisplay/*.rfb` | Browser/VNC authentication material when used |
 | `~/.local/state/tuxdisplay/` | Connection state and logs |
@@ -143,7 +156,7 @@ Per-user secrets and configuration are created with mode `0600`. Runtime files a
 
 ## Design constraints
 
-- Native extension is coupled to GNOME/Mutter's private virtual-monitor interfaces.
+- Native extension and primary-screen mirroring are coupled to GNOME/Mutter's private ScreenCast, RemoteDesktop, and display-configuration interfaces.
 - Encoding is currently software x264 rather than VA-API/NVENC/V4L2 hardware encoding.
 - Direct OpenDisplay discovery and transport currently use USB only: usbmuxd on iPadOS and ADB forwarding on Android.
 - The configured resolution is fixed for a service run; receiver dimensions do not reconfigure the monitor.

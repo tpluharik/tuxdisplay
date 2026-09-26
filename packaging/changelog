@@ -1,3 +1,14 @@
+tuxdisplay (0.4.13) unstable; urgency=medium
+
+  * Add a persistent Extend desktop or Mirror main screen choice to the GTK
+    manager for GNOME Wayland.
+  * Capture the current primary physical monitor through Mutter and stream it
+    through the existing offline OpenDisplay USB connection.
+  * Map tablet touch, drag, Pencil, and scroll input back to the mirrored
+    monitor, including aspect-ratio-aware coordinates for letterboxed video.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Sat, 26 Sep 2026 20:15:00 +0200
+
 tuxdisplay (0.4.12) unstable; urgency=critical
 
   * Ignore duplicate Mutter topology notifications and settle bursts of real

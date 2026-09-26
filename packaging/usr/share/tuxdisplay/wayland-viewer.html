@@ -61,10 +61,10 @@
   <div id="fullscreenHint" role="status">Expanded view enabled. For true Safari fullscreen: tap Share, choose Add to Home Screen, then open TuxDisplay from its Home Screen icon.</div>
   <main id="desktop">
     <div id="screenWrap">
-      <img id="screen" alt="TuxDisplay extended monitor" draggable="false">
+      <img id="screen" alt="TuxDisplay streamed monitor" draggable="false">
     </div>
     <div id="toolbar">
-      <span id="label"><span id="dot"></span><strong>Extended monitor</strong> <span class="details" id="details"></span></span>
+      <span id="label"><span id="dot"></span><strong id="displayLabel">Extended monitor</strong> <span class="details" id="details"></span></span>
       <input id="keyboard" type="text" enterkeyhint="done" autocapitalize="none" autocomplete="off" autocorrect="off" spellcheck="false" placeholder="Tap to type" aria-label="Keyboard input">
       <button id="fullscreen" type="button">Full screen</button>
     </div>
@@ -94,6 +94,7 @@
       if (!response.ok) return false;
       const status = await response.json();
       displayWidth = status.width; displayHeight = status.height;
+      document.querySelector('#displayLabel').textContent = status.displayMode === 'mirror' ? 'Main screen mirror' : 'Extended monitor';
       document.querySelector('#details').textContent = ` · ${displayWidth}×${displayHeight} · ${status.monitor}`;
       login.style.display = 'none'; desktop.style.display = 'block';
       reconnectDelay = 1000;
@@ -119,6 +120,7 @@
           if (response.ok) {
             const status = await response.json();
             displayWidth = status.width; displayHeight = status.height;
+            document.querySelector('#displayLabel').textContent = status.displayMode === 'mirror' ? 'Main screen mirror' : 'Extended monitor';
             document.querySelector('#details').textContent = ` · ${displayWidth}×${displayHeight} · ${status.monitor}`;
             reconnectDelay = 1000;
             screen.src = '/stream.mjpg?t=' + Date.now();

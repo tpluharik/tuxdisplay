@@ -1,5 +1,5 @@
 #!/usr/bin/python3
-"""Expose a real GNOME Wayland virtual monitor to OpenDisplay and browsers."""
+"""Extend or mirror GNOME Wayland through OpenDisplay and browsers."""
 
 from __future__ import annotations
 
@@ -25,6 +25,7 @@ gi.require_version("GstVideo", "1.0")
 from gi.repository import Gio, GLib, Gst, GstVideo  # type: ignore  # noqa: E402
 
 from display_layout import capture_layout, current_mode_id, layout_signature, restore_layout  # noqa: E402
+from display_source import map_letterboxed_point, primary_monitor_connector, stream_size  # noqa: E402
 from opendisplay_usb import OpenDisplayPointerTranslator, OpenDisplayUSB  # noqa: E402
 
 
@@ -49,9 +50,9 @@ def unpack(value: Any) -> Any:
     return value
 
 
-def read_config() -> tuple[int, int, int, int]:
+def read_config() -> tuple[str, int, int, int, int]:
     config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    values = {"RESOLUTION": "1920x1080", "WEB_PORT": "6080", "FPS": "30"}
+    values = {"DISPLAY_MODE": "extend", "RESOLUTION": "1920x1080", "WEB_PORT": "6080", "FPS": "30"}
     path = config_home / "tuxdisplay" / "config"
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -65,14 +66,15 @@ def read_config() -> tuple[int, int, int, int]:
         port = int(values["WEB_PORT"])
         frames_per_second = int(values["FPS"])
     except (ValueError, TypeError):
-        return 1920, 1080, 6080, 30
+        return "extend", 1920, 1080, 6080, 30
+    display_mode = values["DISPLAY_MODE"] if values["DISPLAY_MODE"] in {"extend", "mirror"} else "extend"
     if not (320 <= width <= 8192 and 240 <= height <= 8192):
         width, height = 1920, 1080
     if not 1024 <= port <= 65535:
         port = 6080
     if frames_per_second not in (15, 30, 60):
         frames_per_second = 30
-    return width, height, port, frames_per_second
+    return display_mode, width, height, port, frames_per_second
 
 
 def ensure_pin() -> str:
@@ -166,10 +168,15 @@ class RequestHandler(BaseHTTPRequestHandler):
         if path == "/status":
             body = json.dumps(
                 {
-                    "mode": "GNOME Wayland extended monitor",
+                    "mode": (
+                        "GNOME Wayland primary-screen mirror"
+                        if self.server.app.display_mode == "mirror"
+                        else "GNOME Wayland extended monitor"
+                    ),
                     "width": self.server.app.width,
                     "height": self.server.app.height,
-                    "monitor": "Meta-0",
+                    "monitor": self.server.app.source_connector or "Meta-0",
+                    "displayMode": self.server.app.display_mode,
                 }
             ).encode()
             self.send_bytes(HTTPStatus.OK, "application/json", body)
@@ -246,7 +253,10 @@ class RequestHandler(BaseHTTPRequestHandler):
 
 class WaylandDisplay:
     def __init__(self) -> None:
-        self.width, self.height, self.port, self.frames_per_second = read_config()
+        self.display_mode, self.width, self.height, self.port, self.frames_per_second = read_config()
+        self.input_width = self.width
+        self.input_height = self.height
+        self.source_connector = ""
         self.pin = ensure_pin()
         self.token = secrets.token_urlsafe(32)
         self.instance_id = secrets.token_hex(8)
@@ -322,32 +332,52 @@ class WaylandDisplay:
             GLib.Variant("(a{sv})", ({"remote-desktop-session-id": GLib.Variant("s", session_id)},)),
         ).unpack()[0]
         self.stream_path = ""
-        mode = {
-            "size": GLib.Variant("(uu)", (self.width, self.height)),
-            "refresh-rate": GLib.Variant("d", float(self.frames_per_second)),
-            "is-preferred": GLib.Variant("b", True),
-        }
-        cast_stream = self.call(
-            CAST_DEST,
-            cast_session,
-            CAST_SESSION_IFACE,
-            "RecordVirtual",
-            GLib.Variant(
-                "(a{sv})",
-                (
-                    {
-                        "cursor-mode": GLib.Variant("u", 1),
-                        "is-platform": GLib.Variant("b", True),
-                        "modes": GLib.Variant("aa{sv}", [mode]),
-                    },
+        if self.display_mode == "mirror":
+            _serial, _monitors, logical_monitors, _properties = self.get_display_state()
+            self.source_connector = primary_monitor_connector(logical_monitors) or ""
+            if not self.source_connector:
+                raise RuntimeError("Mutter did not report an active physical monitor to mirror")
+            cast_stream = self.call(
+                CAST_DEST,
+                cast_session,
+                CAST_SESSION_IFACE,
+                "RecordMonitor",
+                GLib.Variant(
+                    "(sa{sv})",
+                    (
+                        self.source_connector,
+                        {"cursor-mode": GLib.Variant("u", 1)},
+                    ),
                 ),
-            ),
-        ).unpack()[0]
+            ).unpack()[0]
+        else:
+            mode = {
+                "size": GLib.Variant("(uu)", (self.width, self.height)),
+                "refresh-rate": GLib.Variant("d", float(self.frames_per_second)),
+                "is-preferred": GLib.Variant("b", True),
+            }
+            cast_stream = self.call(
+                CAST_DEST,
+                cast_session,
+                CAST_SESSION_IFACE,
+                "RecordVirtual",
+                GLib.Variant(
+                    "(a{sv})",
+                    (
+                        {
+                            "cursor-mode": GLib.Variant("u", 1),
+                            "is-platform": GLib.Variant("b", True),
+                            "modes": GLib.Variant("aa{sv}", [mode]),
+                        },
+                    ),
+                ),
+            ).unpack()[0]
         self.stream_path = cast_stream
         parameters = self.get_property(CAST_DEST, cast_stream, CAST_STREAM_IFACE, "Parameters")
         self.mapping_id = unpack(parameters.get("mapping-id", ""))
         if not self.mapping_id:
-            raise RuntimeError("Mutter did not provide an input mapping for the virtual monitor")
+            raise RuntimeError("Mutter did not provide an input mapping for the selected monitor")
+        self.input_width, self.input_height = stream_size(parameters, (self.width, self.height))
 
         wait_loop = GLib.MainLoop()
 
@@ -459,6 +489,9 @@ class WaylandDisplay:
             print(f"TuxDisplay could not restore monitor arrangement: {error}", file=sys.stderr)
 
     def start_layout_tracking(self) -> None:
+        if self.display_mode != "extend":
+            return
+
         def monitors_changed(
             _connection: Gio.DBusConnection,
             _sender: str,
@@ -562,9 +595,9 @@ class WaylandDisplay:
         Gst.init(None)
         description = (
             f"pipewiresrc path={self.node_id} do-timestamp=true "
-            f"! video/x-raw,format=BGRx,width={self.width},height={self.height} "
             "! queue name=capture_queue max-size-buffers=1 leaky=downstream "
-            "! videoconvert ! video/x-raw,format=I420 "
+            "! videoconvert ! videoscale add-borders=true "
+            f"! video/x-raw,format=I420,width={self.width},height={self.height},pixel-aspect-ratio=1/1 "
             "! tee name=displaytee "
             "displaytee. ! queue max-size-buffers=1 leaky=downstream "
             "! valve name=jpeg_valve drop=false "
@@ -708,6 +741,13 @@ class WaylandDisplay:
         kind = str(event.get("type", ""))
         x = min(float(self.width), max(0.0, float(event.get("x", 0))))
         y = min(float(self.height), max(0.0, float(event.get("y", 0))))
+        if self.display_mode == "mirror":
+            x, y = map_letterboxed_point(
+                x,
+                y,
+                (self.width, self.height),
+                (self.input_width, self.input_height),
+            )
         if kind == "motion":
             self.remote_input("NotifyPointerMotionAbsolute", "(sdd)", (self.stream_path, x, y))
         elif kind == "button":
@@ -888,6 +928,8 @@ class WaylandDisplay:
                     "active_streams": self.active_streams,
                     "opendisplay_usb": self.opendisp_connected,
                     "opendisplay_status": self.opendisp_status,
+                    "display_mode": self.display_mode,
+                    "source_connector": self.source_connector,
                     "last_video_at": self.last_video_at,
                     "receiver": self.receiver_stats,
                 }
@@ -969,15 +1011,21 @@ class WaylandDisplay:
         try:
             self.write_client_state()
             self.create_monitor()
-            self.restore_monitor_layout()
+            if self.display_mode == "extend":
+                self.restore_monitor_layout()
             self.start_layout_tracking()
             self.prepare_opendisplay()
             self.start_pipeline()
             self.start_opendisplay()
             self.start_http()
             self.write_mode()
+            display_description = (
+                f"mirror of {self.source_connector}"
+                if self.display_mode == "mirror"
+                else f"native monitor {self.width}x{self.height}"
+            )
             print(
-                f"TuxDisplay native monitor {self.width}x{self.height}; "
+                f"TuxDisplay {display_description}; encoded at {self.width}x{self.height}; "
                 f"OpenDisplay USB enabled; browser fallback at http://0.0.0.0:{self.port}/",
                 flush=True,
             )
