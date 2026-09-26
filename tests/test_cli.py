@@ -116,13 +116,34 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertLess(run.index("self.restore_monitor_layout()"), run.index("self.start_pipeline()"))
         self.assertLess(run.index("self.start_layout_tracking()"), run.index("self.start_pipeline()"))
         self.assertIn('"MonitorsChanged"', text)
-        self.assertIn("self.save_monitor_layout()", text)
+        self.assertIn("signature == self.current_layout_signature", text)
+        self.assertIn("self.save_monitor_layout(layout)", text)
+        self.assertIn("GLib.timeout_add(1500, self.apply_pending_layout_refresh)", text)
         self.assertIn("self.opendisp.recover_video()", text)
         refresh = text[text.index("    def refresh_capture_after_layout_change(self) -> None:") :]
         refresh = refresh[: refresh.index("    def start_pipeline(self) -> None:")]
         self.assertIn("previous_pipeline.set_state(Gst.State.NULL)", refresh)
         self.assertIn("self.start_pipeline()", refresh)
         self.assertNotIn("Gst.State.PAUSED", refresh)
+        self.assertNotIn("self.loop.quit()", refresh)
+
+    def test_wayland_failure_cannot_restart_virtual_monitor_forever(self) -> None:
+        daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"
+        text = daemon.read_text(encoding="utf-8")
+        self.assertIn('return 0 if os.environ.get("INVOCATION_ID") else 1', text)
+        unit = SCRIPT.parents[1] / "lib" / "systemd" / "user" / "tuxdisplay.service"
+        unit_text = unit.read_text(encoding="utf-8")
+        self.assertIn("Restart=no", unit_text)
+        self.assertNotIn("Restart=on-failure", unit_text)
+
+    def test_updater_reloads_user_service_definition_before_restart(self) -> None:
+        text = SCRIPT.read_text(encoding="utf-8")
+        success = text[text.index("                if success:") :]
+        self.assertLess(success.index('systemctl("daemon-reload")'), success.index('service_action("restart")'))
+        postinst = SCRIPT.parents[2] / "DEBIAN" / "postinst"
+        postinst_text = postinst.read_text(encoding="utf-8")
+        self.assertIn("systemctl --user daemon-reload", postinst_text)
+        self.assertIn('DBUS_SESSION_BUS_ADDRESS="unix:path=$td_runtime/bus"', postinst_text)
 
     def test_lid_close_sleep_inhibitor_is_opt_in_and_scoped_to_service(self) -> None:
         session = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-session"

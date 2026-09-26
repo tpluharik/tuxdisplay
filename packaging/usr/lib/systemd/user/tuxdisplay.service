@@ -6,8 +6,7 @@ After=graphical-session.target
 [Service]
 Type=simple
 ExecStart=/usr/lib/tuxdisplay/tuxdisplay-session
-Restart=on-failure
-RestartSec=2
+Restart=no
 KillSignal=SIGINT
 TimeoutStopSec=20s
 NoNewPrivileges=yes

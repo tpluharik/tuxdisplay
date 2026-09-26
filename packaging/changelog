@@ -1,3 +1,14 @@
+tuxdisplay (0.4.12) unstable; urgency=critical
+
+  * Ignore duplicate Mutter topology notifications and settle bursts of real
+    monitor changes before rebuilding the capture pipeline once.
+  * Keep the virtual monitor alive when capture refresh fails instead of
+    feeding a crash into a repeated systemd monitor-creation loop.
+  * Disable automatic service restarts and reload the user unit during an
+    in-app update so a Wayland failure stops safely.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Sat, 26 Sep 2026 18:00:00 +0200
+
 tuxdisplay (0.4.11) unstable; urgency=critical
 
   * Reopen the PipeWire capture pipeline after Mutter applies a topology

@@ -24,7 +24,7 @@ gi.require_version("GstApp", "1.0")
 gi.require_version("GstVideo", "1.0")
 from gi.repository import Gio, GLib, Gst, GstVideo  # type: ignore  # noqa: E402
 
-from display_layout import capture_layout, current_mode_id, restore_layout  # noqa: E402
+from display_layout import capture_layout, current_mode_id, layout_signature, restore_layout  # noqa: E402
 from opendisplay_usb import OpenDisplayPointerTranslator, OpenDisplayUSB  # noqa: E402
 
 
@@ -277,6 +277,8 @@ class WaylandDisplay:
         self.node_id: int | None = None
         self.display_signal_subscription = 0
         self.layout_change_source = 0
+        self.layout_refresh_source = 0
+        self.current_layout_signature: tuple[Any, ...] | None = None
         config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
         self.layout_path = config_home / "tuxdisplay" / "monitor-layout.json"
         self.loop = GLib.MainLoop()
@@ -382,11 +384,15 @@ class WaylandDisplay:
             return None
         return value if isinstance(value, dict) else None
 
-    def save_monitor_layout(self) -> bool:
+    def capture_monitor_layout(self) -> dict[str, Any] | None:
+        _serial, monitors, logical_monitors, _properties = self.get_display_state()
+        return capture_layout(monitors, logical_monitors)
+
+    def save_monitor_layout(self, layout: dict[str, Any] | None = None) -> bool:
         """Remember Meta-0 relative to a stable physical-monitor identity."""
         try:
-            _serial, monitors, logical_monitors, _properties = self.get_display_state()
-            layout = capture_layout(monitors, logical_monitors)
+            if layout is None:
+                layout = self.capture_monitor_layout()
             if layout is None:
                 return False
             self.layout_path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -476,17 +482,46 @@ class WaylandDisplay:
             Gio.DBusSignalFlags.NONE,
             monitors_changed,
         )
+        try:
+            current_layout = self.capture_monitor_layout()
+            if current_layout is not None:
+                self.current_layout_signature = layout_signature(current_layout)
+        except (GLib.Error, TypeError, ValueError) as error:
+            print(f"TuxDisplay could not inspect the initial monitor arrangement: {error}", file=sys.stderr)
+            current_layout = None
         # Establish a first preference for new installations. Preserve an
         # existing preference if its anchor is temporarily disconnected.
-        if self.load_monitor_layout() is None:
-            self.save_monitor_layout()
+        if self.load_monitor_layout() is None and current_layout is not None:
+            self.save_monitor_layout(current_layout)
 
     def handle_monitor_layout_changed(self) -> bool:
         self.layout_change_source = 0
         if self.stopping:
             return GLib.SOURCE_REMOVE
-        self.save_monitor_layout()
-        self.refresh_capture_after_layout_change()
+        try:
+            layout = self.capture_monitor_layout()
+        except (GLib.Error, TypeError, ValueError) as error:
+            print(f"TuxDisplay could not inspect the changed monitor arrangement: {error}", file=sys.stderr)
+            return GLib.SOURCE_REMOVE
+        if layout is None:
+            return GLib.SOURCE_REMOVE
+        signature = layout_signature(layout)
+        if signature is None or signature == self.current_layout_signature:
+            return GLib.SOURCE_REMOVE
+        self.current_layout_signature = signature
+        self.save_monitor_layout(layout)
+        # Mutter can report several real intermediate configurations while
+        # GNOME Displays applies one arrangement.  Wait for the topology to
+        # settle, then reopen capture exactly once.
+        if self.layout_refresh_source:
+            GLib.source_remove(self.layout_refresh_source)
+        self.layout_refresh_source = GLib.timeout_add(1500, self.apply_pending_layout_refresh)
+        return GLib.SOURCE_REMOVE
+
+    def apply_pending_layout_refresh(self) -> bool:
+        self.layout_refresh_source = 0
+        if not self.stopping:
+            self.refresh_capture_after_layout_change()
         return GLib.SOURCE_REMOVE
 
     def refresh_capture_after_layout_change(self) -> None:
@@ -497,17 +532,26 @@ class WaylandDisplay:
         if previous_pipeline is not None:
             previous_pipeline.get_bus().remove_signal_watch()
             result = previous_pipeline.set_state(Gst.State.NULL)
-            self.pipeline = None
             if result == Gst.StateChangeReturn.FAILURE:
-                self.fatal_error = "video pipeline could not stop after the monitor arrangement changed"
-                self.loop.quit()
+                previous_pipeline.get_bus().add_signal_watch()
+                print(
+                    "TuxDisplay video refresh was skipped because the old pipeline did not stop",
+                    file=sys.stderr,
+                    flush=True,
+                )
                 return
+            self.pipeline = None
         try:
             self.start_pipeline()
         except (GLib.Error, RuntimeError) as error:
-            self.fatal_error = f"video pipeline could not refresh after the monitor arrangement changed: {error}"
-            print(f"TuxDisplay {self.fatal_error}", file=sys.stderr)
-            self.loop.quit()
+            # Keep the virtual monitor and service alive.  Exiting here used
+            # to trigger systemd's restart policy, repeatedly creating and
+            # removing Meta-0 and destabilizing the whole Wayland session.
+            print(
+                f"TuxDisplay video refresh failed; keeping the monitor alive: {error}",
+                file=sys.stderr,
+                flush=True,
+            )
             return
         if self.opendisp is not None:
             self.opendisp.recover_video()
@@ -897,6 +941,9 @@ class WaylandDisplay:
         if self.layout_change_source:
             GLib.source_remove(self.layout_change_source)
             self.layout_change_source = 0
+        if self.layout_refresh_source:
+            GLib.source_remove(self.layout_refresh_source)
+            self.layout_refresh_source = 0
         if self.display_signal_subscription:
             self.bus.signal_unsubscribe(self.display_signal_subscription)
             self.display_signal_subscription = 0
@@ -952,7 +999,9 @@ def main() -> int:
         WaylandDisplay().run()
     except (GLib.Error, RuntimeError, OSError) as error:
         print(f"TuxDisplay could not create a GNOME Wayland monitor: {error}", file=sys.stderr)
-        return 1
+        # A managed service failure must stop instead of feeding an older
+        # Restart=on-failure unit into a virtual-monitor creation loop.
+        return 0 if os.environ.get("INVOCATION_ID") else 1
     return 0
 
 

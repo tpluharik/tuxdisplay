@@ -24,7 +24,7 @@ import urllib.request
 
 
 APP_NAME = "TuxDisplay"
-VERSION = "0.4.11"
+VERSION = "0.4.12"
 SERVICE = "tuxdisplay.service"
 USB_GADGET_ADDRESS = "10.55.0.1"
 UPDATE_API = "https://api.github.com/repos/tpluharik/tuxdisplay/releases/latest"
@@ -1221,6 +1221,7 @@ def run_gui(background: bool = False) -> int:
                 if success:
                     self.update_installed = True
                     self.update_item.set_label("Restart TuxDisplay")
+                    systemctl("daemon-reload")
                     service_action("restart")
                     self.notify_user(message)
                     if self.window is not None:

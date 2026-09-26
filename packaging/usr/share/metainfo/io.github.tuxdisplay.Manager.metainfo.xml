@@ -21,6 +21,16 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.12" date="2026-09-26">
+      <description>
+        <ul>
+          <li>Ignore duplicate Wayland monitor-topology notifications.</li>
+          <li>Refresh capture once after real layout changes settle.</li>
+          <li>Stop safely after a service failure instead of recreating the virtual monitor in a loop.</li>
+          <li>Reload the user service definition during in-app updates.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.11" date="2026-09-26">
       <description>
         <ul>

@@ -191,6 +191,28 @@ class DisplayLayoutTests(unittest.TestCase):
         self.assertEqual(positions["Meta-0"][:2], (4480, 0))
         self.assertTrue(positions["eDP-1"][4])
 
+    def test_layout_signature_ignores_virtual_serial_and_float_noise(self) -> None:
+        first = MODULE.capture_layout(
+            self.monitors(self.old_virtual),
+            [
+                logical(0, 0, 1.6666666269302368, True, self.laptop),
+                logical(1728, 0, 1.0, False, self.external),
+                logical(5568, 0, 1.0, False, self.old_virtual),
+            ],
+        )
+        second = MODULE.capture_layout(
+            self.monitors(self.new_virtual),
+            [
+                logical(0, 0, 1.6666666, True, self.laptop),
+                logical(1728, 0, 1.0, False, self.external),
+                logical(5568, 0, 1.0, False, self.new_virtual),
+            ],
+        )
+
+        self.assertEqual(MODULE.layout_signature(first), MODULE.layout_signature(second))
+        second["logical_monitors"][-1]["x"] += 1
+        self.assertNotEqual(MODULE.layout_signature(first), MODULE.layout_signature(second))
+
     def test_mirrored_virtual_monitor_is_not_saved(self) -> None:
         mirrored = [(0, 0, 1.0, 0, True, [self.laptop, self.old_virtual], {})]
         self.assertIsNone(MODULE.capture_placement(self.monitors(), mirrored))

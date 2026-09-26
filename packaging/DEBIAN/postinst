@@ -3,6 +3,21 @@ set -e
 
 if command -v systemctl >/dev/null 2>&1; then
     systemctl daemon-reload >/dev/null 2>&1 || true
+
+    # User managers do not automatically reload units installed by a root
+    # package transaction.  Reload every active local user bus so an update
+    # from 0.4.11 drops its old Restart=on-failure policy before the manager
+    # starts the new daemon.
+    for td_runtime in /run/user/[0-9]*; do
+        [ -S "$td_runtime/bus" ] || continue
+        td_uid=${td_runtime##*/}
+        td_user=$(getent passwd "$td_uid" | cut -d: -f1)
+        [ -n "$td_user" ] || continue
+        runuser -u "$td_user" -- env \
+            XDG_RUNTIME_DIR="$td_runtime" \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=$td_runtime/bus" \
+            systemctl --user daemon-reload >/dev/null 2>&1 || true
+    done
 fi
 
 if command -v update-desktop-database >/dev/null 2>&1; then

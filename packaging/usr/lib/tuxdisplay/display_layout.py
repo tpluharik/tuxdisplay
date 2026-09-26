@@ -168,6 +168,43 @@ def capture_layout(monitors: list[Any] | tuple[Any, ...], logical_monitors: list
     }
 
 
+def layout_signature(layout: dict[str, Any]) -> tuple[Any, ...] | None:
+    """Return a stable, comparable signature for a captured layout.
+
+    Mutter changes the serial component of ``Meta-0`` whenever the virtual
+    monitor is recreated.  That must not make an otherwise identical layout
+    look new.  Small floating-point representation differences in scale are
+    normalized for the same reason.
+    """
+    logical_monitors = layout.get("logical_monitors")
+    if layout.get("version") != 2 or not isinstance(logical_monitors, list):
+        return None
+    signature = []
+    try:
+        for logical in logical_monitors:
+            if not isinstance(logical, dict):
+                return None
+            identity = _spec(logical["monitor"])
+            stable_identity: tuple[str, ...]
+            if identity[0] == VIRTUAL_CONNECTOR:
+                stable_identity = (identity[0], identity[1], identity[2])
+            else:
+                stable_identity = identity
+            signature.append(
+                (
+                    stable_identity,
+                    int(logical["x"]),
+                    int(logical["y"]),
+                    round(float(logical["scale"]), 4),
+                    int(logical["transform"]),
+                    bool(logical["primary"]),
+                )
+            )
+    except (KeyError, TypeError, ValueError):
+        return None
+    return tuple(sorted(signature))
+
+
 def _anchor_match_score(identity: tuple[str, str, str, str], saved: tuple[str, str, str, str]) -> int:
     if identity == saved:
         return 3
