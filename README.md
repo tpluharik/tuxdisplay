@@ -56,7 +56,7 @@ Download the current `.deb` and `SHA256SUMS` from [GitHub Releases](https://gith
 
 ~~~sh
 sha256sum --ignore-missing --check SHA256SUMS
-sudo apt install ./tuxdisplay_0.4.14_all.deb
+sudo apt install ./tuxdisplay_0.4.15_all.deb
 ~~~
 
 The checksum file can include packages from several releases. The checksum for the package being installed must report `OK`.
@@ -190,7 +190,7 @@ WEB_PORT=6080
 VNC_PORT=5900
 ~~~
 
-`DISPLAY_MODE` accepts `extend` or `mirror`. `FPS` accepts `15`, `30`, or `60`; `30` is the balanced default and `60` is intended for systems whose encoder and tablet can sustain it. `ENCODER=auto` prefers the VA-API H.264 encoder and GPU color conversion when available, then falls back to tuned multi-threaded x264; choose `software` only for compatibility troubleshooting. TuxDisplay accepts GNOME's damage-driven PipeWire rate, bounds every queue to prevent stale-frame buildup, and reports both sender and receiver rates in `tuxdisplay status`. `KEEP_AWAKE_WITH_LID_CLOSED=1` enables the service-lifetime sleep inhibitor; the default `0` preserves normal sleep behavior. `DISPLAY_NUMBER` and `VNC_PORT` apply only to the X11 compatibility workspace. `WEB_PORT` and the PIN apply only to browser access. Restart TuxDisplay after changing a value.
+`DISPLAY_MODE` accepts `extend` or `mirror`. `FPS` accepts `15`, `30`, or `60`; `30` is the balanced default and `60` is intended for systems whose encoder and tablet can sustain it. `ENCODER=auto` prefers the VA-API H.264 encoder and GPU color conversion when available, then falls back to tuned multi-threaded x264; choose `software` only for compatibility troubleshooting. TuxDisplay holds GNOME's latest damage-driven PipeWire frame on a real-time output clock, so the encoder and tablet receive the configured cadence even while GNOME reports changes irregularly. Every queue remains bounded to prevent stale-frame buildup, and `tuxdisplay status` reports both sender and receiver rates. `KEEP_AWAKE_WITH_LID_CLOSED=1` enables the service-lifetime sleep inhibitor; the default `0` preserves normal sleep behavior. `DISPLAY_NUMBER` and `VNC_PORT` apply only to the X11 compatibility workspace. `WEB_PORT` and the PIN apply only to browser access. Restart TuxDisplay after changing a value.
 
 Set `TUXDISPLAY_FORCE_X11=1` in the user service environment to force the isolated X11 fallback.
 
@@ -203,7 +203,7 @@ python3 -m unittest discover -s tests -v
 ./build-deb.sh
 ~~~
 
-The package is written to `dist/tuxdisplay_0.4.14_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
+The package is written to `dist/tuxdisplay_0.4.15_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
 
 Development and release conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 

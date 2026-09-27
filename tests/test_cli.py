@@ -116,7 +116,7 @@ class TuxDisplayTests(unittest.TestCase):
         pipeline = daemon.parent / "video_pipeline.py"
         pipeline_text = pipeline.read_text(encoding="utf-8")
         self.assertIn('keepalive-time={keepalive_ms}', pipeline_text)
-        self.assertIn('videorate name=frame_pacer skip-to-first=true', pipeline_text)
+        self.assertIn('imagefreeze name=frame_pacer is-live=true allow-replace=true', pipeline_text)
         self.assertIn('framerate={frames_per_second}/1', pipeline_text)
         self.assertIn('max-size-buffers=1', pipeline_text)
         self.assertIn('valve name=jpeg_valve drop=false', pipeline_text)

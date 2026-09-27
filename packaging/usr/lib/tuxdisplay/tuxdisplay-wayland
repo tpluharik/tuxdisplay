@@ -986,7 +986,7 @@ class WaylandDisplay:
                     "display_mode": self.display_mode,
                     "source_connector": self.source_connector,
                     "video_encoder": self.video_encoder,
-                    "frame_pacing": "steady",
+                    "frame_pacing": "latest-frame-clock",
                     "last_video_at": self.last_video_at,
                     "sender": self.opendisp.performance_stats() if self.opendisp is not None else {},
                     "receiver": self.receiver_stats,

@@ -1,3 +1,14 @@
+tuxdisplay (0.4.15) unstable; urgency=high
+
+  * Replace damage-dependent videorate pacing with a live latest-frame clock,
+    so the H.264 sender sustains the configured cadence between sparse Mutter
+    damage events.
+  * Allow each new PipeWire frame to replace the held frame immediately while
+    preserving one-frame raw queues and prediction-safe encoded delivery.
+  * Update sender diagnostics and documentation for the steady paced stream.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Sun, 27 Sep 2026 19:45:00 +0200
+
 tuxdisplay (0.4.14) unstable; urgency=medium
 
   * Prefer VA-API H.264 and GPU post-processing with an automatic tuned x264

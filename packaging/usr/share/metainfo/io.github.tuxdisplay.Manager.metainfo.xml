@@ -21,6 +21,15 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.15" date="2026-09-27">
+      <description>
+        <ul>
+          <li>Clock the newest GNOME frame at the configured rate instead of starving between damage events.</li>
+          <li>Keep live frame replacement bounded so motion stays current without adding a stale-frame queue.</li>
+          <li>Report the paced sender rate consistently for direct comparison with the tablet receiver.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.14" date="2026-09-27">
       <description>
         <ul>

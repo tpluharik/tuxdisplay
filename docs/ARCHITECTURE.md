@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.14. The project has two display backends and four receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
+This document describes TuxDisplay 0.4.15. The project has two display backends and four receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
 
 ## GNOME Wayland data flow
 
@@ -52,7 +52,7 @@ Mutter provides a damage-driven PipeWire stream for the selected virtual or phys
 - both encoders use constrained-baseline Annex B, no B-frames, an IDR interval of at most one second, and a bitrate scaled from the selected pixel rate;
 - the browser branch produces JPEG frames for the authenticated MJPEG endpoint and closes its valve while no browser is viewing.
 
-Raw-frame queues hold at most one frame and leak downstream, so a slow encoder skips obsolete raw images instead of increasing latency. Encoded frames are never dropped independently because doing so would break the H.264 prediction chain: an encoded-queue overflow atomically discards the chain, gates transmission, and requests a fresh IDR. PipeWire keepalives plus `videorate` bound the requested 15, 30, or 60 FPS cadence while still accepting GNOME's negotiated rate. TuxDisplay caches the most recent keyframe to show a static desktop, but keeps later delta frames gated until a fresh session IDR arrives.
+Raw-frame queues hold at most one frame and leak downstream, so a slow encoder skips obsolete raw images instead of increasing latency. Encoded frames are never dropped independently because doing so would break the H.264 prediction chain: an encoded-queue overflow atomically discards the chain, gates transmission, and requests a fresh IDR. A live, replaceable latest-frame clock converts GNOME's irregular damage-driven input into the requested 15, 30, or 60 FPS cadence without building a stale queue. TuxDisplay caches the most recent keyframe to show a static desktop, but keeps later delta frames gated until a fresh session IDR arrives.
 
 Annex-B start-code inspection uses native byte search and leaves already-normalized access units untouched. The OpenDisplay writer sends framing, telemetry, and the encoded access unit without concatenating another full-frame copy. Sender source rate, sent rate, pending frames, drops, and chain recoveries are saved beside receiver telemetry for `tuxdisplay status`.
 

@@ -39,7 +39,6 @@ def pipeline_description(
     """Build a paced, bounded-latency capture and encoding graph."""
     keepalive_ms = keepalive_interval_ms(frames_per_second)
     bitrate_kbps = target_bitrate_kbps(width, height, frames_per_second)
-    duplicate_limit_ns = max(1, 2_000_000_000 // max(1, frames_per_second))
     queue = "queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream"
     browser_branch = (
         f"displaytee. ! {queue} "
@@ -77,8 +76,7 @@ def pipeline_description(
         f"pipewiresrc path={node_id} do-timestamp=true keepalive-time={keepalive_ms} "
         "min-buffers=2 max-buffers=8 "
         f"! {queue} name=capture_queue "
-        "! videorate name=frame_pacer skip-to-first=true drop-only=false "
-        f"max-duplication-time={duplicate_limit_ns} "
+        "! imagefreeze name=frame_pacer is-live=true allow-replace=true "
         f"! video/x-raw,framerate={frames_per_second}/1 "
         "! tee name=displaytee "
         + browser_branch

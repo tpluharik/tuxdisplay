@@ -265,7 +265,7 @@ def list_usb_devices() -> list[dict[str, Any]]:
             connection,
             {
                 "MessageType": "ListDevices",
-                "ClientVersionString": "tuxdisplay-0.4.14",
+                "ClientVersionString": "tuxdisplay-0.4.15",
                 "ProgName": "tuxdisplay",
                 "kLibUSBMuxVersion": 3,
             },
@@ -293,7 +293,7 @@ def connect_usb_device(device_id: int, port: int = OPENDISPLAY_PORT) -> socket.s
             connection,
             {
                 "MessageType": "Connect",
-                "ClientVersionString": "tuxdisplay-0.4.14",
+                "ClientVersionString": "tuxdisplay-0.4.15",
                 "ProgName": "tuxdisplay",
                 "DeviceID": int(device_id),
                 # usbmuxd's plist protocol carries the TCP port in network order.
@@ -579,10 +579,9 @@ class OpenDisplayUSB:
             self.stats_window_started = now
             self.source_fps = queued_frames / elapsed
             self.sent_fps = sent_frames / elapsed
-        # OpenDisplay's `stalls` field counts decoder starvation while a
-        # damage-driven desktop is quiet; it is not evidence of a broken USB
-        # session. Only compare FPS when the sender actually queued at least
-        # two seconds of frames during the reporting window.
+        # OpenDisplay's `stalls` field is non-normative receiver telemetry and
+        # is not itself evidence of a broken USB session. Only compare FPS
+        # after the sender queued at least two seconds of paced frames.
         source_active = queued_frames >= max(3, self.frames_per_second * 2)
         unhealthy = lost > 0 or (source_active and receiver_fps < max(1.0, self.frames_per_second * 0.25))
         if not unhealthy:

@@ -47,8 +47,8 @@ For a package candidate:
 
 ~~~sh
 ./build-deb.sh
-dpkg-deb --info dist/tuxdisplay_0.4.14_all.deb
-dpkg-deb --contents dist/tuxdisplay_0.4.14_all.deb
+dpkg-deb --info dist/tuxdisplay_0.4.15_all.deb
+dpkg-deb --contents dist/tuxdisplay_0.4.15_all.deb
 ~~~
 
 The build replaces the package for the current version and regenerates `dist/SHA256SUMS`. Do not commit a rebuilt binary unless the change is intended for a release asset.
