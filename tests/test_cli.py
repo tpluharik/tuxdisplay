@@ -40,6 +40,7 @@ class TuxDisplayTests(unittest.TestCase):
     def test_default_config_is_created_privately(self) -> None:
         config = MODULE.ensure_config()
         self.assertEqual(config["DISPLAY_MODE"], "extend")
+        self.assertEqual(config["ENCODER"], "auto")
         self.assertEqual(config["RESOLUTION"], "1920x1080")
         self.assertEqual(config["FPS"], "30")
         self.assertEqual(config["KEEP_AWAKE_WITH_LID_CLOSED"], "0")
@@ -50,6 +51,7 @@ class TuxDisplayTests(unittest.TestCase):
     def test_invalid_config_values_fall_back(self) -> None:
         values = {
             "DISPLAY_MODE": "unsafe",
+            "ENCODER": "slow-and-unsafe",
             "RESOLUTION": "bad;command",
             "FPS": "144",
             "KEEP_AWAKE_WITH_LID_CLOSED": "yes",
@@ -59,6 +61,7 @@ class TuxDisplayTests(unittest.TestCase):
         }
         validated = MODULE.validate_config(values)
         self.assertEqual(validated["DISPLAY_MODE"], "extend")
+        self.assertEqual(validated["ENCODER"], "auto")
         self.assertEqual(validated["RESOLUTION"], "1920x1080")
         self.assertEqual(validated["FPS"], "30")
         self.assertEqual(validated["KEEP_AWAKE_WITH_LID_CLOSED"], "0")
@@ -100,23 +103,36 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertIn('"RecordMonitor"', text)
         self.assertIn('primary_monitor_connector(logical_monitors)', text)
         self.assertIn('map_letterboxed_point(', text)
-        self.assertIn('videoscale add-borders=true', text)
+        pipeline = daemon.parent / "video_pipeline.py"
+        self.assertIn('add-borders=true', pipeline.read_text(encoding="utf-8"))
         self.assertIn('"display_mode": self.display_mode', text)
         manager = SCRIPT.read_text(encoding="utf-8")
         self.assertIn('(\"mirror\", \"Mirror main screen\")', manager)
         self.assertIn('configuration["DISPLAY_MODE"] = mode', manager)
 
-    def test_wayland_pipeline_does_not_hold_a_damage_driven_first_frame(self) -> None:
+    def test_wayland_pipeline_paces_damage_driven_frames_without_unbounded_queues(self) -> None:
         daemon = SCRIPT.parents[1] / 'lib' / 'tuxdisplay' / 'tuxdisplay-wayland'
         text = daemon.read_text(encoding='utf-8')
-        self.assertIn('pipewiresrc path={self.node_id}', text)
-        self.assertNotIn('videorate', text)
-        self.assertNotIn('framerate={self.frames_per_second}/1', text)
-        self.assertIn('queue name=capture_queue', text)
-        self.assertIn('capture_pad.add_probe(Gst.PadProbeType.BUFFER, self.limit_frame_rate)', text)
-        self.assertIn('return Gst.PadProbeReturn.DROP', text)
-        self.assertIn('valve name=jpeg_valve drop=false', text)
-        self.assertIn('key-int-max={self.frames_per_second}', text)
+        pipeline = daemon.parent / "video_pipeline.py"
+        pipeline_text = pipeline.read_text(encoding="utf-8")
+        self.assertIn('keepalive-time={keepalive_ms}', pipeline_text)
+        self.assertIn('videorate name=frame_pacer skip-to-first=true', pipeline_text)
+        self.assertIn('framerate={frames_per_second}/1', pipeline_text)
+        self.assertIn('max-size-buffers=1', pipeline_text)
+        self.assertIn('valve name=jpeg_valve drop=false', pipeline_text)
+        self.assertIn('profile=constrained-baseline', pipeline_text)
+        self.assertIn('appsink name=h264_sink emit-signals=true max-buffers=1 drop=false', pipeline_text)
+        self.assertNotIn('limit_frame_rate', text)
+
+    def test_video_acceleration_has_automatic_fallback_and_gui_control(self) -> None:
+        daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"
+        text = daemon.read_text(encoding="utf-8")
+        self.assertIn('encoder_candidates(preference, available)', text)
+        self.assertIn('self.hardware_unavailable = True', text)
+        self.assertIn('self.start_pipeline(force_software=True)', text)
+        manager = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('("auto", "Automatic (hardware preferred)")', manager)
+        self.assertIn('configuration["ENCODER"] = encoder', manager)
 
     def test_wayland_pipeline_starts_before_usb_transport(self) -> None:
         daemon = SCRIPT.parents[1] / 'lib' / 'tuxdisplay' / 'tuxdisplay-wayland'
@@ -137,7 +153,7 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertIn("GLib.timeout_add(1500, self.apply_pending_layout_refresh)", text)
         self.assertIn("self.opendisp.recover_video()", text)
         refresh = text[text.index("    def refresh_capture_after_layout_change(self) -> None:") :]
-        refresh = refresh[: refresh.index("    def start_pipeline(self) -> None:")]
+        refresh = refresh[: refresh.index("    def start_pipeline(self, force_software: bool = False) -> None:")]
         self.assertIn("previous_pipeline.set_state(Gst.State.NULL)", refresh)
         self.assertIn("self.start_pipeline()", refresh)
         self.assertNotIn("Gst.State.PAUSED", refresh)
@@ -195,8 +211,10 @@ class TuxDisplayTests(unittest.TestCase):
         daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"
         text = daemon.read_text(encoding="utf-8")
         stop = text[text.index("    def stop(self) -> None:") :]
-        self.assertLess(stop.index("self.pipeline.set_state(Gst.State.NULL)"), stop.index('REMOTE_SESSION_IFACE, "Stop"'))
+        self.assertLess(stop.index("pipeline.set_state(Gst.State.NULL)"), stop.index('REMOTE_SESSION_IFACE, "Stop"'))
+        self.assertLess(stop.index("self.opendisp.stop()"), stop.index("pipeline.set_state(Gst.State.NULL)"))
         self.assertIn("timeout_ms=2_000", stop)
+        self.assertIn("pipeline_stop_thread.join(timeout=2)", stop)
 
     def test_ipheth_usb_address_is_preferred(self) -> None:
         addresses = [("wlan0", "192.0.2.5"), ("enxipad", "172.20.10.2")]

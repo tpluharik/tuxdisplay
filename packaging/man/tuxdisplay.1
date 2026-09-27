@@ -1,4 +1,4 @@
-.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.13" "User Commands"
+.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.14" "User Commands"
 .SH NAME
 tuxdisplay \- use an iPad or Android tablet as a secondary Linux display
 .SH SYNOPSIS
@@ -146,6 +146,7 @@ accepts:
 DISPLAY_MODE=extend
 RESOLUTION=1920x1080
 FPS=30
+ENCODER=auto
 KEEP_AWAKE_WITH_LID_CLOSED=0
 DISPLAY_NUMBER=48
 WEB_PORT=6080
@@ -171,6 +172,9 @@ apply only to the X11 fallback.
 .B FPS
 accepts 15, 30, or 60 and controls the virtual-monitor, encoder, and advertised
 receiver cadence. The default is 30.
+.B ENCODER
+accepts auto or software. Auto prefers VA-API H.264 acceleration and falls back
+to the tuned x264 path when the required elements or driver are unavailable.
 .B KEEP_AWAKE_WITH_LID_CLOSED
 accepts 0 or 1. When enabled, TuxDisplay blocks system sleep and lid-switch
 handling while the display service runs. This also blocks manual and idle
@@ -213,7 +217,8 @@ over ordinary HTTP. Never expose port 6080 to the public Internet or an
 untrusted network.
 .SH LIMITATIONS
 Native desktop extension and primary-screen mirroring require GNOME Wayland.
-Direct OpenDisplay transport is currently USB-only. Encoding is software x264.
+Direct OpenDisplay transport is currently USB-only. Hardware acceleration
+currently targets VA-API and otherwise falls back to software x264.
 Receiver dimensions are not used to select or dynamically resize the stream.
 .SH SEE ALSO
 .BR tuxdisplay-usb (8),

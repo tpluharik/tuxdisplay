@@ -39,7 +39,7 @@ The packaged and tested target is Debian/Ubuntu. Direct OpenDisplay uses usbmuxd
 - A real `Meta-0` extended monitor on GNOME Wayland.
 - A touch-controlled mirror of the current primary physical monitor, without creating `Meta-0`.
 - Direct OpenDisplay USB through Apple usbmuxd or an Android ADB tunnel.
-- H.264 video with reconnect, periodic IDR frames, and cached keyframe recovery.
+- Low-latency H.264 with automatic VA-API acceleration, software fallback, adaptive bitrate, and keyframe-safe recovery.
 - Remembered tablet placement and in-place video refresh after GNOME display rearrangement.
 - Tap, drag, and scroll input from OpenDisplay, plus Apple Pencil-as-pointer on iPadOS.
 - Pointer, scroll, touch, and keyboard input in the browser fallback.
@@ -56,7 +56,7 @@ Download the current `.deb` and `SHA256SUMS` from [GitHub Releases](https://gith
 
 ~~~sh
 sha256sum --ignore-missing --check SHA256SUMS
-sudo apt install ./tuxdisplay_0.4.13_all.deb
+sudo apt install ./tuxdisplay_0.4.14_all.deb
 ~~~
 
 The checksum file can include packages from several releases. The checksum for the package being installed must report `OK`.
@@ -183,13 +183,14 @@ TuxDisplay creates `~/.config/tuxdisplay/config` with private permissions:
 DISPLAY_MODE=extend
 RESOLUTION=1920x1080
 FPS=30
+ENCODER=auto
 KEEP_AWAKE_WITH_LID_CLOSED=0
 DISPLAY_NUMBER=48
 WEB_PORT=6080
 VNC_PORT=5900
 ~~~
 
-`DISPLAY_MODE` accepts `extend` or `mirror`. `FPS` accepts `15`, `30`, or `60` and controls the capture limiter, encoder keyframe interval, and advertised OpenDisplay cadence; `30` is the stability-oriented default. TuxDisplay accepts the actual PipeWire rate chosen by GNOME and safely drops excess frames before encoding. `KEEP_AWAKE_WITH_LID_CLOSED=1` enables the service-lifetime sleep inhibitor; the default `0` preserves normal sleep behavior. `DISPLAY_NUMBER` and `VNC_PORT` apply only to the X11 compatibility workspace. `WEB_PORT` and the PIN apply only to browser access. Restart TuxDisplay after changing a value.
+`DISPLAY_MODE` accepts `extend` or `mirror`. `FPS` accepts `15`, `30`, or `60`; `30` is the balanced default and `60` is intended for systems whose encoder and tablet can sustain it. `ENCODER=auto` prefers the VA-API H.264 encoder and GPU color conversion when available, then falls back to tuned multi-threaded x264; choose `software` only for compatibility troubleshooting. TuxDisplay accepts GNOME's damage-driven PipeWire rate, bounds every queue to prevent stale-frame buildup, and reports both sender and receiver rates in `tuxdisplay status`. `KEEP_AWAKE_WITH_LID_CLOSED=1` enables the service-lifetime sleep inhibitor; the default `0` preserves normal sleep behavior. `DISPLAY_NUMBER` and `VNC_PORT` apply only to the X11 compatibility workspace. `WEB_PORT` and the PIN apply only to browser access. Restart TuxDisplay after changing a value.
 
 Set `TUXDISPLAY_FORCE_X11=1` in the user service environment to force the isolated X11 fallback.
 
@@ -202,7 +203,7 @@ python3 -m unittest discover -s tests -v
 ./build-deb.sh
 ~~~
 
-The package is written to `dist/tuxdisplay_0.4.13_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
+The package is written to `dist/tuxdisplay_0.4.14_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
 
 Development and release conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 

@@ -24,7 +24,7 @@ import urllib.request
 
 
 APP_NAME = "TuxDisplay"
-VERSION = "0.4.13"
+VERSION = "0.4.14"
 SERVICE = "tuxdisplay.service"
 USB_GADGET_ADDRESS = "10.55.0.1"
 UPDATE_API = "https://api.github.com/repos/tpluharik/tuxdisplay/releases/latest"
@@ -33,6 +33,7 @@ MAX_UPDATE_METADATA = 1 << 20
 MAX_UPDATE_PACKAGE = 100 << 20
 DEFAULTS = {
     "DISPLAY_MODE": "extend",
+    "ENCODER": "auto",
     "RESOLUTION": "1920x1080",
     "FPS": "30",
     "KEEP_AWAKE_WITH_LID_CLOSED": "0",
@@ -43,6 +44,10 @@ DEFAULTS = {
 DISPLAY_MODES = (
     ("extend", "Extend desktop"),
     ("mirror", "Mirror main screen"),
+)
+ENCODER_MODES = (
+    ("auto", "Automatic (hardware preferred)"),
+    ("software", "Software compatibility"),
 )
 RESOLUTIONS = (
     "1024x768",
@@ -226,6 +231,8 @@ def validate_config(values: dict[str, str]) -> dict[str, str]:
     result = dict(DEFAULTS)
     if values.get("DISPLAY_MODE") in {mode for mode, _label in DISPLAY_MODES}:
         result["DISPLAY_MODE"] = values["DISPLAY_MODE"]
+    if values.get("ENCODER") in {mode for mode, _label in ENCODER_MODES}:
+        result["ENCODER"] = values["ENCODER"]
     if re.fullmatch(r"[0-9]{3,5}x[0-9]{3,5}", values.get("RESOLUTION", "")):
         result["RESOLUTION"] = values["RESOLUTION"]
     if values.get("FPS") in {"15", "30", "60"}:
@@ -661,6 +668,7 @@ def doctor() -> int:
     print(f"Service: {'running' if is_active() else 'stopped'}")
     print(f"Resolution: {ensure_config()['RESOLUTION']}")
     print(f"Frame rate: {ensure_config()['FPS']} FPS")
+    print(f"Video acceleration: {ensure_config()['ENCODER']}")
     print(
         "Lid-close sleep: "
         + ("blocked while TuxDisplay runs" if ensure_config()["KEEP_AWAKE_WITH_LID_CLOSED"] == "1" else "normal")
@@ -814,22 +822,37 @@ def run_gui(background: bool = False) -> int:
             self.frame_rate.connect("changed", self.on_frame_rate_changed)
             grid.attach(self.frame_rate, 1, 4, 1, 1)
 
+            encoder_label = Gtk.Label(label="Video acceleration")
+            encoder_label.set_halign(Gtk.Align.END)
+            grid.attach(encoder_label, 0, 5, 1, 1)
+            self.encoder = Gtk.ComboBoxText()
+            for _value, label in ENCODER_MODES:
+                self.encoder.append_text(label)
+            configured_encoder = ensure_config()["ENCODER"]
+            encoder_index = next(
+                (index for index, (value, _label) in enumerate(ENCODER_MODES) if value == configured_encoder),
+                0,
+            )
+            self.encoder.set_active(encoder_index)
+            self.encoder.connect("changed", self.on_encoder_changed)
+            grid.attach(self.encoder, 1, 5, 1, 1)
+
             keep_awake_label = Gtk.Label(label="Keep awake with lid closed")
             keep_awake_label.set_halign(Gtk.Align.END)
-            grid.attach(keep_awake_label, 0, 5, 1, 1)
+            grid.attach(keep_awake_label, 0, 6, 1, 1)
             self.keep_awake = Gtk.Switch()
             self.keep_awake.set_halign(Gtk.Align.START)
             self.keep_awake.set_active(ensure_config()["KEEP_AWAKE_WITH_LID_CLOSED"] == "1")
             self.keep_awake.connect("notify::active", self.on_keep_awake_changed)
-            grid.attach(self.keep_awake, 1, 5, 1, 1)
+            grid.attach(self.keep_awake, 1, 6, 1, 1)
 
             usb_label = Gtk.Label(label="USB cable")
             usb_label.set_halign(Gtk.Align.END)
-            grid.attach(usb_label, 0, 6, 1, 1)
+            grid.attach(usb_label, 0, 7, 1, 1)
             self.usb_status_label = Gtk.Label()
             self.usb_status_label.set_halign(Gtk.Align.START)
             self.usb_status_label.set_line_wrap(True)
-            grid.attach(self.usb_status_label, 1, 6, 1, 1)
+            grid.attach(self.usb_status_label, 1, 7, 1, 1)
 
             lid_note = Gtk.Label(
                 label=(
@@ -1044,6 +1067,23 @@ def run_gui(background: bool = False) -> int:
             save_config(configuration)
             if is_active():
                 self.schedule_display_restart("Frame rate")
+
+        def on_encoder_changed(self, dropdown: Gtk.ComboBoxText) -> None:
+            selected = dropdown.get_active()
+            if not 0 <= selected < len(ENCODER_MODES):
+                return
+            configuration = ensure_config()
+            encoder = ENCODER_MODES[selected][0]
+            if configuration["ENCODER"] == encoder:
+                return
+            configuration["ENCODER"] = encoder
+            save_config(configuration)
+            if is_active():
+                self.schedule_display_restart("Video acceleration")
+            elif encoder == "auto":
+                self.show_message("Hardware video acceleration will be used when available.")
+            else:
+                self.show_message("Software compatibility mode will be used.")
 
         def on_keep_awake_changed(self, switch: Gtk.Switch, _parameter: object) -> None:
             configuration = ensure_config()
@@ -1325,6 +1365,9 @@ def print_status() -> int:
     }
     print(f"Mode: {labels.get(mode, mode)}")
     print(f"Frame rate: {ensure_config()['FPS']} FPS")
+    client_state = read_client_state()
+    active_encoder = client_state.get("video_encoder") if running else None
+    print(f"Video encoder: {active_encoder or ensure_config()['ENCODER']}")
     print(
         "Lid-close sleep: "
         + ("blocked while TuxDisplay runs" if ensure_config()["KEEP_AWAKE_WITH_LID_CLOSED"] == "1" else "normal")
@@ -1340,9 +1383,12 @@ def print_status() -> int:
         print("Android USB: authorization required on the device")
     else:
         print("Android USB: not detected")
-    receiver = read_client_state().get("receiver", {})
+    receiver = client_state.get("receiver", {})
     if isinstance(receiver, dict) and receiver:
         print("Receiver health: " + ", ".join(f"{key}={value}" for key, value in receiver.items()))
+    sender = client_state.get("sender", {})
+    if isinstance(sender, dict) and sender:
+        print("Sender health: " + ", ".join(f"{key}={value}" for key, value in sender.items()))
     print(f"Browser fallback URL: {preferred_url()}")
     print(f"Browser fallback PIN: {read_password()}")
     if not running:

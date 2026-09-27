@@ -22,6 +22,7 @@ The X11/noVNC backend should continue to start on sessions without the required 
 | `packaging/usr/lib/tuxdisplay/tuxdisplay-wayland` | GNOME extension/mirroring, capture, browser service, and input |
 | `packaging/usr/lib/tuxdisplay/display_source.py` | Primary-monitor selection and mirrored touch mapping |
 | `packaging/usr/lib/tuxdisplay/opendisplay_usb.py` | OpenDisplay protocol plus usbmuxd and Android ADB transports |
+| `packaging/usr/lib/tuxdisplay/video_pipeline.py` | Bounded GStreamer graphs, pacing, and encoder selection |
 | `packaging/usr/lib/tuxdisplay/tuxdisplay-session` | X11 fallback session |
 | `packaging/usr/sbin/tuxdisplay-usb` | Optional privileged gadget helper |
 | `packaging/usr/share/tuxdisplay/` | Browser and fallback desktop assets |
@@ -37,6 +38,7 @@ python3 -m py_compile \
   packaging/usr/bin/tuxdisplay \
   packaging/usr/lib/tuxdisplay/display_source.py \
   packaging/usr/lib/tuxdisplay/opendisplay_usb.py \
+  packaging/usr/lib/tuxdisplay/video_pipeline.py \
   packaging/usr/lib/tuxdisplay/tuxdisplay-wayland
 git diff --check
 ~~~
@@ -45,8 +47,8 @@ For a package candidate:
 
 ~~~sh
 ./build-deb.sh
-dpkg-deb --info dist/tuxdisplay_0.4.13_all.deb
-dpkg-deb --contents dist/tuxdisplay_0.4.13_all.deb
+dpkg-deb --info dist/tuxdisplay_0.4.14_all.deb
+dpkg-deb --contents dist/tuxdisplay_0.4.14_all.deb
 ~~~
 
 The build replaces the package for the current version and regenerates `dist/SHA256SUMS`. Do not commit a rebuilt binary unless the change is intended for a release asset.

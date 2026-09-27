@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.13. The project has two display backends and four receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
+This document describes TuxDisplay 0.4.14. The project has two display backends and four receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
 
 ## GNOME Wayland data flow
 
@@ -12,7 +12,7 @@ GNOME Shell / Mutter
 Selected monitor
   └─ ScreenCast + PipeWire
        └─ GStreamer pipeline
-            ├─ x264 H.264 Annex B
+            ├─ VA-API or x264 H.264 Annex B
             │    └─ OpenDisplay framing
             │         ├─ usbmuxd → USB cable → OpenDisplay on iPadOS
             │         └─ ADB forward → USB cable → OpenDisplay on Android
@@ -45,12 +45,16 @@ Switching between Extend and Mirror performs one explicit service restart. The p
 
 ### Capture and encoding
 
-Mutter provides a PipeWire stream for the selected virtual or physical monitor. One GStreamer pipeline scales it into the configured stream raster and splits the frames:
+Mutter provides a damage-driven PipeWire stream for the selected virtual or physical monitor. One GStreamer pipeline paces and scales it into the configured stream raster, then splits the frames:
 
-- the OpenDisplay branch uses software x264 at 8 Mbit/s, byte-stream output, no B-frames, and an IDR interval of at most one second;
-- the browser branch produces JPEG frames for the authenticated MJPEG endpoint and is paused while no browser is viewing.
+- the preferred OpenDisplay branch uses VA-API H.264 plus GPU post-processing when `vah264enc` and `vapostproc` are available;
+- the fallback branch uses zero-latency, sliced, multi-threaded x264;
+- both encoders use constrained-baseline Annex B, no B-frames, an IDR interval of at most one second, and a bitrate scaled from the selected pixel rate;
+- the browser branch produces JPEG frames for the authenticated MJPEG endpoint and closes its valve while no browser is viewing.
 
-Queues are deliberately small and leaky so latency is preferred over delivering stale frames. GNOME may supply PipeWire frames at a different rate from the requested virtual-monitor mode, so TuxDisplay accepts the negotiated source rate and uses a non-buffering pad probe to drop excess frames before conversion and encoding. This preserves the first damage-driven frame while keeping the configured 15, 30, or 60 FPS encoder cadence and receiver announcement. TuxDisplay caches the most recent H.264 keyframe to show a static desktop, but keeps delta frames gated until a fresh session IDR arrives.
+Raw-frame queues hold at most one frame and leak downstream, so a slow encoder skips obsolete raw images instead of increasing latency. Encoded frames are never dropped independently because doing so would break the H.264 prediction chain: an encoded-queue overflow atomically discards the chain, gates transmission, and requests a fresh IDR. PipeWire keepalives plus `videorate` bound the requested 15, 30, or 60 FPS cadence while still accepting GNOME's negotiated rate. TuxDisplay caches the most recent keyframe to show a static desktop, but keeps later delta frames gated until a fresh session IDR arrives.
+
+Annex-B start-code inspection uses native byte search and leaves already-normalized access units untouched. The OpenDisplay writer sends framing, telemetry, and the encoded access unit without concatenating another full-frame copy. Sender source rate, sent rate, pending frames, drops, and chain recoveries are saved beside receiver telemetry for `tuxdisplay status`.
 
 ### Direct USB transport
 
@@ -146,7 +150,7 @@ The tray derives three user-facing states:
 
 | Path | Contents |
 | --- | --- |
-| `~/.config/tuxdisplay/config` | Extend/mirror selection, resolution, frame rate, lid-close behavior, display number, and ports |
+| `~/.config/tuxdisplay/config` | Extend/mirror selection, resolution, frame rate, encoder preference, lid-close behavior, display number, and ports |
 | `~/.config/tuxdisplay/password` | Browser PIN |
 | `~/.config/tuxdisplay/*.rfb` | Browser/VNC authentication material when used |
 | `~/.local/state/tuxdisplay/` | Connection state and logs |
@@ -157,7 +161,7 @@ Per-user secrets and configuration are created with mode `0600`. Runtime files a
 ## Design constraints
 
 - Native extension and primary-screen mirroring are coupled to GNOME/Mutter's private ScreenCast, RemoteDesktop, and display-configuration interfaces.
-- Encoding is currently software x264 rather than VA-API/NVENC/V4L2 hardware encoding.
+- Hardware acceleration currently targets VA-API; systems without compatible elements or drivers use the software x264 fallback.
 - Direct OpenDisplay discovery and transport currently use USB only: usbmuxd on iPadOS and ADB forwarding on Android.
 - The configured resolution is fixed for a service run; receiver dimensions do not reconfigure the monitor.
 - One direct OpenDisplay receiver is supported at a time.

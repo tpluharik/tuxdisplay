@@ -27,6 +27,7 @@ from gi.repository import Gio, GLib, Gst, GstVideo  # type: ignore  # noqa: E402
 from display_layout import capture_layout, current_mode_id, layout_signature, restore_layout  # noqa: E402
 from display_source import map_letterboxed_point, primary_monitor_connector, stream_size  # noqa: E402
 from opendisplay_usb import OpenDisplayPointerTranslator, OpenDisplayUSB  # noqa: E402
+from video_pipeline import encoder_candidates, pipeline_description  # noqa: E402
 
 
 REMOTE_DEST = "org.gnome.Mutter.RemoteDesktop"
@@ -50,9 +51,15 @@ def unpack(value: Any) -> Any:
     return value
 
 
-def read_config() -> tuple[str, int, int, int, int]:
+def read_config() -> tuple[str, str, int, int, int, int]:
     config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
-    values = {"DISPLAY_MODE": "extend", "RESOLUTION": "1920x1080", "WEB_PORT": "6080", "FPS": "30"}
+    values = {
+        "DISPLAY_MODE": "extend",
+        "ENCODER": "auto",
+        "RESOLUTION": "1920x1080",
+        "WEB_PORT": "6080",
+        "FPS": "30",
+    }
     path = config_home / "tuxdisplay" / "config"
     if path.exists():
         for line in path.read_text(encoding="utf-8").splitlines():
@@ -66,15 +73,16 @@ def read_config() -> tuple[str, int, int, int, int]:
         port = int(values["WEB_PORT"])
         frames_per_second = int(values["FPS"])
     except (ValueError, TypeError):
-        return "extend", 1920, 1080, 6080, 30
+        return "extend", "auto", 1920, 1080, 6080, 30
     display_mode = values["DISPLAY_MODE"] if values["DISPLAY_MODE"] in {"extend", "mirror"} else "extend"
+    encoder = values["ENCODER"] if values["ENCODER"] in {"auto", "software"} else "auto"
     if not (320 <= width <= 8192 and 240 <= height <= 8192):
         width, height = 1920, 1080
     if not 1024 <= port <= 65535:
         port = 6080
     if frames_per_second not in (15, 30, 60):
         frames_per_second = 30
-    return display_mode, width, height, port, frames_per_second
+    return display_mode, encoder, width, height, port, frames_per_second
 
 
 def ensure_pin() -> str:
@@ -177,6 +185,7 @@ class RequestHandler(BaseHTTPRequestHandler):
                     "height": self.server.app.height,
                     "monitor": self.server.app.source_connector or "Meta-0",
                     "displayMode": self.server.app.display_mode,
+                    "encoder": self.server.app.video_encoder,
                 }
             ).encode()
             self.send_bytes(HTTPStatus.OK, "application/json", body)
@@ -253,7 +262,14 @@ class RequestHandler(BaseHTTPRequestHandler):
 
 class WaylandDisplay:
     def __init__(self) -> None:
-        self.display_mode, self.width, self.height, self.port, self.frames_per_second = read_config()
+        (
+            self.display_mode,
+            self.encoder_preference,
+            self.width,
+            self.height,
+            self.port,
+            self.frames_per_second,
+        ) = read_config()
         self.input_width = self.width
         self.input_height = self.height
         self.source_connector = ""
@@ -276,9 +292,10 @@ class WaylandDisplay:
         self.opendisp_generation = 0
         self.receiver_stats: dict[str, Any] = {}
         self.last_video_at = 0.0
-        self.last_capture_timestamp = -1
         self.opendisp_pointer = OpenDisplayPointerTranslator()
         self.pipeline: Gst.Pipeline | None = None
+        self.video_encoder = "starting"
+        self.hardware_unavailable = False
         self.opendisp: OpenDisplayUSB | None = None
         self.fatal_error: str | None = None
         self.remote_session = ""
@@ -559,7 +576,6 @@ class WaylandDisplay:
 
     def refresh_capture_after_layout_change(self) -> None:
         """Reopen the PipeWire node without recreating Meta-0 or USB."""
-        self.last_capture_timestamp = -1
         print("TuxDisplay monitor arrangement changed; refreshing the video stream", file=sys.stderr, flush=True)
         previous_pipeline = self.pipeline
         if previous_pipeline is not None:
@@ -591,41 +607,51 @@ class WaylandDisplay:
         else:
             self.force_keyframe()
 
-    def start_pipeline(self) -> None:
+    def start_pipeline(self, force_software: bool = False) -> None:
         Gst.init(None)
-        description = (
-            f"pipewiresrc path={self.node_id} do-timestamp=true "
-            "! queue name=capture_queue max-size-buffers=1 leaky=downstream "
-            "! videoconvert ! videoscale add-borders=true "
-            f"! video/x-raw,format=I420,width={self.width},height={self.height},pixel-aspect-ratio=1/1 "
-            "! tee name=displaytee "
-            "displaytee. ! queue max-size-buffers=1 leaky=downstream "
-            "! valve name=jpeg_valve drop=false "
-            "! jpegenc quality=76 "
-            "! appsink name=jpeg_sink emit-signals=true max-buffers=1 drop=true sync=false "
-            "displaytee. ! queue max-size-buffers=2 leaky=downstream "
-            "! x264enc name=h264_encoder tune=zerolatency speed-preset=ultrafast "
-            f"bitrate=8000 byte-stream=true bframes=0 key-int-max={self.frames_per_second} "
-            "! h264parse config-interval=-1 "
-            "! video/x-h264,stream-format=byte-stream,alignment=au "
-            "! appsink name=h264_sink emit-signals=true max-buffers=2 drop=true sync=false"
+        available = {
+            name
+            for name in ("vah264enc", "vapostproc")
+            if Gst.ElementFactory.find(name) is not None
+        }
+        preference = "software" if force_software or self.hardware_unavailable else self.encoder_preference
+        failures: list[str] = []
+        for encoder in encoder_candidates(preference, available):
+            try:
+                self._start_pipeline_candidate(encoder)
+                return
+            except (GLib.Error, RuntimeError) as error:
+                failures.append(f"{encoder}: {error}")
+                if encoder == "hardware":
+                    self.hardware_unavailable = True
+                    print(
+                        f"TuxDisplay hardware encoder unavailable; using software: {error}",
+                        file=sys.stderr,
+                        flush=True,
+                    )
+        raise RuntimeError("; ".join(failures) or "no video encoder is available")
+
+    def _start_pipeline_candidate(self, encoder: str) -> None:
+        if self.node_id is None:
+            raise RuntimeError("Mutter did not provide a PipeWire node")
+        description = pipeline_description(
+            self.node_id,
+            self.width,
+            self.height,
+            self.frames_per_second,
+            encoder,
         )
         pipeline = Gst.parse_launch(description)
         if not isinstance(pipeline, Gst.Pipeline):
             raise RuntimeError("Could not create the video pipeline")
-        self.pipeline = pipeline
-        capture_queue = pipeline.get_by_name("capture_queue")
-        capture_pad = capture_queue.get_static_pad("src") if capture_queue is not None else None
-        if capture_pad is None:
-            raise RuntimeError("Could not attach the video frame-rate limiter")
-        capture_pad.add_probe(Gst.PadProbeType.BUFFER, self.limit_frame_rate)
         jpeg_sink = pipeline.get_by_name("jpeg_sink")
-        jpeg_sink.connect("new-sample", self.on_sample)
         h264_sink = pipeline.get_by_name("h264_sink")
+        if jpeg_sink is None or h264_sink is None:
+            pipeline.set_state(Gst.State.NULL)
+            raise RuntimeError("Could not create the encoded video sinks")
+        jpeg_sink.connect("new-sample", self.on_sample)
         h264_sink.connect("new-sample", self.on_h264_sample)
         messages = pipeline.get_bus()
-        messages.add_signal_watch()
-        messages.connect("message", self.on_pipeline_message)
         result = pipeline.set_state(Gst.State.PLAYING)
         if result == Gst.StateChangeReturn.FAILURE:
             failure = messages.timed_pop_filtered(Gst.SECOND, Gst.MessageType.ERROR)
@@ -634,25 +660,21 @@ class WaylandDisplay:
                 error, debug = failure.parse_error()
                 detail = f": {error.message}; {debug}"
             pipeline.set_state(Gst.State.NULL)
-            self.pipeline = None
             raise RuntimeError(f"PipeWire video pipeline could not start{detail}")
-
-    def limit_frame_rate(self, _pad: Gst.Pad, info: Gst.PadProbeInfo) -> Gst.PadProbeReturn:
-        """Drop excess capture buffers without delaying the first frame."""
-        buffer = info.get_buffer()
-        if buffer is None:
-            return Gst.PadProbeReturn.OK
-        timestamp = int(buffer.pts)
-        if timestamp == Gst.CLOCK_TIME_NONE:
-            timestamp = time.monotonic_ns()
-        interval = 1_000_000_000 // self.frames_per_second
-        tolerance = min(1_000_000, interval // 10)
-        if self.last_capture_timestamp >= 0:
-            elapsed = timestamp - self.last_capture_timestamp
-            if 0 <= elapsed < interval - tolerance:
-                return Gst.PadProbeReturn.DROP
-        self.last_capture_timestamp = timestamp
-        return Gst.PadProbeReturn.OK
+        state_result, _state, _pending = pipeline.get_state(Gst.SECOND)
+        if state_result == Gst.StateChangeReturn.FAILURE:
+            failure = messages.timed_pop_filtered(0, Gst.MessageType.ERROR)
+            detail = ""
+            if failure is not None:
+                error, debug = failure.parse_error()
+                detail = f": {error.message}; {debug}"
+            pipeline.set_state(Gst.State.NULL)
+            raise RuntimeError(f"PipeWire video pipeline did not become ready{detail}")
+        messages.add_signal_watch()
+        messages.connect("message", self.on_pipeline_message)
+        self.pipeline = pipeline
+        self.video_encoder = encoder
+        self.write_client_state()
 
     def prepare_opendisplay(self) -> None:
         self.opendisp = OpenDisplayUSB(
@@ -726,6 +748,20 @@ class WaylandDisplay:
     def on_pipeline_message(self, _bus: Gst.Bus, message: Gst.Message) -> None:
         if message.type == Gst.MessageType.ERROR:
             error, detail = message.parse_error()
+            if (
+                self.video_encoder == "hardware"
+                and self.encoder_preference == "auto"
+                and not self.stopping
+                and not self.hardware_unavailable
+            ):
+                self.hardware_unavailable = True
+                print(
+                    f"TuxDisplay hardware encoder failed; switching to software: {error.message}; {detail}",
+                    file=sys.stderr,
+                    flush=True,
+                )
+                GLib.idle_add(self.restart_pipeline_with_software)
+                return
             self.fatal_error = f"video pipeline error: {error.message}; {detail}"
             print(f"TuxDisplay {self.fatal_error}", file=sys.stderr)
             self.loop.quit()
@@ -733,6 +769,25 @@ class WaylandDisplay:
             self.fatal_error = "video pipeline ended unexpectedly"
             print(f"TuxDisplay {self.fatal_error}", file=sys.stderr)
             self.loop.quit()
+
+    def restart_pipeline_with_software(self) -> bool:
+        if self.stopping:
+            return GLib.SOURCE_REMOVE
+        previous_pipeline = self.pipeline
+        if previous_pipeline is not None:
+            previous_pipeline.get_bus().remove_signal_watch()
+            previous_pipeline.set_state(Gst.State.NULL)
+            self.pipeline = None
+        try:
+            self.start_pipeline(force_software=True)
+        except (GLib.Error, RuntimeError) as error:
+            self.fatal_error = f"hardware and software video encoders failed: {error}"
+            print(f"TuxDisplay {self.fatal_error}", file=sys.stderr, flush=True)
+            self.loop.quit()
+            return GLib.SOURCE_REMOVE
+        if self.opendisp is not None:
+            self.opendisp.recover_video()
+        return GLib.SOURCE_REMOVE
 
     def remote_input(self, method: str, signature: str, values: tuple[Any, ...]) -> None:
         self.call(REMOTE_DEST, self.remote_session, REMOTE_SESSION_IFACE, method, GLib.Variant(signature, values))
@@ -930,7 +985,10 @@ class WaylandDisplay:
                     "opendisplay_status": self.opendisp_status,
                     "display_mode": self.display_mode,
                     "source_connector": self.source_connector,
+                    "video_encoder": self.video_encoder,
+                    "frame_pacing": "steady",
                     "last_video_at": self.last_video_at,
+                    "sender": self.opendisp.performance_stats() if self.opendisp is not None else {},
                     "receiver": self.receiver_stats,
                 }
             )
@@ -989,11 +1047,27 @@ class WaylandDisplay:
         if self.display_signal_subscription:
             self.bus.signal_unsubscribe(self.display_signal_subscription)
             self.display_signal_subscription = 0
-        if self.pipeline is not None:
-            self.pipeline.set_state(Gst.State.NULL)
-            self.pipeline = None
+        # Close the socket first so an appsink callback cannot hold pipeline
+        # shutdown while its writer is still inside a cable send.
         if self.opendisp is not None:
             self.opendisp.stop()
+        pipeline_stop_thread: threading.Thread | None = None
+        if self.pipeline is not None:
+            pipeline = self.pipeline
+            self.pipeline = None
+
+            def stop_pipeline() -> None:
+                pipeline.set_state(Gst.State.NULL)
+
+            # Some VA drivers wait for their PipeWire producer while changing
+            # state. Stop it concurrently, tear down the producer below, then
+            # give it a bounded final join.
+            pipeline_stop_thread = threading.Thread(
+                target=stop_pipeline,
+                name="tuxdisplay-pipeline-stop",
+                daemon=True,
+            )
+            pipeline_stop_thread.start()
         if hasattr(self, "http"):
             shutdown = threading.Thread(target=self.http.shutdown, name="tuxdisplay-http-stop", daemon=True)
             shutdown.start()
@@ -1006,6 +1080,10 @@ class WaylandDisplay:
                 self.call(REMOTE_DEST, self.remote_session, REMOTE_SESSION_IFACE, "Stop", timeout_ms=2_000)
             except GLib.Error:
                 pass
+        if pipeline_stop_thread is not None:
+            pipeline_stop_thread.join(timeout=2)
+            if pipeline_stop_thread.is_alive():
+                print("TuxDisplay video pipeline exceeded the bounded shutdown window", file=sys.stderr, flush=True)
 
     def run(self) -> None:
         try:
@@ -1025,7 +1103,8 @@ class WaylandDisplay:
                 else f"native monitor {self.width}x{self.height}"
             )
             print(
-                f"TuxDisplay {display_description}; encoded at {self.width}x{self.height}; "
+                f"TuxDisplay {display_description}; encoded at {self.width}x{self.height} "
+                f"with {self.video_encoder} H.264; "
                 f"OpenDisplay USB enabled; browser fallback at http://0.0.0.0:{self.port}/",
                 flush=True,
             )

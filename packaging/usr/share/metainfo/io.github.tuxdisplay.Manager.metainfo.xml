@@ -21,6 +21,15 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.14" date="2026-09-27">
+      <description>
+        <ul>
+          <li>Add automatic VA-API H.264 acceleration with a tuned software fallback.</li>
+          <li>Bound the low-latency capture and USB queues and recover safely at a keyframe.</li>
+          <li>Reduce frame-copy overhead and expose sender and receiver performance telemetry.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.13" date="2026-09-26">
       <description>
         <ul>

@@ -17,11 +17,22 @@ The first three commands are safe to paste into a bug report. Review logs before
 TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. TuxDisplay 0.4.3 could reject GNOME's negotiated PipeWire rate, 0.4.4 could periodically reconnect a healthy low-FPS stream, 0.4.9 could leave the GStreamer pipeline in a pending state after displays were rearranged, and 0.4.11 could repeatedly recreate the virtual monitor after a capture failure. Upgrade to 0.4.12 or newer:
 
 ~~~sh
-sudo apt install ./tuxdisplay_0.4.13_all.deb
+sudo apt install ./tuxdisplay_0.4.14_all.deb
 tuxdisplay restart
 ~~~
 
-Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate. Version 0.4.5 prevents false watchdog reconnects on quiet or low-FPS desktops. Version 0.4.6 adds optional closed-lid operation. Version 0.4.7 unifies the desktop application and adds verified in-app updates. Version 0.4.8 adds Android OpenDisplay over an ADB USB tunnel. Version 0.4.9 introduced monitor-placement persistence. Version 0.4.10 keeps PipeWire running during layout refresh. Version 0.4.11 restores the complete validated layout instead of reconstructing the tablet from one anchor. Version 0.4.12 suppresses duplicate topology events, settles real changes before refreshing capture, and prevents service failures from creating a virtual-monitor restart loop. Version 0.4.13 adds touch-controlled primary-screen mirroring.
+Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate. Version 0.4.5 prevents false watchdog reconnects on quiet or low-FPS desktops. Version 0.4.6 adds optional closed-lid operation. Version 0.4.7 unifies the desktop application and adds verified in-app updates. Version 0.4.8 adds Android OpenDisplay over an ADB USB tunnel. Version 0.4.9 introduced monitor-placement persistence. Version 0.4.10 keeps PipeWire running during layout refresh. Version 0.4.11 restores the complete validated layout instead of reconstructing the tablet from one anchor. Version 0.4.12 suppresses duplicate topology events, settles real changes before refreshing capture, and prevents service failures from creating a virtual-monitor restart loop. Version 0.4.13 adds touch-controlled primary-screen mirroring. Version 0.4.14 adds automatic hardware encoding and a bounded low-latency video path.
+
+## Motion on the tablet is jumpy
+
+Open the manager and leave **Video acceleration** on **Automatic (hardware preferred)**. Then run `tuxdisplay status` while moving a window or scrolling on the tablet. `source_fps` is the H.264 rate entering the USB sender, `sent_fps` is the rate written to the cable, and the receiver line is OpenDisplay's own non-normative telemetry. A quiet damage-driven desktop is expected to report a low rate.
+
+- If `drops=0`, `recoveries=0`, and sender and receiver rates agree during motion, the USB transport is healthy.
+- If `source_fps` is low during motion, select 30 FPS or a smaller resolution such as 1024×768.
+- If `source_fps` is healthy but `sent_fps` is lower or recoveries rise, reconnect with another data-capable cable or USB port.
+- If automatic acceleration falls back to software, confirm the VA-API GStreamer elements are installed and usable; `tuxdisplay doctor` and the service log identify the active encoder.
+
+The 60 FPS option is deliberately not the default. At 2048×1536 it requires roughly twice the encode work and bitrate of 30 FPS; use it only when live sender telemetry remains stable.
 
 ## OpenDisplay shows a black screen
 

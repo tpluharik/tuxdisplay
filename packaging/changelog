@@ -1,3 +1,19 @@
+tuxdisplay (0.4.14) unstable; urgency=medium
+
+  * Prefer VA-API H.264 and GPU post-processing with an automatic tuned x264
+    fallback and an explicit compatibility selector in the manager.
+  * Pace the damage-driven PipeWire stream, bound every raw-frame queue, and
+    recover encoded-queue overflow at a fresh IDR instead of sending a broken
+    prediction chain.
+  * Remove redundant Annex-B frame copies, parallelize the software path, and
+    scale bitrate to the configured resolution and frame rate.
+  * Report sender source/sent rates, pending frames, drops, recoveries, active
+    encoder, and receiver health through the CLI state diagnostics.
+  * Close the cable writer before the encoder and bound VA/PipeWire teardown so
+    stopping the service cannot wait indefinitely in a driver state change.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Sun, 27 Sep 2026 15:30:00 +0200
+
 tuxdisplay (0.4.13) unstable; urgency=medium
 
   * Add a persistent Extend desktop or Mirror main screen choice to the GTK

@@ -265,7 +265,7 @@ def list_usb_devices() -> list[dict[str, Any]]:
             connection,
             {
                 "MessageType": "ListDevices",
-                "ClientVersionString": "tuxdisplay-0.4.13",
+                "ClientVersionString": "tuxdisplay-0.4.14",
                 "ProgName": "tuxdisplay",
                 "kLibUSBMuxVersion": 3,
             },
@@ -293,7 +293,7 @@ def connect_usb_device(device_id: int, port: int = OPENDISPLAY_PORT) -> socket.s
             connection,
             {
                 "MessageType": "Connect",
-                "ClientVersionString": "tuxdisplay-0.4.13",
+                "ClientVersionString": "tuxdisplay-0.4.14",
                 "ProgName": "tuxdisplay",
                 "DeviceID": int(device_id),
                 # usbmuxd's plist protocol carries the TCP port in network order.
@@ -322,38 +322,52 @@ def receive_frame(connection: socket.socket) -> bytes:
 
 
 def _find_start_codes(data: bytes) -> list[tuple[int, int]]:
+    """Locate Annex-B markers using CPython's C-level byte search."""
     positions: list[tuple[int, int]] = []
-    index = 0
-    while index + 3 <= len(data):
-        if data[index : index + 4] == b"\x00\x00\x00\x01":
-            positions.append((index, 4))
-            index += 4
-        elif data[index : index + 3] == b"\x00\x00\x01":
-            positions.append((index, 3))
-            index += 3
+    search_from = 0
+    marker = b"\x00\x00\x01"
+    while True:
+        match = data.find(marker, search_from)
+        if match < 0:
+            break
+        if match > 0 and data[match - 1] == 0:
+            positions.append((match - 1, 4))
         else:
-            index += 1
+            positions.append((match, 3))
+        search_from = match + len(marker)
     return positions
 
 
 def normalize_annex_b(data: bytes) -> tuple[bytes, bool]:
-    """Normalize every Annex-B NAL start code to four bytes and report IDR."""
+    """Normalize Annex-B markers and avoid copying already-normalized AUs."""
     starts = _find_start_codes(data)
     if not starts:
         return b"", False
-    output = bytearray()
+    nal_units: list[tuple[int, int]] = []
     is_idr = False
+    needs_rebuild = starts[0][0] != 0
     for item_index, (position, marker_size) in enumerate(starts):
         payload_start = position + marker_size
         payload_end = starts[item_index + 1][0] if item_index + 1 < len(starts) else len(data)
-        nalu = data[payload_start:payload_end]
-        while nalu.endswith(b"\x00"):
-            nalu = nalu[:-1]
-        if not nalu:
+        trimmed_end = payload_end
+        while trimmed_end > payload_start and data[trimmed_end - 1] == 0:
+            trimmed_end -= 1
+        if trimmed_end <= payload_start:
+            needs_rebuild = True
             continue
-        is_idr = is_idr or (nalu[0] & 0x1F) == 5
+        is_idr = is_idr or (data[payload_start] & 0x1F) == 5
+        needs_rebuild = needs_rebuild or marker_size != 4 or trimmed_end != payload_end
+        nal_units.append((payload_start, trimmed_end))
+
+    if not nal_units:
+        return b"", False
+    if not needs_rebuild and len(nal_units) == len(starts):
+        return data, is_idr
+
+    output = bytearray()
+    for payload_start, payload_end in nal_units:
         output.extend(b"\x00\x00\x00\x01")
-        output.extend(nalu)
+        output.extend(data[payload_start:payload_end])
     return bytes(output), is_idr
 
 
@@ -389,15 +403,30 @@ class OpenDisplayUSB:
         self.last_video_submitted = 0.0
         self.last_video_sent = 0.0
         self.queued_video_since_stats = 0
+        self.sent_video_since_stats = 0
+        self.stats_window_started = time.monotonic()
+        self.source_fps = 0.0
+        self.sent_fps = 0.0
         self.bad_stats_reports = 0
         self.last_recovery = 0.0
         self.dropped_frames = 0
+        self.queue_recoveries = 0
 
     def start(self) -> None:
         if self.thread and self.thread.is_alive():
             return
         self.thread = threading.Thread(target=self._run, name="tuxdisplay-opendisplay-transport", daemon=True)
         self.thread.start()
+
+    def performance_stats(self) -> dict[str, int | float]:
+        with self.video_state_lock:
+            return {
+                "queued": self.video_queue.qsize(),
+                "drops": self.dropped_frames,
+                "recoveries": self.queue_recoveries,
+                "source_fps": round(self.source_fps, 1),
+                "sent_fps": round(self.sent_fps, 1),
+            }
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -419,6 +448,7 @@ class OpenDisplayUSB:
         if not normalized:
             return
         now = time.monotonic()
+        request_recovery = False
         with self.connection_lock:
             connected = self.connection is not None
         with self.video_state_lock:
@@ -433,21 +463,27 @@ class OpenDisplayUSB:
                 self.waiting_for_idr = False
             generation = self.video_generation
             self.queued_video_since_stats += 1
-            self._queue_video_locked((generation, normalized, captured_ms))
+            if not self._queue_video_locked((generation, normalized, captured_ms)):
+                queued = self.video_queue.qsize()
+                self.dropped_frames += queued + (0 if is_idr else 1)
+                self.queue_recoveries += 1
+                self.video_generation += 1
+                self._clear_video_queue_locked()
+                if is_idr:
+                    self.waiting_for_idr = False
+                    self._queue_video_locked((self.video_generation, normalized, captured_ms))
+                else:
+                    self.waiting_for_idr = True
+                    request_recovery = True
+        if request_recovery:
+            self.request_keyframe()
 
-    def _queue_video_locked(self, item: tuple[int, bytes, int]) -> None:
+    def _queue_video_locked(self, item: tuple[int, bytes, int]) -> bool:
         try:
             self.video_queue.put_nowait(item)
+            return True
         except queue.Full:
-            try:
-                self.video_queue.get_nowait()
-            except queue.Empty:
-                pass
-            self.dropped_frames += 1
-            try:
-                self.video_queue.put_nowait(item)
-            except queue.Full:
-                self.dropped_frames += 1
+            return False
 
     def _clear_video_queue_locked(self) -> None:
         while not self.video_queue.empty():
@@ -463,8 +499,7 @@ class OpenDisplayUSB:
             if keyframe is None:
                 self.waiting_for_idr = True
                 return False
-            self._queue_video_locked((self.video_generation, keyframe, int(time.time() * 1000)))
-            return True
+            return self._queue_video_locked((self.video_generation, keyframe, int(time.time() * 1000)))
 
     def _reset_video_stream(self, prime_cached: bool) -> None:
         """Atomically discard the old prediction chain and require a fresh IDR."""
@@ -485,13 +520,19 @@ class OpenDisplayUSB:
         self._request_recovery_keyframe(prime_cached=True)
 
     def _send_packet(self, payload: bytes) -> None:
+        self._send_parts(payload)
+
+    def _send_parts(self, *parts: bytes) -> None:
         with self.connection_lock:
             connection = self.connection
         if connection is None:
             raise ConnectionError("OpenDisplay is disconnected")
         try:
             with self.send_lock:
-                connection.sendall(encode_frame(payload))
+                connection.sendall(FRAME_HEADER.pack(sum(len(part) for part in parts)))
+                for part in parts:
+                    if part:
+                        connection.sendall(part)
         except OSError:
             self.session_failed.set()
             raise
@@ -514,8 +555,10 @@ class OpenDisplayUSB:
             sent_ms = int(time.time() * 1000)
             telemetry = json.dumps({"cap": captured_ms, "snd": sent_ms}, separators=(",", ":")).encode("ascii")
             try:
-                self._send_packet(telemetry + access_unit)
+                self._send_parts(telemetry, access_unit)
                 self.last_video_sent = time.monotonic()
+                with self.video_state_lock:
+                    self.sent_video_since_stats += 1
             except (ConnectionError, OSError):
                 return
 
@@ -529,7 +572,13 @@ class OpenDisplayUSB:
             return True
         with self.video_state_lock:
             queued_frames = self.queued_video_since_stats
+            sent_frames = self.sent_video_since_stats
             self.queued_video_since_stats = 0
+            self.sent_video_since_stats = 0
+            elapsed = max(0.001, now - self.stats_window_started)
+            self.stats_window_started = now
+            self.source_fps = queued_frames / elapsed
+            self.sent_fps = sent_frames / elapsed
         # OpenDisplay's `stalls` field counts decoder starvation while a
         # damage-driven desktop is quiet; it is not evidence of a broken USB
         # session. Only compare FPS when the sender actually queued at least
@@ -577,6 +626,10 @@ class OpenDisplayUSB:
         return message
 
     def _run_session(self, connection: socket.socket, receiver: str, transport: str = "USB") -> None:
+        try:
+            connection.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, 1 << 20)
+        except (AttributeError, OSError):
+            pass
         connection.settimeout(5.0)
         hello = self._receive_hello(connection)
         receiver_version = hello.get("pv", 1)
@@ -588,6 +641,10 @@ class OpenDisplayUSB:
         self.bad_stats_reports = 0
         with self.video_state_lock:
             self.queued_video_since_stats = 0
+            self.sent_video_since_stats = 0
+            self.stats_window_started = time.monotonic()
+            self.source_fps = 0.0
+            self.sent_fps = 0.0
         self._reset_video_stream(prime_cached=True)
         with self.connection_lock:
             self.connection = connection
@@ -620,6 +677,7 @@ class OpenDisplayUSB:
                             "type": "ping",
                             "drops": self.dropped_frames,
                             "netDrops": self.dropped_frames,
+                            "recoveries": self.queue_recoveries,
                             "pending": self.video_queue.qsize(),
                             "capFps": self.frames_per_second,
                         }

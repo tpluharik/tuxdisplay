@@ -93,6 +93,14 @@ class OpenDisplayProtocolTests(unittest.TestCase):
         self.assertEqual(normalized.count(b"\x00\x00\x00\x01"), 3)
         self.assertNotIn(b"\x00\x00\x01", normalized.replace(b"\x00\x00\x00\x01", b""))
 
+    def test_normalized_annex_b_access_unit_is_not_copied(self) -> None:
+        raw = b"\x00\x00\x00\x01\x67sps\x00\x00\x00\x01\x65idr"
+
+        normalized, is_idr = MODULE.normalize_annex_b(raw)
+
+        self.assertIs(normalized, raw)
+        self.assertTrue(is_idr)
+
     def test_non_h264_payload_is_rejected(self) -> None:
         normalized, is_idr = MODULE.normalize_annex_b(b"not h264")
         self.assertEqual(normalized, b"")
@@ -146,6 +154,33 @@ class OpenDisplayProtocolTests(unittest.TestCase):
         self.assertTrue(sender.waiting_for_idr)
         self.assertEqual(sender.video_queue.qsize(), 1)
 
+    def test_encoded_queue_overflow_discards_prediction_chain_and_requests_idr(self) -> None:
+        recoveries = []
+        sender = MODULE.OpenDisplayUSB(
+            1920,
+            1080,
+            60,
+            lambda _message: None,
+            lambda _connected, _status: None,
+            lambda: recoveries.append("idr"),
+        )
+        with sender.connection_lock:
+            sender.connection = object()
+        keyframe = b"\x00\x00\x00\x01\x67sps\x00\x00\x00\x01\x65idr"
+        delta = b"\x00\x00\x00\x01\x41delta"
+        sender.submit_video(keyframe, 1)
+        sender.submit_video(delta, 2)
+
+        sender.submit_video(delta, 3)
+
+        self.assertEqual(recoveries, ["idr"])
+        self.assertTrue(sender.waiting_for_idr)
+        self.assertEqual(sender.video_queue.qsize(), 0)
+        self.assertEqual(sender.queue_recoveries, 1)
+        sender.submit_video(keyframe, 4)
+        self.assertFalse(sender.waiting_for_idr)
+        self.assertEqual(sender.video_queue.qsize(), 1)
+
     def test_invalid_protocol_version_is_a_recoverable_connection_error(self) -> None:
         packet = MODULE.encode_frame(json.dumps({"type": "hello", "pv": None}).encode())
 
@@ -196,6 +231,27 @@ class OpenDisplayProtocolTests(unittest.TestCase):
         self.assertTrue(sender._handle_stats({"fps": 14, "stalls": 99, "curLost": 0}))
         self.assertEqual(sender.bad_stats_reports, 0)
         self.assertEqual(recoveries, [])
+
+    def test_sender_rates_are_sampled_in_the_receiver_stats_window(self) -> None:
+        sender = MODULE.OpenDisplayUSB(
+            1920,
+            1080,
+            30,
+            lambda _message: None,
+            lambda _connected, _status: None,
+            lambda: None,
+        )
+        sender.queued_video_since_stats = 120
+        sender.sent_video_since_stats = 118
+        sender.stats_window_started -= 4
+
+        self.assertTrue(sender._handle_stats({"fps": 29, "curLost": 0}))
+
+        performance = sender.performance_stats()
+        self.assertAlmostEqual(performance["source_fps"], 30.0, delta=0.2)
+        self.assertAlmostEqual(performance["sent_fps"], 29.5, delta=0.2)
+        self.assertEqual(sender.queued_video_since_stats, 0)
+        self.assertEqual(sender.sent_video_since_stats, 0)
 
     def test_quiet_damage_driven_desktop_is_not_a_failed_stream(self) -> None:
         recoveries = []

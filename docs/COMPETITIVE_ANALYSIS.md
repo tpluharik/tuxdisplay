@@ -1,6 +1,6 @@
 # Competitive analysis
 
-**Snapshot date:** 2026-09-26
+**Snapshot date:** 2026-09-27
 
 TuxDisplay serves a narrow combination that many second-display products do not: a Debian/Ubuntu GNOME Wayland host, an iPadOS or Android receiver, a real extended desktop or touch-controlled primary-screen mirror, and operation through an ordinary USB data cable without Internet access or IP networking.
 
@@ -24,7 +24,7 @@ The comparison emphasizes:
 
 | Product | Linux host | Real extra desktop | Tablet receiver | Offline cable path | Input | Main trade-off |
 | --- | --- | --- | --- | --- | --- | --- |
-| **TuxDisplay** | Yes; Debian/Ubuntu, GNOME Wayland focus | Yes on GNOME Wayland, plus primary-screen mirroring; isolated workspace elsewhere | OpenDisplay on iPadOS/Android or a browser | Yes; usbmuxd or Android ADB, no IP | Tap, drag, scroll; Pencil as pointer on iPadOS | GNOME-specific native path; software encoding; no native multi-touch |
+| **TuxDisplay** | Yes; Debian/Ubuntu, GNOME Wayland focus | Yes on GNOME Wayland, plus primary-screen mirroring; isolated workspace elsewhere | OpenDisplay on iPadOS/Android or a browser | Yes; usbmuxd or Android ADB, no IP | Tap, drag, scroll; Pencil as pointer on iPadOS | GNOME-specific native path; VA-API depends on the host driver; no native multi-touch |
 | **OpenDisplay Linux sender** | Yes; KDE Plasma Wayland and Hyprland documented | Yes on documented compositors | OpenDisplay | Yes; usbmuxd, plus Wi-Fi | Project-dependent | Closest open-source alternative, but explicitly experimental and not GNOME-focused |
 | **Weylus** | Yes, plus macOS and Windows | Conditional; needs a host-created output/region | Any modern browser | Network transport; can use an existing tethered network | Strong stylus, pressure, tilt, and multi-touch support | Broad input support, but not a turnkey native GNOME extra monitor |
 | **Deskreen** | Yes, plus macOS and Windows | Conditional; a virtual output or dummy plug supplies a second screen | Any modern browser | Network/WebRTC | Browser interaction model | Very broad receiver compatibility; second-monitor setup is separate |
@@ -92,7 +92,7 @@ Safari/MJPEG and X11/noVNC are not as efficient as the OpenDisplay route, but th
 
 - **Desktop breadth:** Weylus and Deskreen support more host operating systems; the experimental OpenDisplay Linux sender covers KDE Plasma and Hyprland.
 - **Input richness:** Weylus documents pressure, tilt, and multi-touch. TuxDisplay deliberately exposes only safe single-pointer semantics.
-- **Encoding efficiency:** the OpenDisplay Linux sender documents hardware encoding; TuxDisplay currently uses software x264.
+- **Encoding breadth:** TuxDisplay now prefers VA-API H.264 and falls back to x264, while the OpenDisplay Linux sender documents several hardware-encoder families across its supported compositors.
 - **Commercial polish and support:** Sidecar, Duet, Luna Display, and spacedesk have mature product experiences and broader end-user support on their chosen platforms.
 - **Remote use:** Sunshine/Moonlight is designed for high-performance network streaming beyond a physically attached second screen.
 - **Automatic display adaptation:** mature commercial tools generally conceal more of the resolution, rotation, reconnect, and device-selection lifecycle.
@@ -102,7 +102,7 @@ Safari/MJPEG and X11/noVNC are not as efficient as the OpenDisplay route, but th
 | Risk | User impact | Mitigation or direction |
 | --- | --- | --- |
 | Mutter-private integration changes | A GNOME update can break native monitor creation | Test supported GNOME releases; isolate compositor calls; retain fallback |
-| Software H.264 load | Heat, battery use, or dropped frames at high resolution | Add VA-API/NVENC/V4L2 encoder selection |
+| Hardware-encoder availability varies | Software fallback can use more power at high resolution | Detect VA-API at runtime, expose the active path, retain tuned x264 fallback |
 | Fixed configured mode | Borders and disruptive restarts on resolution changes | Use receiver hello dimensions and support safe dynamic reconfiguration |
 | Single-pointer input | No multi-touch or Pencil pressure/tilt | Extend the protocol or add an input path with stable slot identity |
 | USB-only OpenDisplay sender | Cable required even on a trusted LAN | Add optional authenticated Wi-Fi OpenDisplay discovery/transport |
@@ -119,7 +119,7 @@ This statement is specific and supportable. TuxDisplay should not claim universa
 ## Suggested roadmap priorities
 
 1. Negotiate a receiver-appropriate aspect ratio from the OpenDisplay hello and make mode changes reconnect cleanly.
-2. Add hardware H.264 encoding with a tested software fallback.
+2. Broaden hardware encoding beyond the implemented VA-API path and publish per-preset performance measurements.
 3. Add a secure optional Wi-Fi OpenDisplay transport.
 4. Provide native KDE Plasma and Hyprland backends, potentially sharing findings with the existing OpenDisplay Linux sender.
 5. Design crash-safe multi-touch and Pencil pressure/tilt around explicit contact identities.
@@ -129,4 +129,4 @@ This statement is specific and supportable. TuxDisplay should not claim universa
 
 ## Bottom line
 
-For a Linux user who specifically has GNOME Wayland, an iPad or Android tablet, and no usable network, TuxDisplay occupies a defensible gap: native desktop extension or primary-screen mirroring over direct USB with no extra hardware. Its most important engineering priorities are smoother resolution lifecycle, hardware encoding, broader compositor support, and stronger input/security semantics. Users who value stylus richness or cross-platform reach more than turnkey GNOME integration should also evaluate Weylus; KDE/Hyprland users should evaluate the experimental OpenDisplay Linux sender; Mac users with an iPad should start with Sidecar.
+For a Linux user who specifically has GNOME Wayland, an iPad or Android tablet, and no usable network, TuxDisplay occupies a defensible gap: native desktop extension or primary-screen mirroring over direct USB with no extra hardware. Its most important engineering priorities are smoother resolution lifecycle, broader hardware/compositor support, and stronger input/security semantics. Users who value stylus richness or cross-platform reach more than turnkey GNOME integration should also evaluate Weylus; KDE/Hyprland users should evaluate the experimental OpenDisplay Linux sender; Mac users with an iPad should start with Sidecar.
