@@ -216,6 +216,49 @@ class OpenDisplayProtocolTests(unittest.TestCase):
         self.assertFalse(sender._handle_stats({"fps": 0, "stalls": 4, "curLost": 1}))
         self.assertTrue(sender.session_failed.is_set())
 
+    def test_missing_stats_requests_idr_then_reconnect_despite_other_control_traffic(self) -> None:
+        recoveries = []
+        controls = []
+        sender = MODULE.OpenDisplayUSB(
+            1920,
+            1080,
+            30,
+            controls.append,
+            lambda _connected, _status: None,
+            lambda: recoveries.append("idr"),
+        )
+        sender.stats_watchdog_armed = True
+        sender.last_stats_received = 100.0
+        sender.last_video_submitted = 107.5
+
+        # Pings, pongs, pointer events, or other control messages do not refresh
+        # receiver video statistics, so they cannot hide a frozen renderer.
+        self.assertTrue(sender._check_receiver_stats_watchdog(108.1))
+        self.assertEqual(recoveries, ["idr"])
+        self.assertEqual(controls, [{"type": "receiverStatsStale", "age": 8.1}])
+        self.assertTrue(sender.stats_recovery_requested)
+
+        sender.last_video_submitted = 114.5
+        self.assertFalse(sender._check_receiver_stats_watchdog(115.1))
+        self.assertTrue(sender.session_failed.is_set())
+
+    def test_fresh_stats_clear_missing_stats_recovery_state(self) -> None:
+        sender = MODULE.OpenDisplayUSB(
+            1920,
+            1080,
+            30,
+            lambda _message: None,
+            lambda _connected, _status: None,
+            lambda: None,
+        )
+        sender.stats_watchdog_armed = True
+        sender.stats_recovery_requested = True
+
+        self.assertTrue(sender._handle_stats({"fps": 29, "curLost": 0}))
+        self.assertTrue(sender.stats_watchdog_armed)
+        self.assertFalse(sender.stats_recovery_requested)
+        self.assertGreater(sender.last_stats_received, 0)
+
     def test_stall_counter_does_not_reconnect_a_healthy_stream(self) -> None:
         recoveries = []
         sender = MODULE.OpenDisplayUSB(

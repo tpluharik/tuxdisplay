@@ -1,4 +1,4 @@
-.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.15" "User Commands"
+.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.16" "User Commands"
 .SH NAME
 tuxdisplay \- use an iPad or Android tablet as a secondary Linux display
 .SH SYNOPSIS
@@ -28,7 +28,10 @@ Xorg and unsupported Wayland compositors use an isolated X11/noVNC workspace;
 that workspace is not an extension of the current desktop.
 .PP
 Version 0.4.0 must not be used on GNOME Wayland because its touch path could
-abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions, 0.4.9 can stall capture while rearranging displays, and 0.4.11 can restart-loop a virtual monitor after capture failure. Use 0.4.12 or newer.
+abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions, 0.4.9 can
+stall capture while rearranging displays, and 0.4.11 can restart-loop a virtual
+monitor after capture failure. Use 0.4.16 or newer for all documented stability
+and frame-pacing fixes.
 .PP
 The GTK manager and three-state indicator are one single-instance application.
 The manager can check GitHub Releases and install a verified update after an
@@ -50,8 +53,9 @@ Stop streaming and remove the virtual monitor, when present, or fallback workspa
 Stop and recreate the display. OpenDisplay and browser viewers must reconnect.
 .TP
 .B status
-Show service state, display mode, OpenDisplay connection state, browser
-fallback URL, and access PIN.
+Show service state, display mode, active encoder, OpenDisplay connection and
+receiver state, sender/receiver frame telemetry, browser fallback URL, and
+access PIN.
 .TP
 .B url
 Print the preferred browser-fallback URL. Direct OpenDisplay USB does not use
@@ -94,7 +98,9 @@ Android ADB authorization, and USB gadget capability.
 Mutter creates a real virtual output named
 .BR Meta-0 .
 PipeWire captures only that output. GStreamer supplies H.264 to OpenDisplay
-and JPEG frames to the browser fallback.
+and JPEG frames to the browser fallback. A live latest-frame clock replaces its
+held image whenever Mutter produces new content and supplies the selected 15,
+30, or 60 FPS cadence without accumulating stale frames.
 .PP
 TuxDisplay remembers the complete logical arrangement under stable physical
 monitor identities because Mutter gives each new virtual output a different
@@ -152,7 +158,7 @@ DISPLAY_NUMBER=48
 WEB_PORT=6080
 VNC_PORT=5900
 .fi
-.PP
+.TP
 .B DISPLAY_MODE
 accepts
 .B extend
@@ -160,25 +166,31 @@ or
 .BR mirror .
 Mirror captures the current primary physical monitor and maps tablet input to
 it; Extend creates the separate Meta-0 output.
-.PP
+.TP
 .B RESOLUTION
 sets the virtual-monitor mode in Extend mode and the encoded raster in Mirror
 mode.
-.PP
-.B DISPLAY_NUMBER
-and
-.B VNC_PORT
-apply only to the X11 fallback.
+.TP
 .B FPS
 accepts 15, 30, or 60 and controls the virtual-monitor, encoder, and advertised
-receiver cadence. The default is 30.
+receiver cadence. The default is 30. Version 0.4.15 and newer clock the latest
+captured frame at this rate even when Mutter reports damage irregularly. Use 60
+only when sender and receiver telemetry show that the host and tablet sustain it.
+.TP
 .B ENCODER
 accepts auto or software. Auto prefers VA-API H.264 acceleration and falls back
 to the tuned x264 path when the required elements or driver are unavailable.
+.TP
 .B KEEP_AWAKE_WITH_LID_CLOSED
 accepts 0 or 1. When enabled, TuxDisplay blocks system sleep and lid-switch
 handling while the display service runs. This also blocks manual and idle
 suspend. Stopping TuxDisplay releases the inhibitor.
+.TP
+.B DISPLAY_NUMBER
+and
+.B VNC_PORT
+apply only to the X11 fallback.
+.TP
 .B WEB_PORT
 and the PIN apply only to browser access. Restart the service after editing.
 .SH ENVIRONMENT
@@ -207,6 +219,20 @@ tuxdisplay doctor
 systemctl --user status tuxdisplay.service
 journalctl --user -u tuxdisplay.service --since "10 minutes ago"
 .fi
+.PP
+In a healthy direct session, sender source and sent rates settle near the
+configured rate, the pending queue remains small, and drops and recoveries stay
+at zero. OpenDisplay receiver counters are non-normative; compare them with the
+sender rates and visible motion before diagnosing a transport failure. Redact
+the PIN, device labels, local addresses, and personal paths before publishing
+diagnostics.
+.PP
+After a receiver has begun reporting health, TuxDisplay treats eight seconds
+without another report during active video as stale. It marks the saved
+telemetry stale, primes the receiver with the cached keyframe, and requests a
+fresh IDR. If reports remain absent for fifteen seconds, it rebuilds the cable
+session. Receivers that never advertise health telemetry are not subject to
+this watchdog.
 .SH SECURITY
 OpenDisplay traffic uses the operating system's trusted-device usbmuxd channel
 or a loopback-only ADB forward, but OpenDisplay protocol version 3 adds no
@@ -220,6 +246,7 @@ Native desktop extension and primary-screen mirroring require GNOME Wayland.
 Direct OpenDisplay transport is currently USB-only. Hardware acceleration
 currently targets VA-API and otherwise falls back to software x264.
 Receiver dimensions are not used to select or dynamically resize the stream.
+Only one direct OpenDisplay receiver is supported at a time.
 .SH SEE ALSO
 .BR tuxdisplay-usb (8),
 .BR systemctl (1),

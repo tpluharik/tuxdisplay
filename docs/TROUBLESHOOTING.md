@@ -14,31 +14,35 @@ The first three commands are safe to paste into a bug report. Review logs before
 
 ## Do not run 0.4.0 on GNOME Wayland
 
-TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. TuxDisplay 0.4.3 could reject GNOME's negotiated PipeWire rate, 0.4.4 could periodically reconnect a healthy low-FPS stream, 0.4.9 could leave the GStreamer pipeline in a pending state after displays were rearranged, and 0.4.11 could repeatedly recreate the virtual monitor after a capture failure. Upgrade to 0.4.12 or newer:
+TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. TuxDisplay 0.4.3 could reject GNOME's negotiated PipeWire rate, 0.4.4 could periodically reconnect a healthy low-FPS stream, 0.4.9 could leave the GStreamer pipeline in a pending state after displays were rearranged, 0.4.11 could repeatedly recreate the virtual monitor after a capture failure, and 0.4.15 could leave a frozen receiver marked healthy. Upgrade to 0.4.16 or newer:
 
 ~~~sh
-sudo apt install ./tuxdisplay_0.4.15_all.deb
+sudo apt install ./tuxdisplay_0.4.16_all.deb
 tuxdisplay restart
 ~~~
 
-Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate. Version 0.4.5 prevents false watchdog reconnects on quiet or low-FPS desktops. Version 0.4.6 adds optional closed-lid operation. Version 0.4.7 unifies the desktop application and adds verified in-app updates. Version 0.4.8 adds Android OpenDisplay over an ADB USB tunnel. Version 0.4.9 introduced monitor-placement persistence. Version 0.4.10 keeps PipeWire running during layout refresh. Version 0.4.11 restores the complete validated layout instead of reconstructing the tablet from one anchor. Version 0.4.12 suppresses duplicate topology events, settles real changes before refreshing capture, and prevents service failures from creating a virtual-monitor restart loop. Version 0.4.13 adds touch-controlled primary-screen mirroring. Version 0.4.14 adds automatic hardware encoding and a bounded low-latency video path. Version 0.4.15 clocks GNOME's latest frame at the configured rate instead of waiting for another damage frame.
+Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate. Version 0.4.5 prevents false watchdog reconnects on quiet or low-FPS desktops. Version 0.4.6 adds optional closed-lid operation. Version 0.4.7 unifies the desktop application and adds verified in-app updates. Version 0.4.8 adds Android OpenDisplay over an ADB USB tunnel. Version 0.4.9 introduced monitor-placement persistence. Version 0.4.10 keeps PipeWire running during layout refresh. Version 0.4.11 restores the complete validated layout instead of reconstructing the tablet from one anchor. Version 0.4.12 suppresses duplicate topology events, settles real changes before refreshing capture, and prevents service failures from creating a virtual-monitor restart loop. Version 0.4.13 adds touch-controlled primary-screen mirroring. Version 0.4.14 adds automatic hardware encoding and a bounded low-latency video path. Version 0.4.15 clocks GNOME's latest frame at the configured rate instead of waiting for another damage frame. Version 0.4.16 detects a receiver whose video telemetry freezes while its control channel remains alive and performs keyframe-first automatic recovery.
 
 ## Motion on the tablet is jumpy
 
 Open the manager and leave **Video acceleration** on **Automatic (hardware preferred)**. Then run `tuxdisplay status` while moving a window or scrolling on the tablet. `source_fps` is the paced H.264 rate entering the USB sender, `sent_fps` is the rate written to the cable, and the receiver line is OpenDisplay's own non-normative telemetry. On 0.4.15 or newer, source and sent rates should remain close to the configured rate after the first frame, including when GNOME's damage notifications are sparse.
+
+At a configured 30 FPS, values around 29–30 FPS are normal because the sender and receiver sample over independent time windows. A healthy steady session normally has `queued` near zero and keeps `drops=0` and `recoveries=0`.
+
+If receiver health changes to `stale=True`, TuxDisplay has stopped trusting the displayed receiver counters. It first sends a cached frame and requests a fresh IDR. If a valid report does not return within roughly seven more seconds, the USB session reconnects automatically; manually restarting the whole display service should no longer be necessary.
 
 - If `drops=0`, `recoveries=0`, and sender and receiver rates agree during motion, the USB transport is healthy.
 - If `source_fps` is low during motion, select 30 FPS or a smaller resolution such as 1024×768.
 - If `source_fps` is healthy but `sent_fps` is lower or recoveries rise, reconnect with another data-capable cable or USB port.
 - If automatic acceleration falls back to software, confirm the VA-API GStreamer elements are installed and usable; `tuxdisplay doctor` and the service log identify the active encoder.
 
-The 60 FPS option is deliberately not the default. At 2048×1536 it requires roughly twice the encode work and bitrate of 30 FPS; use it only when live sender telemetry remains stable.
+The 60 FPS option is deliberately not the default. At 2048×1536 it requires roughly twice the encode work and bitrate of 30 FPS; use it only when live sender telemetry remains stable. If the manager says 60 FPS but `source_fps` remains much lower during sustained motion, the host encoder cannot maintain that preset. Use 30 FPS or reduce the resolution rather than accepting inconsistent motion.
 
 ## OpenDisplay shows a black screen
 
 1. Confirm `tuxdisplay status` reports GNOME Wayland mode and a running service.
 2. Confirm the package version is at least 0.4.8 when using Android.
-3. In Extend mode, move the pointer or a window onto `Meta-0` to create screen damage. In Mirror mode, change something on the primary screen.
+3. Check that `Sender health` appears after the receiver connects. On 0.4.15 or newer, a static desktop still produces the configured sender cadence after the first captured frame; moving a window is no longer required to keep the stream alive.
 4. Close and reopen OpenDisplay so the sender performs a new handshake.
 5. Run `tuxdisplay restart` if the app does not reconnect.
 
@@ -126,7 +130,7 @@ Android uses ADB as its trusted offline cable transport. It does not require Wi-
 
 Check each item:
 
-- Android 8 or newer is running the current [OpenDisplay Android APK](https://github.com/josepacelli/opendisplay-android/releases/latest).
+- Android 8 or newer is running the current [OpenDisplay Android APK](https://github.com/josepacelli/opendisplay-android/releases/latest). Android 12–13 requires receiver version 0.0.8 or newer.
 - **Developer options → USB debugging** is enabled.
 - The cable supports data and Android is unlocked.
 - The **Allow USB debugging** prompt was accepted for this computer.
@@ -213,9 +217,10 @@ Include:
 - Linux distribution and version;
 - desktop and session type from `echo "$XDG_CURRENT_DESKTOP / $XDG_SESSION_TYPE"`;
 - tablet model, OS version, OpenDisplay receiver and version;
-- selected resolution;
+- selected display mode, resolution, frame rate, and acceleration setting;
 - whether the tray is gray, amber, or green;
 - output from `tuxdisplay status`, `tuxdisplay usb status`, and `tuxdisplay doctor`;
+- sender and receiver health after at least ten seconds of active motion, including drops and recoveries;
 - the relevant service log around the failure;
 - exact reproduction steps.
 

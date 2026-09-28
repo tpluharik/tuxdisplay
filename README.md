@@ -12,7 +12,7 @@ The Debian package also includes:
 - an optional USB Ethernet gadget helper for hardware with a device-capable USB controller.
 
 > [!IMPORTANT]
-> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, 0.4.4 can unnecessarily reconnect a healthy low-FPS session, 0.4.9 can stall capture while displays are rearranged, and 0.4.11 can enter a virtual-monitor restart loop after a capture failure. Install 0.4.12 or newer.
+> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, 0.4.4 can unnecessarily reconnect a healthy low-FPS session, 0.4.9 can stall capture while displays are rearranged, 0.4.11 can enter a virtual-monitor restart loop after a capture failure, and 0.4.15 can leave a receiver frozen while reporting stale health. Install 0.4.16 or newer.
 
 ## Documentation
 
@@ -50,21 +50,23 @@ The packaged and tested target is Debian/Ubuntu. Direct OpenDisplay uses usbmuxd
 
 OpenDisplay protocol v3 does not identify individual touch slots. TuxDisplay therefore treats touch and Pencil events as a single guarded pointer stream. Native multi-touch gestures and Pencil pressure or tilt are not forwarded.
 
+The 0.4.15 release was validated on a real iPad USB session at 2048×1536 and 30 FPS: the sender and receiver remained at 29–30 FPS with no reported frame drops or prediction-chain recoveries. This is a tested baseline, not a guarantee for every GPU, cable, or tablet; use `tuxdisplay status` to verify the active system.
+
 ## Install a release
 
 Download the current `.deb` and `SHA256SUMS` from [GitHub Releases](https://github.com/tpluharik/tuxdisplay/releases/latest), then verify and install it:
 
 ~~~sh
 sha256sum --ignore-missing --check SHA256SUMS
-sudo apt install ./tuxdisplay_0.4.15_all.deb
+sudo apt install ./tuxdisplay_0.4.16_all.deb
 ~~~
 
 The checksum file can include packages from several releases. The checksum for the package being installed must report `OK`.
 
 Install one compatible receiver before going offline:
 
-- iPadOS: [OpenDisplay in the App Store](https://apps.apple.com/us/app/opendisplay/id6780264891).
-- Android 8 or newer: download the APK from [OpenDisplay Android releases](https://github.com/josepacelli/opendisplay-android/releases/latest). Android may ask you to allow installation from the app that opens the APK.
+- iPadOS 15 or newer: [OpenDisplay for iPhone and iPad](https://github.com/peetzweg/opendisplay#iphone-app). The upstream project documents TestFlight and source-build installation; use the [App Store listing](https://apps.apple.com/us/app/opendisplay/id6780264891) where it is available.
+- Android 8 or newer: download the current APK from [OpenDisplay Android releases](https://github.com/josepacelli/opendisplay-android/releases/latest). Use version 0.0.8 or newer on Android 12–13. Android may ask you to allow installation from the app that opens the APK.
 
 ## Connect the iPad
 
@@ -192,6 +194,8 @@ VNC_PORT=5900
 
 `DISPLAY_MODE` accepts `extend` or `mirror`. `FPS` accepts `15`, `30`, or `60`; `30` is the balanced default and `60` is intended for systems whose encoder and tablet can sustain it. `ENCODER=auto` prefers the VA-API H.264 encoder and GPU color conversion when available, then falls back to tuned multi-threaded x264; choose `software` only for compatibility troubleshooting. TuxDisplay holds GNOME's latest damage-driven PipeWire frame on a real-time output clock, so the encoder and tablet receive the configured cadence even while GNOME reports changes irregularly. Every queue remains bounded to prevent stale-frame buildup, and `tuxdisplay status` reports both sender and receiver rates. `KEEP_AWAKE_WITH_LID_CLOSED=1` enables the service-lifetime sleep inhibitor; the default `0` preserves normal sleep behavior. `DISPLAY_NUMBER` and `VNC_PORT` apply only to the X11 compatibility workspace. `WEB_PORT` and the PIN apply only to browser access. Restart TuxDisplay after changing a value.
 
+For a healthy direct session, `source_fps` and `sent_fps` should settle near the configured rate, `queued` should remain small, and `drops` and `recoveries` should remain at zero. OpenDisplay's receiver counters are diagnostic rather than a formal performance contract; compare them with the sender rates and visible motion before treating an isolated counter as a failure. If a receiver that previously supplied health reports stops doing so during active video, TuxDisplay 0.4.16 marks those counters stale, requests a fresh keyframe after about eight seconds, and reconnects the cable session after about fifteen seconds if rendering does not recover.
+
 Set `TUXDISPLAY_FORCE_X11=1` in the user service environment to force the isolated X11 fallback.
 
 Runtime state and logs are stored below `~/.local/state/tuxdisplay/`. See [Troubleshooting](docs/TROUBLESHOOTING.md) before editing these files.
@@ -203,7 +207,7 @@ python3 -m unittest discover -s tests -v
 ./build-deb.sh
 ~~~
 
-The package is written to `dist/tuxdisplay_0.4.15_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
+The package is written to `dist/tuxdisplay_0.4.16_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
 
 Development and release conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 

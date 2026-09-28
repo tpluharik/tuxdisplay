@@ -47,8 +47,8 @@ For a package candidate:
 
 ~~~sh
 ./build-deb.sh
-dpkg-deb --info dist/tuxdisplay_0.4.15_all.deb
-dpkg-deb --contents dist/tuxdisplay_0.4.15_all.deb
+dpkg-deb --info dist/tuxdisplay_0.4.16_all.deb
+dpkg-deb --contents dist/tuxdisplay_0.4.16_all.deb
 ~~~
 
 The build replaces the package for the current version and regenerates `dist/SHA256SUMS`. Do not commit a rebuilt binary unless the change is intended for a release asset.
@@ -69,6 +69,9 @@ For GNOME Wayland changes:
 10. Exercise update checking with current, newer, malformed, and checksum-mismatched release fixtures; never install an unverified package.
 11. On Android, test unauthorized and authorized ADB states, receiver launch after service start, cable reconnect, and cleanup with `adb forward --list`.
 12. In Mirror mode, verify the current primary physical monitor is captured, no `Meta-0` is created, and tap/drag/scroll land correctly with both matching and mismatched aspect ratios.
+13. At 15, 30, and 60 FPS, compare `source_fps`, `sent_fps`, and receiver FPS after at least ten seconds of motion. Confirm static content still keeps the configured sender cadence on 0.4.15+, and confirm `drops` and `recoveries` remain zero in the supported baseline.
+14. After the receiver has reported health, stop only its statistics while leaving control traffic and active video running. Confirm 0.4.16+ marks the data stale and requests a keyframe near eight seconds, then reconnects near fifteen seconds. Confirm a receiver that never sends statistics is not disconnected by this watchdog.
+14. Exercise both automatic and software encoding. If VA-API is available, confirm Automatic selects it; if initialization fails, confirm the service falls back once to x264 without a restart loop.
 
 For fallback changes:
 
@@ -107,12 +110,14 @@ Update documentation in the same change when behavior, commands, dependencies, c
 1. Choose a semantic version and update all embedded version strings.
 2. Add a Debian changelog entry with user-visible changes.
 3. Update release-specific README commands.
-4. Run automated and manual checks.
-5. Build the `.deb` and inspect its contents and control scripts.
-6. Verify a clean install and upgrade from the previous release.
-7. Regenerate and verify `dist/SHA256SUMS`.
-8. Tag the exact commit used to build the release.
-9. Upload the package and checksum file to the matching GitHub release.
-10. Re-check the published warning and compatibility notes.
+4. Validate the AppStream metadata, desktop launchers, shell syntax, Python compilation, manual-page rendering, and Markdown links.
+5. Run automated and manual checks, including a real OpenDisplay receiver when transport or video behavior changed.
+6. Build the `.deb` and inspect its contents and control scripts.
+7. Verify a clean install and upgrade from the previous release.
+8. Regenerate and verify `dist/SHA256SUMS` from inside `dist/`.
+9. Tag the exact commit used to build the release.
+10. Upload the package and checksum file to the matching GitHub release.
+11. Download the published assets again, verify the checksum, and confirm the updater can parse the release.
+12. Re-check the published warning, compatibility notes, asset list, and remote tag commit.
 
 Do not rewrite historical changelog entries or move an existing tag.

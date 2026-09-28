@@ -1,3 +1,14 @@
+tuxdisplay (0.4.16) unstable; urgency=high
+
+  * Detect receivers that keep the control channel open after video-health
+    telemetry stops, instead of leaving a frozen tablet marked connected.
+  * Request a cached-frame and fresh-IDR recovery after eight seconds, then
+    rebuild the cable session after fifteen seconds if telemetry stays stale.
+  * Mark receiver telemetry stale in runtime state before reconnecting and
+    keep receivers without statistics support backward compatible.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Mon, 28 Sep 2026 09:05:00 +0200
+
 tuxdisplay (0.4.15) unstable; urgency=high
 
   * Replace damage-dependent videorate pacing with a live latest-frame clock,

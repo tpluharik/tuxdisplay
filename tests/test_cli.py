@@ -141,6 +141,13 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertLess(run.index('self.prepare_opendisplay()'), run.index('self.start_pipeline()'))
         self.assertLess(run.index('self.start_pipeline()'), run.index('self.start_opendisplay()'))
 
+    def test_wayland_marks_missing_receiver_statistics_stale(self) -> None:
+        daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"
+        text = daemon.read_text(encoding="utf-8")
+        self.assertIn('if kind in {"stats", "receiverStatsStale"}:', text)
+        self.assertIn('self.receiver_stats["stale"] = True', text)
+        self.assertIn('self.receiver_stats["age_seconds"]', text)
+
     def test_wayland_layout_is_restored_before_capture_and_changes_refresh_video(self) -> None:
         daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"
         text = daemon.read_text(encoding="utf-8")

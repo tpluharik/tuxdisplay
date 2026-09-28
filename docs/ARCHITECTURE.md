@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.15. The project has two display backends and four receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
+This document describes TuxDisplay 0.4.16. The project has two display backends and four receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
 
 ## GNOME Wayland data flow
 
@@ -45,7 +45,7 @@ Switching between Extend and Mirror performs one explicit service restart. The p
 
 ### Capture and encoding
 
-Mutter provides a damage-driven PipeWire stream for the selected virtual or physical monitor. One GStreamer pipeline paces and scales it into the configured stream raster, then splits the frames:
+Mutter provides a damage-driven PipeWire stream for the selected virtual or physical monitor. One GStreamer pipeline uses `imagefreeze is-live=true allow-replace=true` as a latest-frame clock, paces and scales the result into the configured stream raster, then splits the frames:
 
 - the preferred OpenDisplay branch uses VA-API H.264 plus GPU post-processing when `vah264enc` and `vapostproc` are available;
 - the fallback branch uses zero-latency, sliced, multi-threaded x264;
@@ -64,7 +64,9 @@ The OpenDisplay transport is not IP networking. It does not require an address, 
 
 TuxDisplay checks every attached Apple USB device and every ADB-authorized Android device. Apple candidates are tried through usbmuxd, followed by Android candidates through a serial-scoped ADB forward. Each temporary Android forward is removed after connection failure, disconnect, or shutdown. The sender validates the receiver hello and retries with a bounded backoff.
 
-Receiver telemetry drives staged recovery: first request a fresh IDR, then rebuild the cable session if real packet loss or active-stream underperformance persists. OpenDisplay's decoder-starvation counter is retained for diagnostics but does not trigger recovery because quiet damage-driven desktops can raise it during a healthy session.
+Receiver telemetry drives staged recovery: first request a fresh IDR, then rebuild the cable session if real packet loss or active-stream underperformance persists. OpenDisplay's decoder-starvation counter is retained for diagnostics but does not trigger recovery by itself because it is non-normative and receiver implementations may count stalls differently. Recovery evaluates packet loss and receiver rate only after the sender has produced a sufficient paced sample.
+
+The transport also tracks telemetry liveness separately from general control traffic. Once a receiver has sent a valid statistics report, eight seconds without another report during active video marks the saved counters stale, primes the cached keyframe, and requests a fresh IDR. At fifteen seconds the socket is shut down so both transport threads wake and the discovery loop establishes a new session. A receiver that never implements statistics does not arm this watchdog.
 
 ### Input safety
 
@@ -135,6 +137,7 @@ The helper is privileged and launched through PolicyKit or its disabled-by-defau
 | `tuxdisplay-wayland` | Virtual-monitor or primary-monitor capture, encoding, browser server, and input |
 | `display_source.py` | Primary physical-monitor selection and aspect-aware mirrored input mapping |
 | `opendisplay_usb.py` | usbmuxd and ADB transports, OpenDisplay framing, reconnect, keyframe cache, and input translation |
+| `video_pipeline.py` | Latest-frame pacing, bounded GStreamer branches, bitrate selection, and VA-API/x264 graphs |
 | `tuxdisplay-session` | X11/Xvfb compatibility workspace |
 | `/usr/sbin/tuxdisplay-usb` | Privileged optional USB Ethernet gadget |
 

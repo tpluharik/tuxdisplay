@@ -21,6 +21,15 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.16" date="2026-09-28">
+      <description>
+        <ul>
+          <li>Recover a frozen OpenDisplay renderer even when its control connection remains alive.</li>
+          <li>Request a fresh keyframe before reconnecting a receiver with missing video telemetry.</li>
+          <li>Show stale receiver statistics instead of presenting old health data as current.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.15" date="2026-09-27">
       <description>
         <ul>

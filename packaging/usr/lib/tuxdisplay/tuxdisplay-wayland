@@ -884,7 +884,7 @@ class WaylandDisplay:
 
     def handle_opendisplay_control(self, event: dict[str, Any]) -> None:
         kind = str(event.get("type", ""))
-        if kind == "stats":
+        if kind in {"stats", "receiverStatsStale"}:
             with self.client_lock:
                 if not self.opendisp_connected:
                     return
@@ -924,11 +924,19 @@ class WaylandDisplay:
         with self.client_lock:
             if not self.opendisp_connected or generation != self.opendisp_generation:
                 return GLib.SOURCE_REMOVE
-            self.receiver_stats = {
-                key: event[key]
-                for key in ("fps", "stalls", "curLost", "rtt", "mbps")
-                if isinstance(event.get(key), (int, float))
-            }
+            if event.get("type") == "receiverStatsStale":
+                self.receiver_stats = dict(self.receiver_stats)
+                self.receiver_stats["stale"] = True
+                age = event.get("age")
+                if isinstance(age, (int, float)):
+                    self.receiver_stats["age_seconds"] = round(float(age), 1)
+            else:
+                self.receiver_stats = {
+                    key: event[key]
+                    for key in ("fps", "stalls", "curLost", "rtt", "mbps")
+                    if isinstance(event.get(key), (int, float))
+                }
+                self.receiver_stats["stale"] = False
             self.write_client_state()
         return GLib.SOURCE_REMOVE
 

@@ -52,7 +52,7 @@ Per-user configuration and authentication files are created with mode `0600`:
 - `~/.config/tuxdisplay/password`
 - `~/.config/tuxdisplay/*.rfb` when the VNC fallback is used
 
-Runtime state lives below `~/.local/state/tuxdisplay/`. Logs can contain local addresses, device status, application errors, and filenames. Review and redact them before sharing.
+Runtime state lives below `~/.local/state/tuxdisplay/`. Logs and `tuxdisplay status` can contain local addresses, receiver/device labels, frame-rate and recovery telemetry, application errors, and filenames. Review and redact them before sharing. Performance counters do not contain screen pixels, but a receiver label can still identify a personal device.
 
 The Debian package installs system files as root-owned, while the display service runs as the logged-in desktop user.
 
@@ -85,6 +85,7 @@ These checks protect against accidental corruption, unsafe redirects, and asset 
 - Do not run the display service as root.
 - Leave `tuxdisplay-usb-gadget.service` disabled unless gadget networking is explicitly required.
 - Review `journalctl --user -u tuxdisplay.service` after unexplained connections.
+- Redact receiver names, device identifiers, hostnames, local addresses, and the browser PIN from public issue reports.
 - Inspect the version and release notes shown by the updater before approving installation.
 
 ## Known limitations

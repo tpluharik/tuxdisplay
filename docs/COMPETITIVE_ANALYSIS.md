@@ -1,6 +1,6 @@
 # Competitive analysis
 
-**Snapshot date:** 2026-09-27
+**Snapshot date:** 2026-09-27. The linked first-party sources were rechecked on that date; product support and commercial terms can change independently of this repository.
 
 TuxDisplay serves a narrow combination that many second-display products do not: a Debian/Ubuntu GNOME Wayland host, an iPadOS or Android receiver, a real extended desktop or touch-controlled primary-screen mirror, and operation through an ordinary USB data cable without Internet access or IP networking.
 
@@ -27,7 +27,7 @@ The comparison emphasizes:
 | **TuxDisplay** | Yes; Debian/Ubuntu, GNOME Wayland focus | Yes on GNOME Wayland, plus primary-screen mirroring; isolated workspace elsewhere | OpenDisplay on iPadOS/Android or a browser | Yes; usbmuxd or Android ADB, no IP | Tap, drag, scroll; Pencil as pointer on iPadOS | GNOME-specific native path; VA-API depends on the host driver; no native multi-touch |
 | **OpenDisplay Linux sender** | Yes; KDE Plasma Wayland and Hyprland documented | Yes on documented compositors | OpenDisplay | Yes; usbmuxd, plus Wi-Fi | Project-dependent | Closest open-source alternative, but explicitly experimental and not GNOME-focused |
 | **Weylus** | Yes, plus macOS and Windows | Conditional; needs a host-created output/region | Any modern browser | Network transport; can use an existing tethered network | Strong stylus, pressure, tilt, and multi-touch support | Broad input support, but not a turnkey native GNOME extra monitor |
-| **Deskreen** | Yes, plus macOS and Windows | Conditional; a virtual output or dummy plug supplies a second screen | Any modern browser | Network/WebRTC | Browser interaction model | Very broad receiver compatibility; second-monitor setup is separate |
+| **Deskreen CE** | Yes, plus macOS and Windows | Conditional; a virtual output or dummy plug supplies a second screen | Any modern browser | Network/WebRTC | Browser interaction model | Very broad receiver compatibility; second-monitor setup is separate |
 | **Sunshine + Moonlight** | Yes, plus macOS and Windows | No native extra monitor by itself | Moonlight client | IP network | Game/remote-stream input | Excellent remote/game streaming ecosystem, different primary use case |
 | **Apple Sidecar** | No; Mac host only | Yes | Native iPadOS feature | USB or wireless | Touch gestures and Apple Pencil in supported workflows | Deep Apple integration, unavailable to Linux users |
 | **Duet Display** | No official Linux desktop host | Yes on supported Mac/Windows hosts | Native iPad app | Wired and wireless modes | Touch and Pencil features vary by plan/platform | Polished commercial product, but no documented Linux host |
@@ -38,7 +38,7 @@ The comparison emphasizes:
 
 ### OpenDisplay and the Linux sender
 
-The official [OpenDisplay repository](https://github.com/peetzweg/opendisplay) describes an open protocol and a macOS-to-iPad product with USB and Wi-Fi connections. Its [protocol specification](https://github.com/peetzweg/opendisplay/blob/main/PROTOCOL.md) defines H.264 video, control/input messages, and a transport-independent TCP receiver on port 9000. The project lists [OpenDisplay Android](https://github.com/josepacelli/opendisplay-android) as a compatible third-party receiver; that receiver publishes Android 8+ APK releases and documents ADB forwarding for USB use.
+The official [OpenDisplay repository](https://github.com/peetzweg/opendisplay) describes an open protocol and a macOS-to-iPhone/iPad product with extension and mirroring, USB and Wi-Fi connections, touch/scroll input, and support for multiple receivers. Its current iOS receiver requires iOS/iPadOS 15 or newer. The [protocol specification](https://github.com/peetzweg/opendisplay/blob/main/PROTOCOL.md) defines H.264 video, control/input messages, and a transport-independent TCP receiver on port 9000. The project lists [OpenDisplay Android](https://github.com/josepacelli/opendisplay-android) as a compatible third-party receiver; that receiver publishes Android 8+ APK releases and documents ADB forwarding for USB use.
 
 TuxDisplay is an independent Linux sender for that public protocol. The separate [opendisplay-linux project](https://github.com/tixwho/opendisplay-linux) documents KDE Plasma Wayland and Hyprland support, USB and Wi-Fi transport, PipeWire/FFmpeg capture, hardware-encoder options, and an experimental Qt interface. Its own README calls the project highly experimental and does not list GNOME as a supported compositor. It is the closest technical alternative and also a useful adjacent implementation, not merely a generic competitor.
 
@@ -48,7 +48,7 @@ TuxDisplay is an independent Linux sender for that public protocol. The separate
 
 ### Deskreen
 
-[Deskreen](https://github.com/pavlobu/deskreen) turns any device with a web browser into a secondary screen and uses WebRTC. Its documentation distinguishes screen/application sharing from using a virtual display adapter or dummy plug for a true additional screen. It has excellent receiver reach but depends on IP networking and leaves native display creation to the host environment.
+[Deskreen CE](https://github.com/pavlobu/deskreen) turns any device with a web browser into a screen or application viewer and uses WebRTC. Its documentation distinguishes screen/application sharing from using a virtual display adapter or dummy plug for a true additional screen. It has excellent receiver reach but depends on IP networking and leaves native display creation to the host environment.
 
 ### Sunshine and Moonlight
 
@@ -60,7 +60,7 @@ Apple's [Sidecar requirements and usage guide](https://support.apple.com/en-us/1
 
 ### Duet Display
 
-Duet's [second-display product page](https://www.duetdisplay.com/duet-extend-to-a-second-display) describes wired and wireless extension to tablets. Duet's official desktop offerings are for macOS and Windows; no official Linux host is documented. It is a commercial alternative for users who can choose one of those host systems.
+Duet's [product page](https://www.duetdisplay.com/) describes extension between supported macOS, Windows, iOS, and Android devices. Duet's official desktop downloads are for macOS and Windows; no official Linux host is documented. It is a commercial alternative for users who can choose one of those host systems.
 
 ### Luna Display
 
@@ -68,7 +68,7 @@ Astropad's [Luna Display system requirements](https://support.astropad.com/en/ar
 
 ### spacedesk
 
-The [spacedesk system requirements](https://manual.spacedesk.net/SystemRequirements.html) describe its supported primary machines and iOS viewer/network requirements. Its architecture uses TCP/IP networking and does not document Linux as a primary display host.
+The [spacedesk system requirements](https://manual.spacedesk.net/SystemRequirements.html) document Windows and current macOS versions as primary machines, plus iOS, Android, Windows, and HTML5 viewers. Its architecture uses TCP/IP networking and does not document Linux as a primary display host.
 
 ## Where TuxDisplay is stronger
 
@@ -88,11 +88,15 @@ The host is MIT-licensed, compatible OpenDisplay receivers are available without
 
 Safari/MJPEG and X11/noVNC are not as efficient as the OpenDisplay route, but they keep the package useful when direct USB or GNOME's virtual-monitor API is unavailable.
 
+### 5. The sender exposes the performance path
+
+TuxDisplay reports the selected encoder, paced source rate, cable send rate, queue depth, dropped access units, chain recoveries, and receiver telemetry. Version 0.4.15 also maintains the selected cadence from the newest captured GNOME frame instead of waiting for a new damage event. These diagnostics make a slow encoder, USB bottleneck, or receiver mismatch visible without claiming a universal latency advantage.
+
 ## Where alternatives are stronger
 
 - **Desktop breadth:** Weylus and Deskreen support more host operating systems; the experimental OpenDisplay Linux sender covers KDE Plasma and Hyprland.
 - **Input richness:** Weylus documents pressure, tilt, and multi-touch. TuxDisplay deliberately exposes only safe single-pointer semantics.
-- **Encoding breadth:** TuxDisplay now prefers VA-API H.264 and falls back to x264, while the OpenDisplay Linux sender documents several hardware-encoder families across its supported compositors.
+- **Encoding breadth:** TuxDisplay prefers VA-API H.264 and falls back to x264; Weylus and the OpenDisplay Linux sender document additional hardware-encoder families on supported systems.
 - **Commercial polish and support:** Sidecar, Duet, Luna Display, and spacedesk have mature product experiences and broader end-user support on their chosen platforms.
 - **Remote use:** Sunshine/Moonlight is designed for high-performance network streaming beyond a physically attached second screen.
 - **Automatic display adaptation:** mature commercial tools generally conceal more of the resolution, rotation, reconnect, and device-selection lifecycle.
@@ -119,13 +123,13 @@ This statement is specific and supportable. TuxDisplay should not claim universa
 ## Suggested roadmap priorities
 
 1. Negotiate a receiver-appropriate aspect ratio from the OpenDisplay hello and make mode changes reconnect cleanly.
-2. Broaden hardware encoding beyond the implemented VA-API path and publish per-preset performance measurements.
+2. Broaden hardware encoding beyond the implemented VA-API path and publish repeatable per-preset latency, frame-consistency, CPU, and power measurements.
 3. Add a secure optional Wi-Fi OpenDisplay transport.
 4. Provide native KDE Plasma and Hyprland backends, potentially sharing findings with the existing OpenDisplay Linux sender.
 5. Design crash-safe multi-touch and Pencil pressure/tilt around explicit contact identities.
 6. Add per-device authorization, interface binding, and encrypted browser access.
 7. Publish signed, reproducible packages and a supported GNOME/distribution matrix.
-8. Benchmark end-to-end latency, frame consistency, CPU use, and power at each preset against open-source alternatives.
+8. Benchmark the measured 0.4.15 frame-pacing baseline against open-source alternatives on several GPUs, tablet generations, and cables.
 
 ## Bottom line
 

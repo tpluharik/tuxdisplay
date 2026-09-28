@@ -27,6 +27,9 @@ FRAME_HEADER = struct.Struct("!I")
 MAX_CONTROL_SIZE = (1 << 20) - 1
 MAX_USBMUX_MESSAGE_SIZE = 1 << 20
 ADB_TIMEOUT = 8
+RECEIVER_STATS_RECOVERY_SECONDS = 8.0
+RECEIVER_STATS_RECONNECT_SECONDS = 15.0
+ACTIVE_VIDEO_WINDOW_SECONDS = 3.0
 
 
 class USBMuxError(RuntimeError):
@@ -265,7 +268,7 @@ def list_usb_devices() -> list[dict[str, Any]]:
             connection,
             {
                 "MessageType": "ListDevices",
-                "ClientVersionString": "tuxdisplay-0.4.15",
+                "ClientVersionString": "tuxdisplay-0.4.16",
                 "ProgName": "tuxdisplay",
                 "kLibUSBMuxVersion": 3,
             },
@@ -293,7 +296,7 @@ def connect_usb_device(device_id: int, port: int = OPENDISPLAY_PORT) -> socket.s
             connection,
             {
                 "MessageType": "Connect",
-                "ClientVersionString": "tuxdisplay-0.4.15",
+                "ClientVersionString": "tuxdisplay-0.4.16",
                 "ProgName": "tuxdisplay",
                 "DeviceID": int(device_id),
                 # usbmuxd's plist protocol carries the TCP port in network order.
@@ -409,6 +412,9 @@ class OpenDisplayUSB:
         self.sent_fps = 0.0
         self.bad_stats_reports = 0
         self.last_recovery = 0.0
+        self.last_stats_received = 0.0
+        self.stats_watchdog_armed = False
+        self.stats_recovery_requested = False
         self.dropped_frames = 0
         self.queue_recoveries = 0
 
@@ -515,6 +521,57 @@ class OpenDisplayUSB:
         self._reset_video_stream(prime_cached=prime_cached)
         self.request_keyframe()
 
+    def _fail_current_session(self) -> None:
+        """Wake both session threads so the discovery loop can reconnect."""
+        self.session_failed.set()
+        with self.connection_lock:
+            connection = self.connection
+        if connection is not None:
+            try:
+                connection.shutdown(socket.SHUT_RDWR)
+            except (AttributeError, OSError):
+                pass
+
+    def _check_receiver_stats_watchdog(self, now: float | None = None) -> bool:
+        """Recover a renderer that still answers control traffic but stops reporting video health."""
+        now = time.monotonic() if now is None else now
+        request_recovery = False
+        reconnect = False
+        age = 0.0
+        with self.video_state_lock:
+            if not self.stats_watchdog_armed:
+                return True
+            last_video_activity = max(self.last_video_submitted, self.last_video_sent)
+            if last_video_activity <= 0 or now - last_video_activity > ACTIVE_VIDEO_WINDOW_SECONDS:
+                return True
+            age = max(0.0, now - self.last_stats_received)
+            if age >= RECEIVER_STATS_RECONNECT_SECONDS:
+                reconnect = True
+            elif age >= RECEIVER_STATS_RECOVERY_SECONDS and not self.stats_recovery_requested:
+                self.stats_recovery_requested = True
+                self.last_recovery = now
+                request_recovery = True
+        if request_recovery:
+            print(
+                f"TuxDisplay OpenDisplay receiver statistics stale for {age:.1f}s; requesting a fresh keyframe",
+                file=sys.stderr,
+                flush=True,
+            )
+            try:
+                self.on_control({"type": "receiverStatsStale", "age": round(age, 1)})
+            except Exception as error:
+                print(f"TuxDisplay OpenDisplay status error: {error}", file=sys.stderr, flush=True)
+            self._request_recovery_keyframe(prime_cached=True)
+        if reconnect:
+            print(
+                f"TuxDisplay OpenDisplay receiver statistics missing for {age:.1f}s; reconnecting",
+                file=sys.stderr,
+                flush=True,
+            )
+            self._fail_current_session()
+            return False
+        return True
+
     def recover_video(self) -> None:
         """Refresh a live receiver after the desktop monitor topology changes."""
         self._request_recovery_keyframe(prime_cached=True)
@@ -571,6 +628,9 @@ class OpenDisplayUSB:
         except (TypeError, ValueError, OverflowError):
             return True
         with self.video_state_lock:
+            self.last_stats_received = now
+            self.stats_watchdog_armed = True
+            self.stats_recovery_requested = False
             queued_frames = self.queued_video_since_stats
             sent_frames = self.sent_video_since_stats
             self.queued_video_since_stats = 0
@@ -592,7 +652,7 @@ class OpenDisplayUSB:
             self.last_recovery = now
             self._request_recovery_keyframe()
         elif self.bad_stats_reports >= 3 and now - self.last_recovery >= 8.0:
-            self.session_failed.set()
+            self._fail_current_session()
             return False
         return True
 
@@ -639,6 +699,9 @@ class OpenDisplayUSB:
         self.session_failed.clear()
         self.bad_stats_reports = 0
         with self.video_state_lock:
+            self.last_stats_received = 0.0
+            self.stats_watchdog_armed = False
+            self.stats_recovery_requested = False
             self.queued_video_since_stats = 0
             self.sent_video_since_stats = 0
             self.stats_window_started = time.monotonic()
@@ -670,6 +733,8 @@ class OpenDisplayUSB:
         try:
             while not self.stop_event.is_set() and not self.session_failed.is_set():
                 now = time.monotonic()
+                if not self._check_receiver_stats_watchdog(now):
+                    return
                 if now - last_ping >= 2.0:
                     self._send_control(
                         {
