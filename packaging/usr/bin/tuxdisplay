@@ -24,7 +24,7 @@ import urllib.request
 
 
 APP_NAME = "TuxDisplay"
-VERSION = "0.4.16"
+VERSION = "0.4.17"
 SERVICE = "tuxdisplay.service"
 USB_GADGET_ADDRESS = "10.55.0.1"
 UPDATE_API = "https://api.github.com/repos/tpluharik/tuxdisplay/releases/latest"
@@ -1387,8 +1387,14 @@ def print_status() -> int:
     if isinstance(receiver, dict) and receiver:
         print("Receiver health: " + ", ".join(f"{key}={value}" for key, value in receiver.items()))
     sender = client_state.get("sender", {})
+    capture_fps = client_state.get("capture_fps")
+    if isinstance(capture_fps, (int, float)):
+        print(f"Capture rate: {capture_fps} FPS (recent PipeWire output)")
     if isinstance(sender, dict) and sender:
         print("Sender health: " + ", ".join(f"{key}={value}" for key, value in sender.items()))
+    pipeline = client_state.get("pipeline", {})
+    if isinstance(pipeline, dict) and pipeline:
+        print("Pipeline health: " + ", ".join(f"{key}={value}" for key, value in pipeline.items()))
     print(f"Browser fallback URL: {preferred_url()}")
     print(f"Browser fallback PIN: {read_password()}")
     if not running:

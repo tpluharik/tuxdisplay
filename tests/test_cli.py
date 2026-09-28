@@ -110,19 +110,23 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertIn('(\"mirror\", \"Mirror main screen\")', manager)
         self.assertIn('configuration["DISPLAY_MODE"] = mode', manager)
 
-    def test_wayland_pipeline_paces_damage_driven_frames_without_unbounded_queues(self) -> None:
+    def test_wayland_pipeline_encodes_damage_driven_frames_without_unbounded_queues(self) -> None:
         daemon = SCRIPT.parents[1] / 'lib' / 'tuxdisplay' / 'tuxdisplay-wayland'
         text = daemon.read_text(encoding='utf-8')
         pipeline = daemon.parent / "video_pipeline.py"
         pipeline_text = pipeline.read_text(encoding="utf-8")
-        self.assertIn('keepalive-time={keepalive_ms}', pipeline_text)
-        self.assertIn('imagefreeze name=frame_pacer is-live=true allow-replace=true', pipeline_text)
-        self.assertIn('framerate={frames_per_second}/1', pipeline_text)
+        self.assertIn('keepalive-time={STATIC_KEEPALIVE_MS}', pipeline_text)
+        self.assertIn('identity name=capture_probe signal-handoffs=true', pipeline_text)
+        self.assertNotIn('imagefreeze', pipeline_text)
+        self.assertNotIn('video/x-raw,framerate=', pipeline_text)
         self.assertIn('max-size-buffers=1', pipeline_text)
         self.assertIn('valve name=jpeg_valve drop=false', pipeline_text)
         self.assertIn('profile=constrained-baseline', pipeline_text)
+        self.assertIn('rate-control=vbr', pipeline_text)
         self.assertIn('appsink name=h264_sink emit-signals=true max-buffers=1 drop=false', pipeline_text)
         self.assertNotIn('limit_frame_rate', text)
+        self.assertIn('"capture_fps": self.capture_fps()', text)
+        self.assertIn('Capture rate: {capture_fps} FPS', SCRIPT.read_text(encoding="utf-8"))
 
     def test_video_acceleration_has_automatic_fallback_and_gui_control(self) -> None:
         daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"
@@ -147,6 +151,15 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertIn('if kind in {"stats", "receiverStatsStale"}:', text)
         self.assertIn('self.receiver_stats["stale"] = True', text)
         self.assertIn('self.receiver_stats["age_seconds"]', text)
+
+    def test_wayland_restarts_a_stalled_video_pipeline_with_a_bounded_fallback(self) -> None:
+        daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"
+        text = daemon.read_text(encoding="utf-8")
+        self.assertIn("PIPELINE_STALL_SECONDS = 8.0", text)
+        self.assertIn("MAX_PIPELINE_RECOVERIES = 2", text)
+        self.assertIn("self.request_pipeline_service_recovery(age)", text)
+        self.assertIn('["/usr/bin/systemctl", "--user", "--no-block", "restart", "tuxdisplay.service"]', text)
+        self.assertIn('recovery_state["force_software_until"]', text)
 
     def test_wayland_layout_is_restored_before_capture_and_changes_refresh_video(self) -> None:
         daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"

@@ -229,7 +229,6 @@ class OpenDisplayProtocolTests(unittest.TestCase):
         )
         sender.stats_watchdog_armed = True
         sender.last_stats_received = 100.0
-        sender.last_video_submitted = 107.5
 
         # Pings, pongs, pointer events, or other control messages do not refresh
         # receiver video statistics, so they cannot hide a frozen renderer.
@@ -238,7 +237,6 @@ class OpenDisplayProtocolTests(unittest.TestCase):
         self.assertEqual(controls, [{"type": "receiverStatsStale", "age": 8.1}])
         self.assertTrue(sender.stats_recovery_requested)
 
-        sender.last_video_submitted = 114.5
         self.assertFalse(sender._check_receiver_stats_watchdog(115.1))
         self.assertTrue(sender.session_failed.is_set())
 
@@ -270,6 +268,7 @@ class OpenDisplayProtocolTests(unittest.TestCase):
             lambda: recoveries.append("idr"),
         )
         sender.queued_video_since_stats = 75
+        sender.stats_window_started -= 5
 
         self.assertTrue(sender._handle_stats({"fps": 14, "stalls": 99, "curLost": 0}))
         self.assertEqual(sender.bad_stats_reports, 0)
@@ -295,6 +294,38 @@ class OpenDisplayProtocolTests(unittest.TestCase):
         self.assertAlmostEqual(performance["sent_fps"], 29.5, delta=0.2)
         self.assertEqual(sender.queued_video_since_stats, 0)
         self.assertEqual(sender.sent_video_since_stats, 0)
+
+    def test_receiver_health_uses_measured_damage_rate_not_configured_ceiling(self) -> None:
+        recoveries = []
+        sender = MODULE.OpenDisplayUSB(
+            1920,
+            1080,
+            30,
+            lambda _message: None,
+            lambda _connected, _status: None,
+            lambda: recoveries.append("idr"),
+        )
+        sender.queued_video_since_stats = 25
+        sender.stats_window_started -= 5
+
+        self.assertTrue(sender._handle_stats({"fps": 3, "curLost": 0}))
+        self.assertAlmostEqual(sender.source_fps, 5.0, delta=0.2)
+        self.assertEqual(recoveries, [])
+
+    def test_sender_reports_measured_capture_rate_to_receiver(self) -> None:
+        sender = MODULE.OpenDisplayUSB(
+            1920,
+            1080,
+            30,
+            lambda _message: None,
+            lambda _connected, _status: None,
+            lambda: None,
+            capture_rate=lambda: 5.37,
+        )
+        self.assertEqual(sender.reported_capture_fps(), 5.4)
+
+        sender.capture_rate = lambda: -2
+        self.assertEqual(sender.reported_capture_fps(), 0.0)
 
     def test_quiet_damage_driven_desktop_is_not_a_failed_stream(self) -> None:
         recoveries = []

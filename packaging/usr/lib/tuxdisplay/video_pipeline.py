@@ -9,11 +9,7 @@ from collections.abc import Collection
 ENCODER_AUTO = "auto"
 ENCODER_SOFTWARE = "software"
 HARDWARE_ELEMENTS = frozenset({"vah264enc", "vapostproc"})
-
-
-def keepalive_interval_ms(frames_per_second: int) -> int:
-    """Return a PipeWire keepalive interval that can sustain the target FPS."""
-    return max(1, 1000 // max(1, frames_per_second))
+STATIC_KEEPALIVE_MS = 1000
 
 
 def encoder_candidates(preference: str, available_elements: Collection[str]) -> list[str]:
@@ -29,6 +25,11 @@ def target_bitrate_kbps(width: int, height: int, frames_per_second: int) -> int:
     return min(20_000, max(4_000, estimated))
 
 
+def keyframe_interval(frames_per_second: int) -> int:
+    """Keep periodic IDRs rare; reconnects request an immediate keyframe."""
+    return min(1024, max(1, frames_per_second) * 60)
+
+
 def pipeline_description(
     node_id: int,
     width: int,
@@ -36,9 +37,9 @@ def pipeline_description(
     frames_per_second: int,
     encoder: str,
 ) -> str:
-    """Build a paced, bounded-latency capture and encoding graph."""
-    keepalive_ms = keepalive_interval_ms(frames_per_second)
+    """Build a damage-driven, bounded-latency capture and encoding graph."""
     bitrate_kbps = target_bitrate_kbps(width, height, frames_per_second)
+    key_int_max = keyframe_interval(frames_per_second)
     queue = "queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream"
     browser_branch = (
         f"displaytee. ! {queue} "
@@ -54,9 +55,9 @@ def pipeline_description(
             f"displaytee. ! {queue} "
             "! vapostproc add-borders=true "
             f"! video/x-raw(memory:VAMemory),format=NV12,width={width},height={height},pixel-aspect-ratio=1/1 "
-            "! vah264enc name=h264_encoder rate-control=cbr target-usage=7 "
+            "! vah264enc name=h264_encoder rate-control=vbr target-usage=7 target-percentage=80 "
             f"bitrate={bitrate_kbps} b-frames=0 ref-frames=1 cabac=false dct8x8=false "
-            f"key-int-max={frames_per_second} aud=true "
+            f"key-int-max={key_int_max} aud=true "
         )
     elif encoder == "software":
         h264_branch = (
@@ -67,17 +68,16 @@ def pipeline_description(
             "! x264enc name=h264_encoder tune=zerolatency speed-preset=ultrafast "
             f"threads=0 sliced-threads=true bitrate={bitrate_kbps} "
             "byte-stream=true bframes=0 cabac=false dct8x8=false "
-            f"key-int-max={frames_per_second} aud=true "
+            f"key-int-max={key_int_max} aud=true "
         )
     else:
         raise ValueError(f"unsupported video encoder: {encoder}")
 
     return (
-        f"pipewiresrc path={node_id} do-timestamp=true keepalive-time={keepalive_ms} "
+        f"pipewiresrc path={node_id} do-timestamp=true keepalive-time={STATIC_KEEPALIVE_MS} "
         "min-buffers=2 max-buffers=8 "
         f"! {queue} name=capture_queue "
-        "! imagefreeze name=frame_pacer is-live=true allow-replace=true "
-        f"! video/x-raw,framerate={frames_per_second}/1 "
+        "! identity name=capture_probe signal-handoffs=true silent=true "
         "! tee name=displaytee "
         + browser_branch
         + h264_branch

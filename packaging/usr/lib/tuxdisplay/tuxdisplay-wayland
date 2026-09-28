@@ -9,9 +9,11 @@ import os
 from pathlib import Path
 import secrets
 import signal
+import subprocess
 import sys
 import threading
 import time
+from collections import deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from http.cookies import SimpleCookie
@@ -43,6 +45,11 @@ DISPLAY_DEST = "org.gnome.Mutter.DisplayConfig"
 DISPLAY_ROOT = "/org/gnome/Mutter/DisplayConfig"
 DISPLAY_IFACE = "org.gnome.Mutter.DisplayConfig"
 PROPERTIES_IFACE = "org.freedesktop.DBus.Properties"
+PIPELINE_STALL_SECONDS = 8.0
+PIPELINE_START_GRACE_SECONDS = 12.0
+PIPELINE_RECOVERY_WINDOW_SECONDS = 600.0
+MAX_PIPELINE_RECOVERIES = 2
+HARDWARE_FALLBACK_SECONDS = 86_400.0
 
 
 def unpack(value: Any) -> Any:
@@ -292,10 +299,27 @@ class WaylandDisplay:
         self.opendisp_generation = 0
         self.receiver_stats: dict[str, Any] = {}
         self.last_video_at = 0.0
+        self.last_video_monotonic = 0.0
+        self.capture_frame_times: deque[float] = deque()
+        self.capture_frame_lock = threading.Lock()
+        self.pipeline_started_monotonic = 0.0
+        self.pipeline_watchdog_source = 0
+        self.pipeline_recovery_requested = False
+        self.pipeline_health: dict[str, Any] = {}
         self.opendisp_pointer = OpenDisplayPointerTranslator()
         self.pipeline: Gst.Pipeline | None = None
         self.video_encoder = "starting"
-        self.hardware_unavailable = False
+        state_home = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
+        self.state_directory = state_home / "tuxdisplay"
+        self.pipeline_recovery_path = self.state_directory / "pipeline-recovery.json"
+        recovery_state = self.load_pipeline_recovery_state()
+        try:
+            force_software_until = float(recovery_state.get("force_software_until", 0))
+        except (TypeError, ValueError, OverflowError):
+            force_software_until = 0.0
+        self.hardware_unavailable = self.encoder_preference == "auto" and force_software_until > time.time()
+        if self.hardware_unavailable:
+            self.pipeline_health = {"fallback": "software", "reason": "previous hardware pipeline stall"}
         self.opendisp: OpenDisplayUSB | None = None
         self.fatal_error: str | None = None
         self.remote_session = ""
@@ -314,6 +338,97 @@ class WaylandDisplay:
         if not viewer.exists():
             viewer = Path(__file__).resolve().parents[2] / "share/tuxdisplay/wayland-viewer.html"
         self.viewer_html = viewer.read_bytes()
+
+    def load_pipeline_recovery_state(self) -> dict[str, Any]:
+        try:
+            payload = json.loads(self.pipeline_recovery_path.read_text(encoding="utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            return {}
+        return payload if isinstance(payload, dict) else {}
+
+    def save_pipeline_recovery_state(self, payload: dict[str, Any]) -> None:
+        self.state_directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+        temporary = self.pipeline_recovery_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps(payload, separators=(",", ":")) + "\n", encoding="utf-8")
+        temporary.chmod(0o600)
+        temporary.replace(self.pipeline_recovery_path)
+
+    def request_pipeline_service_recovery(self, age: float) -> None:
+        if self.pipeline_recovery_requested or self.stopping:
+            return
+        self.pipeline_recovery_requested = True
+        now = time.time()
+        recovery_state = self.load_pipeline_recovery_state()
+        raw_restarts = recovery_state.get("restarts", [])
+        restarts: list[float] = []
+        if isinstance(raw_restarts, list):
+            for value in raw_restarts:
+                try:
+                    timestamp = float(value)
+                except (TypeError, ValueError, OverflowError):
+                    continue
+                if now - PIPELINE_RECOVERY_WINDOW_SECONDS < timestamp <= now:
+                    restarts.append(timestamp)
+        if len(restarts) >= MAX_PIPELINE_RECOVERIES:
+            self.pipeline_health = {
+                "stale": True,
+                "age_seconds": round(age, 1),
+                "recovery": "suppressed",
+            }
+            self.write_client_state()
+            print(
+                "TuxDisplay video recovery suppressed after two pipeline stalls in ten minutes",
+                file=sys.stderr,
+                flush=True,
+            )
+            return
+        restarts.append(now)
+        recovery_state["restarts"] = restarts
+        if self.video_encoder == "hardware" and self.encoder_preference == "auto":
+            recovery_state["force_software_until"] = now + HARDWARE_FALLBACK_SECONDS
+        self.save_pipeline_recovery_state(recovery_state)
+        self.pipeline_health = {
+            "stale": True,
+            "age_seconds": round(age, 1),
+            "recovery": "service restart",
+        }
+        with self.client_lock:
+            self.receiver_stats = dict(self.receiver_stats)
+            self.receiver_stats["stale"] = True
+            self.write_client_state()
+        print(
+            f"TuxDisplay encoded video stopped for {age:.1f}s; restarting the service with bounded recovery",
+            file=sys.stderr,
+            flush=True,
+        )
+        try:
+            subprocess.Popen(
+                ["/usr/bin/systemctl", "--user", "--no-block", "restart", "tuxdisplay.service"],
+                stdin=subprocess.DEVNULL,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                start_new_session=True,
+            )
+        except OSError as error:
+            self.pipeline_health["recovery"] = "failed"
+            self.write_client_state()
+            print(f"TuxDisplay could not request automatic video recovery: {error}", file=sys.stderr, flush=True)
+
+    def check_video_pipeline_liveness(self) -> bool:
+        if self.stopping:
+            return GLib.SOURCE_REMOVE
+        if self.pipeline is None or self.pipeline_recovery_requested:
+            return GLib.SOURCE_CONTINUE
+        now = time.monotonic()
+        if self.last_video_monotonic > 0:
+            age = now - self.last_video_monotonic
+            threshold = PIPELINE_STALL_SECONDS
+        else:
+            age = now - self.pipeline_started_monotonic
+            threshold = PIPELINE_START_GRACE_SECONDS
+        if age >= threshold:
+            self.request_pipeline_service_recovery(age)
+        return GLib.SOURCE_CONTINUE
 
     def call(
         self,
@@ -646,9 +761,11 @@ class WaylandDisplay:
             raise RuntimeError("Could not create the video pipeline")
         jpeg_sink = pipeline.get_by_name("jpeg_sink")
         h264_sink = pipeline.get_by_name("h264_sink")
-        if jpeg_sink is None or h264_sink is None:
+        capture_probe = pipeline.get_by_name("capture_probe")
+        if jpeg_sink is None or h264_sink is None or capture_probe is None:
             pipeline.set_state(Gst.State.NULL)
             raise RuntimeError("Could not create the encoded video sinks")
+        capture_probe.connect("handoff", self.on_capture_frame)
         jpeg_sink.connect("new-sample", self.on_sample)
         h264_sink.connect("new-sample", self.on_h264_sample)
         messages = pipeline.get_bus()
@@ -673,7 +790,17 @@ class WaylandDisplay:
         messages.add_signal_watch()
         messages.connect("message", self.on_pipeline_message)
         self.pipeline = pipeline
+        self.pipeline_started_monotonic = time.monotonic()
+        self.last_video_monotonic = 0.0
+        with self.capture_frame_lock:
+            self.capture_frame_times.clear()
         self.video_encoder = encoder
+        if encoder == "software" and self.hardware_unavailable:
+            print(
+                "TuxDisplay is using the software encoder after a previous hardware pipeline stall",
+                file=sys.stderr,
+                flush=True,
+            )
         self.write_client_state()
 
     def prepare_opendisplay(self) -> None:
@@ -684,6 +811,7 @@ class WaylandDisplay:
             on_control=self.handle_opendisplay_control,
             on_connected=self.set_opendisplay_connected,
             request_keyframe=self.force_keyframe,
+            capture_rate=self.capture_fps,
         )
 
     def start_opendisplay(self) -> None:
@@ -728,6 +856,23 @@ class WaylandDisplay:
                 jpeg_valve.set_property("drop", True)
         return Gst.FlowReturn.OK
 
+    def on_capture_frame(self, _probe: Any, _buffer: Gst.Buffer) -> None:
+        now = time.monotonic()
+        cutoff = now - 5.0
+        with self.capture_frame_lock:
+            self.capture_frame_times.append(now)
+            while self.capture_frame_times and self.capture_frame_times[0] < cutoff:
+                self.capture_frame_times.popleft()
+
+    def capture_fps(self) -> float:
+        now = time.monotonic()
+        cutoff = now - 5.0
+        with self.capture_frame_lock:
+            while self.capture_frame_times and self.capture_frame_times[0] < cutoff:
+                self.capture_frame_times.popleft()
+            elapsed = min(5.0, max(0.001, now - self.pipeline_started_monotonic))
+            return round(len(self.capture_frame_times) / elapsed, 1)
+
     def on_h264_sample(self, sink: Any) -> Gst.FlowReturn:
         sample = sink.emit("pull-sample")
         if sample is None:
@@ -743,6 +888,7 @@ class WaylandDisplay:
         if self.opendisp is not None:
             self.opendisp.submit_video(data, int(time.time() * 1000))
         self.last_video_at = time.time()
+        self.last_video_monotonic = time.monotonic()
         return Gst.FlowReturn.OK
 
     def on_pipeline_message(self, _bus: Gst.Bus, message: Gst.Message) -> None:
@@ -977,8 +1123,7 @@ class WaylandDisplay:
         self.http_thread.start()
 
     def write_client_state(self) -> None:
-        state_home = Path(os.environ.get("XDG_STATE_HOME", Path.home() / ".local" / "state"))
-        directory = state_home / "tuxdisplay"
+        directory = self.state_directory
         directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         path = directory / "clients.json"
         temporary = path.with_suffix(".tmp")
@@ -994,10 +1139,12 @@ class WaylandDisplay:
                     "display_mode": self.display_mode,
                     "source_connector": self.source_connector,
                     "video_encoder": self.video_encoder,
-                    "frame_pacing": "latest-frame-clock",
+                    "frame_pacing": "damage-driven",
+                    "capture_fps": self.capture_fps(),
                     "last_video_at": self.last_video_at,
                     "sender": self.opendisp.performance_stats() if self.opendisp is not None else {},
                     "receiver": self.receiver_stats,
+                    "pipeline": self.pipeline_health,
                 }
             )
             + "\n",
@@ -1052,6 +1199,9 @@ class WaylandDisplay:
         if self.layout_refresh_source:
             GLib.source_remove(self.layout_refresh_source)
             self.layout_refresh_source = 0
+        if self.pipeline_watchdog_source:
+            GLib.source_remove(self.pipeline_watchdog_source)
+            self.pipeline_watchdog_source = 0
         if self.display_signal_subscription:
             self.bus.signal_unsubscribe(self.display_signal_subscription)
             self.display_signal_subscription = 0
@@ -1102,6 +1252,7 @@ class WaylandDisplay:
             self.start_layout_tracking()
             self.prepare_opendisplay()
             self.start_pipeline()
+            self.pipeline_watchdog_source = GLib.timeout_add_seconds(2, self.check_video_pipeline_liveness)
             self.start_opendisplay()
             self.start_http()
             self.write_mode()

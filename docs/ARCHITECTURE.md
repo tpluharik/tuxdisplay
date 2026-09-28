@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.16. The project has two display backends and four receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
+This document describes TuxDisplay 0.4.17. The project has two display backends and four receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
 
 ## GNOME Wayland data flow
 
@@ -45,16 +45,17 @@ Switching between Extend and Mirror performs one explicit service restart. The p
 
 ### Capture and encoding
 
-Mutter provides a damage-driven PipeWire stream for the selected virtual or physical monitor. One GStreamer pipeline uses `imagefreeze is-live=true allow-replace=true` as a latest-frame clock, paces and scales the result into the configured stream raster, then splits the frames:
+Mutter provides a damage-driven PipeWire stream for the selected virtual or physical monitor. One GStreamer pipeline accepts each changed frame immediately, emits the most recent buffer only once per second while the source is otherwise quiet as a liveness probe, scales it into the configured stream raster, and splits the frames:
 
 - the preferred OpenDisplay branch uses VA-API H.264 plus GPU post-processing when `vah264enc` and `vapostproc` are available;
 - the fallback branch uses zero-latency, sliced, multi-threaded x264;
-- both encoders use constrained-baseline Annex B, no B-frames, an IDR interval of at most one second, and a bitrate scaled from the selected pixel rate;
+- both encoders use constrained-baseline Annex B, no B-frames, sparse periodic IDRs plus on-demand keyframes, and a bitrate scaled from the selected pixel rate;
+- VA-API uses variable bitrate so static or simple content does not consume the configured ceiling continuously;
 - the browser branch produces JPEG frames for the authenticated MJPEG endpoint and closes its valve while no browser is viewing.
 
-Raw-frame queues hold at most one frame and leak downstream, so a slow encoder skips obsolete raw images instead of increasing latency. Encoded frames are never dropped independently because doing so would break the H.264 prediction chain: an encoded-queue overflow atomically discards the chain, gates transmission, and requests a fresh IDR. A live, replaceable latest-frame clock converts GNOME's irregular damage-driven input into the requested 15, 30, or 60 FPS cadence without building a stale queue. TuxDisplay caches the most recent keyframe to show a static desktop, but keeps later delta frames gated until a fresh session IDR arrives.
+Raw-frame queues hold at most one frame and leak downstream, so a slow encoder skips obsolete raw images instead of increasing latency. Encoded frames are never dropped independently because doing so would break the H.264 prediction chain: an encoded-queue overflow atomically discards the chain, gates transmission, and requests a fresh IDR. The selected 15, 30, or 60 FPS value caps the virtual monitor and advertised receiver cadence; it does not cause duplicate unchanged frames to be encoded at that rate. TuxDisplay caches the most recent keyframe to show a static desktop, but keeps later delta frames gated until a fresh session IDR arrives.
 
-Annex-B start-code inspection uses native byte search and leaves already-normalized access units untouched. The OpenDisplay writer sends framing, telemetry, and the encoded access unit without concatenating another full-frame copy. Sender source rate, sent rate, pending frames, drops, and chain recoveries are saved beside receiver telemetry for `tuxdisplay status`.
+Annex-B start-code inspection uses native byte search and leaves already-normalized access units untouched. The OpenDisplay writer sends framing, telemetry, and the encoded access unit without concatenating another full-frame copy. Recent PipeWire capture rate, sender source rate, sent rate, pending frames, drops, and chain recoveries are saved beside receiver telemetry for `tuxdisplay status`. The sender advertises measured capture rate in its health ping rather than repeating the configured ceiling as if it were observed performance.
 
 ### Direct USB transport
 
@@ -64,9 +65,11 @@ The OpenDisplay transport is not IP networking. It does not require an address, 
 
 TuxDisplay checks every attached Apple USB device and every ADB-authorized Android device. Apple candidates are tried through usbmuxd, followed by Android candidates through a serial-scoped ADB forward. Each temporary Android forward is removed after connection failure, disconnect, or shutdown. The sender validates the receiver hello and retries with a bounded backoff.
 
-Receiver telemetry drives staged recovery: first request a fresh IDR, then rebuild the cable session if real packet loss or active-stream underperformance persists. OpenDisplay's decoder-starvation counter is retained for diagnostics but does not trigger recovery by itself because it is non-normative and receiver implementations may count stalls differently. Recovery evaluates packet loss and receiver rate only after the sender has produced a sufficient paced sample.
+Receiver telemetry drives staged recovery: first request a fresh IDR, then rebuild the cable session if real packet loss or active-stream underperformance persists. OpenDisplay's decoder-starvation counter is retained for diagnostics but does not trigger recovery by itself because it is non-normative and receiver implementations may count stalls differently. Recovery evaluates packet loss and receiver rate only after the sender has produced a sufficient active sample.
 
 The transport also tracks telemetry liveness separately from general control traffic. Once a receiver has sent a valid statistics report, eight seconds without another report during active video marks the saved counters stale, primes the cached keyframe, and requests a fresh IDR. At fifteen seconds the socket is shut down so both transport threads wake and the discovery loop establishes a new session. A receiver that never implements statistics does not arm this watchdog.
+
+A GLib timer independently watches the encoded-frame callback. This covers a whole-pipeline hang where GStreamer and receiver telemetry stop simultaneously, because transport-only evidence cannot distinguish that failure. After eight seconds without an encoded frame, TuxDisplay records the stale pipeline and asks systemd for one non-blocking service recycle. A hardware-pipeline hang records a 24-hour software fallback. The state file retains a rolling ten-minute recovery window; two automatic recycles are allowed and a third is suppressed, preventing a persistent driver failure from turning into a virtual-monitor restart loop.
 
 ### Input safety
 

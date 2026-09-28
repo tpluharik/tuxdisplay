@@ -21,6 +21,16 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.17" date="2026-09-28">
+      <description>
+        <ul>
+          <li>Detect and recover when the host video pipeline and receiver telemetry freeze together.</li>
+          <li>Fall back to software encoding after a hardware-pipeline stall.</li>
+          <li>Bound automatic service recovery so a persistent failure cannot create a restart loop.</li>
+          <li>Reduce GPU and USB work with damage-driven variable-bitrate encoding and measured capture telemetry.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.16" date="2026-09-28">
       <description>
         <ul>

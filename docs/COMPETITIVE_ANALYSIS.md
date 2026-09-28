@@ -90,7 +90,7 @@ Safari/MJPEG and X11/noVNC are not as efficient as the OpenDisplay route, but th
 
 ### 5. The sender exposes the performance path
 
-TuxDisplay reports the selected encoder, paced source rate, cable send rate, queue depth, dropped access units, chain recoveries, and receiver telemetry. Version 0.4.15 also maintains the selected cadence from the newest captured GNOME frame instead of waiting for a new damage event. These diagnostics make a slow encoder, USB bottleneck, or receiver mismatch visible without claiming a universal latency advantage.
+TuxDisplay reports the selected encoder, measured PipeWire capture rate, encoded source rate, cable send rate, queue depth, dropped access units, chain recoveries, and receiver telemetry. Version 0.4.17 encodes changed frames immediately, reduces a static desktop to a low-rate liveness pulse, and uses variable bitrate on VA-API. These diagnostics distinguish a slow compositor capture from an encoder, USB, or receiver bottleneck without claiming a universal latency advantage.
 
 ## Where alternatives are stronger
 

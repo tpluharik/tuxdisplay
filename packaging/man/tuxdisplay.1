@@ -1,4 +1,4 @@
-.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.16" "User Commands"
+.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.17" "User Commands"
 .SH NAME
 tuxdisplay \- use an iPad or Android tablet as a secondary Linux display
 .SH SYNOPSIS
@@ -30,7 +30,7 @@ that workspace is not an extension of the current desktop.
 Version 0.4.0 must not be used on GNOME Wayland because its touch path could
 abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions, 0.4.9 can
 stall capture while rearranging displays, and 0.4.11 can restart-loop a virtual
-monitor after capture failure. Use 0.4.16 or newer for all documented stability
+monitor after capture failure. Use 0.4.17 or newer for all documented stability
 and frame-pacing fixes.
 .PP
 The GTK manager and three-state indicator are one single-instance application.
@@ -98,9 +98,9 @@ Android ADB authorization, and USB gadget capability.
 Mutter creates a real virtual output named
 .BR Meta-0 .
 PipeWire captures only that output. GStreamer supplies H.264 to OpenDisplay
-and JPEG frames to the browser fallback. A live latest-frame clock replaces its
-held image whenever Mutter produces new content and supplies the selected 15,
-30, or 60 FPS cadence without accumulating stale frames.
+and JPEG frames to the browser fallback. Changed frames are encoded immediately;
+while the desktop is unchanged, one liveness frame per second replaces continuous
+duplicate-frame encoding.
 .PP
 TuxDisplay remembers the complete logical arrangement under stable physical
 monitor identities because Mutter gives each new virtual output a different
@@ -172,10 +172,11 @@ sets the virtual-monitor mode in Extend mode and the encoded raster in Mirror
 mode.
 .TP
 .B FPS
-accepts 15, 30, or 60 and controls the virtual-monitor, encoder, and advertised
-receiver cadence. The default is 30. Version 0.4.15 and newer clock the latest
-captured frame at this rate even when Mutter reports damage irregularly. Use 60
-only when sender and receiver telemetry show that the host and tablet sustain it.
+accepts 15, 30, or 60 and controls the virtual-monitor and advertised receiver
+ceiling. The default is 30. Version 0.4.17 encodes damage-driven frames up to this
+limit and uses only a one-frame-per-second liveness pulse while content is static.
+Use 60 only when capture, sender, and receiver telemetry show that the host and
+tablet sustain it.
 .TP
 .B ENCODER
 accepts auto or software. Auto prefers VA-API H.264 acceleration and falls back
@@ -233,6 +234,12 @@ telemetry stale, primes the receiver with the cached keyframe, and requests a
 fresh IDR. If reports remain absent for fifteen seconds, it rebuilds the cable
 session. Receivers that never advertise health telemetry are not subject to
 this watchdog.
+.PP
+Version 0.4.17 also watches the host encoded-frame callback. If it stops for
+eight seconds, TuxDisplay performs a bounded service recycle. A hardware
+pipeline stall enables the software encoder for 24 hours. No more than two
+automatic pipeline recoveries are allowed in ten minutes; further recovery is
+suppressed and shown in pipeline diagnostics instead of creating a restart loop.
 .SH SECURITY
 OpenDisplay traffic uses the operating system's trusted-device usbmuxd channel
 or a loopback-only ADB forward, but OpenDisplay protocol version 3 adds no

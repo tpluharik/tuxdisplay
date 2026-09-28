@@ -16,10 +16,13 @@ SPEC.loader.exec_module(MODULE)
 
 
 class VideoPipelineTests(unittest.TestCase):
-    def test_keepalive_interval_sustains_requested_rate(self) -> None:
-        self.assertEqual(MODULE.keepalive_interval_ms(60), 16)
-        self.assertEqual(MODULE.keepalive_interval_ms(30), 33)
-        self.assertEqual(MODULE.keepalive_interval_ms(15), 66)
+    def test_static_keepalive_is_low_rate(self) -> None:
+        self.assertEqual(MODULE.STATIC_KEEPALIVE_MS, 1000)
+
+    def test_periodic_keyframes_are_rare_and_bounded(self) -> None:
+        self.assertEqual(MODULE.keyframe_interval(15), 900)
+        self.assertEqual(MODULE.keyframe_interval(30), 1024)
+        self.assertEqual(MODULE.keyframe_interval(60), 1024)
 
     def test_auto_prefers_vaapi_but_keeps_software_fallback(self) -> None:
         available = {"vah264enc", "vapostproc"}
@@ -33,15 +36,19 @@ class VideoPipelineTests(unittest.TestCase):
         self.assertEqual(MODULE.target_bitrate_kbps(2048, 1536, 60), 15099)
         self.assertEqual(MODULE.target_bitrate_kbps(8192, 8192, 60), 20000)
 
-    def test_hardware_graph_uses_paced_frames_and_gpu_postprocessing(self) -> None:
+    def test_hardware_graph_uses_damage_driven_frames_and_gpu_postprocessing(self) -> None:
         graph = MODULE.pipeline_description(42, 2048, 1536, 60, "hardware")
         self.assertIn("path=42", graph)
-        self.assertIn("keepalive-time=16", graph)
-        self.assertIn("imagefreeze name=frame_pacer is-live=true allow-replace=true", graph)
-        self.assertIn("framerate=60/1", graph)
+        self.assertIn("keepalive-time=1000", graph)
+        self.assertIn("identity name=capture_probe signal-handoffs=true", graph)
+        self.assertNotIn("imagefreeze", graph)
+        self.assertNotIn("video/x-raw,framerate=", graph)
         self.assertIn("vapostproc add-borders=true", graph)
         self.assertIn("vah264enc name=h264_encoder", graph)
+        self.assertIn("rate-control=vbr", graph)
+        self.assertIn("target-percentage=80", graph)
         self.assertIn("bitrate=15099", graph)
+        self.assertIn("key-int-max=1024", graph)
         self.assertIn("profile=constrained-baseline", graph)
         self.assertNotIn("x264enc", graph)
 
@@ -53,6 +60,7 @@ class VideoPipelineTests(unittest.TestCase):
         self.assertIn("threads=0", graph)
         self.assertIn("sliced-threads=true", graph)
         self.assertIn("bitrate=4977", graph)
+        self.assertIn("key-int-max=1024", graph)
         self.assertIn("appsink name=h264_sink emit-signals=true max-buffers=1 drop=false", graph)
         self.assertIn("queue max-size-buffers=1", graph)
         self.assertIn("valve name=jpeg_valve drop=false", graph)

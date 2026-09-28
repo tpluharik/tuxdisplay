@@ -47,8 +47,8 @@ For a package candidate:
 
 ~~~sh
 ./build-deb.sh
-dpkg-deb --info dist/tuxdisplay_0.4.16_all.deb
-dpkg-deb --contents dist/tuxdisplay_0.4.16_all.deb
+dpkg-deb --info dist/tuxdisplay_0.4.17_all.deb
+dpkg-deb --contents dist/tuxdisplay_0.4.17_all.deb
 ~~~
 
 The build replaces the package for the current version and regenerates `dist/SHA256SUMS`. Do not commit a rebuilt binary unless the change is intended for a release asset.
@@ -69,9 +69,10 @@ For GNOME Wayland changes:
 10. Exercise update checking with current, newer, malformed, and checksum-mismatched release fixtures; never install an unverified package.
 11. On Android, test unauthorized and authorized ADB states, receiver launch after service start, cable reconnect, and cleanup with `adb forward --list`.
 12. In Mirror mode, verify the current primary physical monitor is captured, no `Meta-0` is created, and tap/drag/scroll land correctly with both matching and mismatched aspect ratios.
-13. At 15, 30, and 60 FPS, compare `source_fps`, `sent_fps`, and receiver FPS after at least ten seconds of motion. Confirm static content still keeps the configured sender cadence on 0.4.15+, and confirm `drops` and `recoveries` remain zero in the supported baseline.
+13. At 15, 30, and 60 FPS, compare measured capture rate, `source_fps`, `sent_fps`, and receiver FPS after at least ten seconds of sustained motion. Confirm 0.4.17+ falls toward the one-frame-per-second liveness cadence and low bitrate on static content, and confirm `drops` and `recoveries` remain zero in the supported baseline.
 14. After the receiver has reported health, stop only its statistics while leaving control traffic and active video running. Confirm 0.4.16+ marks the data stale and requests a keyframe near eight seconds, then reconnects near fifteen seconds. Confirm a receiver that never sends statistics is not disconnected by this watchdog.
-14. Exercise both automatic and software encoding. If VA-API is available, confirm Automatic selects it; if initialization fails, confirm the service falls back once to x264 without a restart loop.
+15. Stop the encoded-frame callback and receiver statistics together. Confirm 0.4.17+ requests one service recycle near eight seconds, records a 24-hour software fallback after a hardware stall, and suppresses a third automatic recycle within ten minutes.
+16. Exercise both automatic and software encoding. If VA-API is available, confirm Automatic selects it; if initialization fails, confirm the service falls back once to x264 without a restart loop.
 
 For fallback changes:
 

@@ -1,3 +1,20 @@
+tuxdisplay (0.4.17) unstable; urgency=high
+
+  * Detect a stopped encoded-frame callback even when the USB transport and
+    receiver statistics stop at the same time.
+  * Recover a wedged GStreamer pipeline through a bounded service recycle and
+    use software encoding for 24 hours after a hardware-pipeline stall.
+  * Permit no more than two automatic pipeline recoveries in ten minutes,
+    preventing the virtual-monitor restart loops seen in older releases.
+  * Report stale and recovery-suppressed pipeline state through diagnostics.
+  * Encode new PipeWire frames immediately but reduce unchanged-screen traffic
+    to a one-frame-per-second liveness pulse instead of continuously re-encoding
+    the same desktop at the configured ceiling.
+  * Use variable bitrate on VA-API, lengthen the periodic IDR interval, and
+    report measured PipeWire capture rate separately from transport frame rate.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Mon, 28 Sep 2026 13:58:00 +0200
+
 tuxdisplay (0.4.16) unstable; urgency=high
 
   * Detect receivers that keep the control channel open after video-health

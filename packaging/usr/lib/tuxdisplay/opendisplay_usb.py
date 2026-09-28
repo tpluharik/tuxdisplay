@@ -29,7 +29,6 @@ MAX_USBMUX_MESSAGE_SIZE = 1 << 20
 ADB_TIMEOUT = 8
 RECEIVER_STATS_RECOVERY_SECONDS = 8.0
 RECEIVER_STATS_RECONNECT_SECONDS = 15.0
-ACTIVE_VIDEO_WINDOW_SECONDS = 3.0
 
 
 class USBMuxError(RuntimeError):
@@ -268,7 +267,7 @@ def list_usb_devices() -> list[dict[str, Any]]:
             connection,
             {
                 "MessageType": "ListDevices",
-                "ClientVersionString": "tuxdisplay-0.4.16",
+                "ClientVersionString": "tuxdisplay-0.4.17",
                 "ProgName": "tuxdisplay",
                 "kLibUSBMuxVersion": 3,
             },
@@ -296,7 +295,7 @@ def connect_usb_device(device_id: int, port: int = OPENDISPLAY_PORT) -> socket.s
             connection,
             {
                 "MessageType": "Connect",
-                "ClientVersionString": "tuxdisplay-0.4.16",
+                "ClientVersionString": "tuxdisplay-0.4.17",
                 "ProgName": "tuxdisplay",
                 "DeviceID": int(device_id),
                 # usbmuxd's plist protocol carries the TCP port in network order.
@@ -385,6 +384,7 @@ class OpenDisplayUSB:
         on_control: Callable[[dict[str, Any]], None],
         on_connected: Callable[[bool, str], None],
         request_keyframe: Callable[[], None],
+        capture_rate: Callable[[], float] | None = None,
     ) -> None:
         self.width = width
         self.height = height
@@ -392,6 +392,7 @@ class OpenDisplayUSB:
         self.on_control = on_control
         self.on_connected = on_connected
         self.request_keyframe = request_keyframe
+        self.capture_rate = capture_rate
         self.stop_event = threading.Event()
         self.session_failed = threading.Event()
         self.video_queue: queue.Queue[tuple[int, bytes, int]] = queue.Queue(maxsize=2)
@@ -433,6 +434,14 @@ class OpenDisplayUSB:
                 "source_fps": round(self.source_fps, 1),
                 "sent_fps": round(self.sent_fps, 1),
             }
+
+    def reported_capture_fps(self) -> float:
+        if self.capture_rate is None:
+            return float(self.frames_per_second)
+        try:
+            return round(max(0.0, float(self.capture_rate())), 1)
+        except (TypeError, ValueError, OverflowError):
+            return 0.0
 
     def stop(self) -> None:
         self.stop_event.set()
@@ -541,9 +550,6 @@ class OpenDisplayUSB:
         with self.video_state_lock:
             if not self.stats_watchdog_armed:
                 return True
-            last_video_activity = max(self.last_video_submitted, self.last_video_sent)
-            if last_video_activity <= 0 or now - last_video_activity > ACTIVE_VIDEO_WINDOW_SECONDS:
-                return True
             age = max(0.0, now - self.last_stats_received)
             if age >= RECEIVER_STATS_RECONNECT_SECONDS:
                 reconnect = True
@@ -640,10 +646,11 @@ class OpenDisplayUSB:
             self.source_fps = queued_frames / elapsed
             self.sent_fps = sent_frames / elapsed
         # OpenDisplay's `stalls` field is non-normative receiver telemetry and
-        # is not itself evidence of a broken USB session. Only compare FPS
-        # after the sender queued at least two seconds of paced frames.
-        source_active = queued_frames >= max(3, self.frames_per_second * 2)
-        unhealthy = lost > 0 or (source_active and receiver_fps < max(1.0, self.frames_per_second * 0.25))
+        # is not itself evidence of a broken USB session. Compare the receiver
+        # with the measured damage-driven source rate, not the configured
+        # ceiling, and only after at least two source frames per second.
+        source_active = queued_frames >= max(3, int(elapsed * 2))
+        unhealthy = lost > 0 or (source_active and receiver_fps < max(1.0, self.source_fps * 0.25))
         if not unhealthy:
             self.bad_stats_reports = 0
             return True
@@ -743,7 +750,7 @@ class OpenDisplayUSB:
                             "netDrops": self.dropped_frames,
                             "recoveries": self.queue_recoveries,
                             "pending": self.video_queue.qsize(),
-                            "capFps": self.frames_per_second,
+                            "capFps": self.reported_capture_fps(),
                         }
                     )
                     last_ping = now
