@@ -57,9 +57,9 @@ class WaylandPipelineRecoveryTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             display = self.make_display(directory)
-            with mock.patch.object(MODULE.time, "time", return_value=1000.0), mock.patch.object(
-                MODULE.subprocess, "Popen"
-            ) as popen:
+            with mock.patch.dict(MODULE.os.environ, {"TUXDISPLAY_MANAGED_SERVICE": "1"}), mock.patch.object(
+                MODULE.time, "time", return_value=1000.0
+            ), mock.patch.object(MODULE.subprocess, "Popen") as popen:
                 display.request_pipeline_service_recovery(8.5)
 
             recovery = json.loads(display.pipeline_recovery_path.read_text(encoding="utf-8"))
@@ -82,14 +82,26 @@ class WaylandPipelineRecoveryTests(unittest.TestCase):
                 json.dumps({"restarts": [950.0, 975.0]}) + "\n",
                 encoding="utf-8",
             )
-            with mock.patch.object(MODULE.time, "time", return_value=1000.0), mock.patch.object(
-                MODULE.subprocess, "Popen"
-            ) as popen:
+            with mock.patch.dict(MODULE.os.environ, {"TUXDISPLAY_MANAGED_SERVICE": "1"}), mock.patch.object(
+                MODULE.time, "time", return_value=1000.0
+            ), mock.patch.object(MODULE.subprocess, "Popen") as popen:
                 display.request_pipeline_service_recovery(9.0)
 
             popen.assert_not_called()
             self.assertEqual(display.pipeline_health["recovery"], "suppressed")
             display.write_client_state.assert_called_once()
+
+    def test_standalone_diagnostic_cannot_restart_the_managed_service(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            display = self.make_display(Path(temporary))
+            with mock.patch.dict(MODULE.os.environ, {}, clear=True), mock.patch.object(
+                MODULE.subprocess, "Popen"
+            ) as popen:
+                display.request_pipeline_service_recovery(8.5)
+
+            popen.assert_not_called()
+            self.assertFalse(display.pipeline_recovery_path.exists())
+            self.assertEqual(display.pipeline_health["recovery"], "manual restart required")
 
 
 if __name__ == "__main__":

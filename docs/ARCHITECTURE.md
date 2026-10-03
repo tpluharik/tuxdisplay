@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.17. The project has two display backends and four receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
+This document describes TuxDisplay 0.4.21. The project has two display backends and five receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
 
 ## GNOME Wayland data flow
 
@@ -17,12 +17,17 @@ Selected monitor
             │         ├─ usbmuxd → USB cable → OpenDisplay on iPadOS
             │         └─ ADB forward → USB cable → OpenDisplay on Android
             └─ JPEG frames
+                 ├─ Tight/JPEG VNC → ADB reverse → AVNC on Android
                  └─ authenticated HTTP/MJPEG → tablet browser
 
-OpenDisplay touch / Pencil / scroll
-  └─ guarded single-pointer translation
+Pointer rendering
+  ├─ default: embedded by Mutter → H.264 video → every receiver
+  └─ optional: XWayland position → cursor + cursorImg → OpenDisplay overlay
+
+OpenDisplay touch / Pencil / scroll or AVNC pointer / keyboard
+  └─ guarded input translation
        └─ letterbox-aware coordinate mapping
-            └─ Mutter RemoteDesktop pointer events → selected monitor
+            └─ Mutter RemoteDesktop input events → selected monitor
 ~~~
 
 ### Virtual monitor
@@ -51,9 +56,11 @@ Mutter provides a damage-driven PipeWire stream for the selected virtual or phys
 - the fallback branch uses zero-latency, sliced, multi-threaded x264;
 - both encoders use constrained-baseline Annex B, no B-frames, sparse periodic IDRs plus on-demand keyframes, and a bitrate scaled from the selected pixel rate;
 - VA-API uses variable bitrate so static or simple content does not consume the configured ceiling continuously;
-- the browser branch produces JPEG frames for the authenticated MJPEG endpoint and closes its valve while no browser is viewing.
+- the compatibility branch produces JPEG frames for the authenticated MJPEG endpoint and Tight/JPEG AVNC server, and closes its valve while neither receiver is viewing.
 
 Raw-frame queues hold at most one frame and leak downstream, so a slow encoder skips obsolete raw images instead of increasing latency. Encoded frames are never dropped independently because doing so would break the H.264 prediction chain: an encoded-queue overflow atomically discards the chain, gates transmission, and requests a fresh IDR. The selected 15, 30, or 60 FPS value caps the virtual monitor and advertised receiver cadence; it does not cause duplicate unchanged frames to be encoded at that rate. TuxDisplay caches the most recent keyframe to show a static desktop, but keeps later delta frames gated until a fresh session IDR arrives.
+
+The default screen-cast asks Mutter to embed the cursor, ensuring it is visible even on receivers that implement only video. The optional low-power overlay asks for cursor metadata instead. On GNOME's XWayland session, TuxDisplay then polls the pointer position every 16 ms, maps it through the selected monitor's XRandR geometry, deduplicates unchanged samples, and sends the OpenDisplay `cursor` control message. A generated compact PNG arrow is sent once per connection as `cursorImg`. This optional mode keeps a static desktop at the low-rate liveness cadence during pointer movement, but it is suitable only for receivers that implement the optional cursor controls.
 
 Annex-B start-code inspection uses native byte search and leaves already-normalized access units untouched. The OpenDisplay writer sends framing, telemetry, and the encoded access unit without concatenating another full-frame copy. Recent PipeWire capture rate, sender source rate, sent rate, pending frames, drops, and chain recoveries are saved beside receiver telemetry for `tuxdisplay status`. The sender advertises measured capture rate in its health ping rather than repeating the configured ceiling as if it were observed performance.
 
@@ -71,9 +78,21 @@ The transport also tracks telemetry liveness separately from general control tra
 
 A GLib timer independently watches the encoded-frame callback. This covers a whole-pipeline hang where GStreamer and receiver telemetry stop simultaneously, because transport-only evidence cannot distinguish that failure. After eight seconds without an encoded frame, TuxDisplay records the stale pipeline and asks systemd for one non-blocking service recycle. A hardware-pipeline hang records a 24-hour software fallback. The state file retains a rolling ten-minute recovery window; two automatic recycles are allowed and a third is suppressed, preventing a persistent driver failure from turning into a virtual-monitor restart loop.
 
+### AVNC compatibility transport
+
+The Wayland daemon also binds a minimal RFB 3.8 server to `127.0.0.1:VNC_PORT`. It advertises Tight encoding and reuses the JPEG frame already produced for the browser branch, so it does not add another screen capture. The branch remains closed until an AVNC connection completes. Each framebuffer update is request-paced by the VNC client, preventing an unbounded sender queue.
+
+The server requires the viewer to advertise both Tight encoding and a JPEG quality pseudo-encoding. It accepts display widths up to Tight's 2048-pixel rectangle limit; wider TuxDisplay presets remain available to OpenDisplay and the browser path, while AVNC reports an explicit unavailable state.
+
+An `AndroidReverseManager` discovers ADB-authorized devices and applies `adb -s SERIAL reverse tcp:VNC_PORT tcp:VNC_PORT`. AVNC therefore connects to `127.0.0.1:5900` on Android even though the server runs on the laptop. The mapping is device-scoped and removed when TuxDisplay stops. It never binds VNC to a LAN interface.
+
+The implemented RFB input subset covers absolute pointer motion, three buttons, vertical and horizontal wheel events, and keysyms. Disconnect releases tracked buttons and keys. The default embedded cursor remains part of each JPEG frame, so AVNC does not depend on OpenDisplay cursor extensions.
+
+RFB security type `None` is deliberately limited to the loopback socket behind Android's USB-debugging authorization. This is a compatibility boundary, not application-layer encryption or per-session authentication. OpenDisplay remains the preferred path for H.264 efficiency, richer telemetry, and automatic frozen-receiver recovery.
+
 ### Input safety
 
-OpenDisplay v3 touch messages do not include a touch-slot identifier. Mutter's native touch API requires balanced, uniquely identified slots. Sending the slot-less stream directly as native touch could create invalid compositor state; TuxDisplay 0.4.0 did so and could abort GNOME Shell.
+OpenDisplay v3 touch messages do not include a touch-slot identifier. Mutter's native touch API requires balanced, uniquely identified slots. Sending the slot-less stream directly as native touch could create invalid compositor state; TuxDisplay 0.4.0 did so and could abort GNOME Shell. AVNC instead sends standard VNC pointer/button events and never enters Mutter's native multi-touch path.
 
 Since 0.4.1, `OpenDisplayPointerTranslator` converts touch and Pencil phases into one guarded pointer/button stream:
 
@@ -97,10 +116,11 @@ This path uses ordinary HTTP. It is a convenience fallback for trusted private n
 On Xorg or a compositor without the required Mutter APIs, `tuxdisplay-session` starts an isolated desktop:
 
 ~~~text
-Xvfb :48 → Openbox + tint2 → x11vnc → websockify/noVNC → Safari
+Xvfb :48 → Openbox + tint2 → x11vnc ┬→ websockify/noVNC → browser
+                                      └→ ADB reverse → AVNC on Android
 ~~~
 
-The isolated desktop is not part of the user's current monitor layout. `tuxdisplay launch` can start applications inside it. The display number and VNC port are configurable because they belong only to this backend.
+The isolated desktop is not part of the user's current monitor layout. `tuxdisplay launch` can start applications inside it. The display number is specific to this backend; the VNC port is shared with the Wayland AVNC compatibility path. X11's x11vnc requires the displayed TuxDisplay PIN as its VNC password.
 
 Set `TUXDISPLAY_FORCE_X11=1` in the user service environment to select this backend deliberately.
 

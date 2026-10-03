@@ -1,4 +1,4 @@
-.TH TUXDISPLAY 1 "September 2026" "TuxDisplay 0.4.17" "User Commands"
+.TH TUXDISPLAY 1 "October 2026" "TuxDisplay 0.4.21" "User Commands"
 .SH NAME
 tuxdisplay \- use an iPad or Android tablet as a secondary Linux display
 .SH SYNOPSIS
@@ -16,9 +16,10 @@ tuxdisplay \- use an iPad or Android tablet as a secondary Linux display
 .SH DESCRIPTION
 .B TuxDisplay
 creates a compositor-owned virtual monitor or captures the primary physical
-monitor in a GNOME Wayland session and streams it to a compatible OpenDisplay
-app. iPadOS uses usbmuxd and Android
-uses a device-scoped ADB port forward. This direct USB mode requires no IP
+monitor in a GNOME Wayland session and streams it to OpenDisplay on iPadOS or
+Android. Android can alternatively use the open-source AVNC client through a
+loopback-only Tight/JPEG VNC server and device-scoped ADB reverse tunnel.
+This direct USB mode requires no IP
 address, Internet connection, Wi-Fi, cellular service, or tethering. Windows
 can be moved between the physical display and tablet in Extend mode. Mirror
 mode shows and controls the existing primary desktop.
@@ -30,8 +31,8 @@ that workspace is not an extension of the current desktop.
 Version 0.4.0 must not be used on GNOME Wayland because its touch path could
 abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions, 0.4.9 can
 stall capture while rearranging displays, and 0.4.11 can restart-loop a virtual
-monitor after capture failure. Use 0.4.17 or newer for all documented stability
-and frame-pacing fixes.
+monitor after capture failure. Use 0.4.21 or newer for all documented stability,
+frame-pacing, and cursor-performance fixes.
 .PP
 The GTK manager and three-state indicator are one single-instance application.
 The manager can check GitHub Releases and install a verified update after an
@@ -50,11 +51,20 @@ Start the per-user service and create the selected display backend.
 Stop streaming and remove the virtual monitor, when present, or fallback workspace.
 .TP
 .B restart
-Stop and recreate the display. OpenDisplay and browser viewers must reconnect.
+Stop and recreate the display. OpenDisplay, AVNC, and browser viewers must reconnect.
+.TP
+.BI "configure --resolution " "preset"
+Save a resolution preset. Add
+.B --restart
+to apply it immediately. The command also accepts
+.BR --fps ,
+.BR --display-mode ,
+and
+.BR --encoder .
 .TP
 .B status
-Show service state, display mode, active encoder, OpenDisplay connection and
-receiver state, sender/receiver frame telemetry, browser fallback URL, and
+Show service state, display mode, active encoder, OpenDisplay and AVNC
+connection state, sender/receiver frame telemetry, browser fallback URL, and
 access PIN.
 .TP
 .B url
@@ -73,17 +83,17 @@ it in the isolated workspace.
 .TP
 .B usb connect
 Start the display if necessary and wait for OpenDisplay on a trusted,
-cable-connected iPad or an ADB-authorized Android device. When no receiver is
-available, TuxDisplay may offer the optional USB gadget fallback on supported
-device-capable hardware.
+cable-connected iPad or an ADB-authorized Android device, or for AVNC on an
+ADB-authorized Android device. When no receiver is available, TuxDisplay may
+offer the optional USB gadget fallback on supported device-capable hardware.
 .TP
 .B usb disconnect
 Stop the display connection and tear down a TuxDisplay USB gadget if one was
 created.
 .TP
 .B usb status
-Report trusted-device, direct OpenDisplay, USB-network, and gadget capability
-state.
+Report trusted-device, direct OpenDisplay, AVNC, USB-network, and gadget
+capability state.
 .TP
 .B tray
 Compatibility alias that starts the same application in background mode. Its
@@ -98,7 +108,8 @@ Android ADB authorization, and USB gadget capability.
 Mutter creates a real virtual output named
 .BR Meta-0 .
 PipeWire captures only that output. GStreamer supplies H.264 to OpenDisplay
-and JPEG frames to the browser fallback. Changed frames are encoded immediately;
+and demand-driven JPEG frames to AVNC or the browser fallback. Changed frames
+are encoded immediately;
 while the desktop is unchanged, one liveness frame per second replaces continuous
 duplicate-frame encoding.
 .PP
@@ -118,6 +129,17 @@ dynamically allocated ADB loopback forward on Android. Video and input use the
 public OpenDisplay version 3 framing protocol over the USB cable. No network
 interface or browser PIN is involved. Android requires USB debugging and an
 approved computer fingerprint.
+.SS AVNC Android USB
+TuxDisplay serves Tight/JPEG VNC on the host loopback interface and creates an
+.B adb reverse
+mapping for each authorized Android device. Install AVNC from F-Droid, open a
+new connection to 127.0.0.1 on the configured VNC port, leave the username and
+password empty in GNOME Wayland mode, and enable view scaling. Pointer, click,
+scroll, and keyboard input are forwarded to Mutter. This compatibility path is
+open source and offline, but OpenDisplay H.264 normally provides better motion
+and power efficiency. Tight/JPEG supports TuxDisplay widths up to 2048 pixels;
+use 2048x1536 or a smaller preset with AVNC. The 2160x1620 preset remains
+available through OpenDisplay and the browser path.
 .SS Browser fallback
 GNOME Wayland serves an authenticated MJPEG viewer over HTTP. Use it only on
 a trusted private LAN or cable network.
@@ -125,12 +147,13 @@ a trusted private LAN or cable network.
 Xvfb, Openbox, tint2, x11vnc, websockify, and noVNC provide a separate desktop.
 Applications from the current desktop cannot be dragged into it.
 .SH RESOLUTION
-The supported presets are 1024x768, 1280x800, 1366x768, 1920x1080,
-2048x1536, and 2160x1620. The default is 1920x1080.
+The supported presets are 1024x768, 1280x800, 1366x768, 1536x1152,
+1920x1080, 2048x1536, and 2160x1620. The default is 1920x1080.
 .PP
-Most traditional iPads are close to 4:3. Use 2048x1536 or 2160x1620 to reduce
-letterboxing. Many Android tablets are close to 16:10, for which 1280x800 is
-appropriate. Use 1024x768 for lower CPU and bandwidth use.
+Most traditional iPads are close to 4:3. Use 1536x1152 for balanced motion and
+power use, or 2048x1536 and 2160x1620 for additional sharpness. Many Android
+tablets are close to 16:10, for which 1280x800 is appropriate. Use 1024x768 for
+the lowest CPU, GPU, and bandwidth use.
 .PP
 Changing resolution restarts the video service. In Extend mode it also replaces
 the virtual monitor, so GNOME can move windows from the removed output back to
@@ -142,8 +165,9 @@ OpenDisplay touch and Apple Pencil events are translated into a guarded
 single-pointer stream. Tap, drag, pointer movement, and scrolling are
 supported. Native multi-touch, Pencil pressure, and tilt are not forwarded.
 .PP
-The browser path also accepts pointer, touch, scrolling, and keyboard events,
-subject to Safari and iPadOS restrictions.
+The AVNC and browser paths also accept pointer, clicking, scrolling, and
+keyboard events. AVNC gestures are translated by the client into standard VNC
+pointer events; native Android multi-touch is not forwarded.
 .SH CONFIGURATION
 .I ~/.config/tuxdisplay/config
 accepts:
@@ -153,6 +177,7 @@ DISPLAY_MODE=extend
 RESOLUTION=1920x1080
 FPS=30
 ENCODER=auto
+CURSOR_MODE=embedded
 KEEP_AWAKE_WITH_LID_CLOSED=0
 DISPLAY_NUMBER=48
 WEB_PORT=6080
@@ -182,15 +207,23 @@ tablet sustain it.
 accepts auto or software. Auto prefers VA-API H.264 acceleration and falls back
 to the tuned x264 path when the required elements or driver are unavailable.
 .TP
+.B CURSOR_MODE
+accepts embedded or overlay. Embedded is the compatible default and keeps the
+pointer in captured video. Overlay avoids full-frame work for pointer-only
+motion but requires a receiver that renders OpenDisplay cursor controls.
+.TP
 .B KEEP_AWAKE_WITH_LID_CLOSED
 accepts 0 or 1. When enabled, TuxDisplay blocks system sleep and lid-switch
 handling while the display service runs. This also blocks manual and idle
 suspend. Stopping TuxDisplay releases the inhibitor.
 .TP
 .B DISPLAY_NUMBER
-and
+applies only to the X11 fallback.
+.TP
 .B VNC_PORT
-apply only to the X11 fallback.
+is the Android-local AVNC port and the host loopback VNC port. GNOME Wayland
+uses the embedded Tight/JPEG server; X11 fallback uses x11vnc with the displayed
+PIN as its VNC password.
 .TP
 .B WEB_PORT
 and the PIN apply only to browser access. Restart the service after editing.
@@ -240,10 +273,23 @@ eight seconds, TuxDisplay performs a bounded service recycle. A hardware
 pipeline stall enables the software encoder for 24 hours. No more than two
 automatic pipeline recoveries are allowed in ten minutes; further recovery is
 suppressed and shown in pipeline diagnostics instead of creating a restart loop.
+.PP
+Version 0.4.20 defaults to embedding the cursor in captured video so it remains
+visible on every receiver. The manager can instead select the low-power
+OpenDisplay overlay introduced in 0.4.19. That mode tracks the XWayland pointer
+at up to 60 Hz and sends deduplicated cursor control messages, so pointer-only
+motion does not wake full-frame H.264 encoding, but the receiver must implement
+the optional cursor and cursorImg messages. The status command reports the
+selected cursor transport and its update count.
 .SH SECURITY
 OpenDisplay traffic uses the operating system's trusted-device usbmuxd channel
 or a loopback-only ADB forward, but OpenDisplay protocol version 3 adds no
 encryption or authentication. Trust only computers and tablets you control.
+.PP
+AVNC traffic uses an ADB reverse tunnel to a loopback-only host socket. The
+GNOME Wayland compatibility server does not offer VNC authentication, so USB
+debugging authorization is the trust boundary and other local processes can
+reach the loopback port. Do not forward that port to a LAN or the Internet.
 .PP
 The browser service listens on local interfaces and uses PIN authentication
 over ordinary HTTP. Never expose port 6080 to the public Internet or an
@@ -253,7 +299,9 @@ Native desktop extension and primary-screen mirroring require GNOME Wayland.
 Direct OpenDisplay transport is currently USB-only. Hardware acceleration
 currently targets VA-API and otherwise falls back to software x264.
 Receiver dimensions are not used to select or dynamically resize the stream.
-Only one direct OpenDisplay receiver is supported at a time.
+Only one direct OpenDisplay receiver is supported at a time. AVNC uses JPEG
+rather than the hardware H.264 path and may consume more CPU or deliver fewer
+frames at high resolutions.
 .SH SEE ALSO
 .BR tuxdisplay-usb (8),
 .BR systemctl (1),

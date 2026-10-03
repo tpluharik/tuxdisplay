@@ -10,7 +10,7 @@
   <url type="bugtracker">https://github.com/tpluharik/tuxdisplay/issues</url>
   <project_license>MIT</project_license>
   <description>
-    <p>TuxDisplay creates a native GNOME Wayland extended monitor or mirrors the primary screen and streams it directly to compatible OpenDisplay apps on iPadOS and Android over USB without requiring an IP network.</p>
+    <p>TuxDisplay creates a native GNOME Wayland extended monitor or mirrors the primary screen and streams it to OpenDisplay on iPadOS or Android, or to the open-source AVNC Android client over USB without requiring an IP network.</p>
     <p>An authenticated browser receiver remains available for private networks and compatibility use.</p>
     <p>Desktop sessions without the required GNOME compositor APIs use an isolated X11 workspace rather than extending or mirroring the current desktop.</p>
     <p>One graphical application provides the manager and tray indicator, including verified in-app updates from GitHub Releases.</p>
@@ -21,6 +21,45 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.21" date="2026-10-03">
+      <description>
+        <ul>
+          <li>Add open-source AVNC as an alternative Android receiver.</li>
+          <li>Carry Tight/JPEG VNC and input through an automatic loopback-only ADB reverse tunnel.</li>
+          <li>Keep the AVNC conversion branch asleep until a viewer connects.</li>
+          <li>Report OpenDisplay and AVNC connection states separately.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.4.20" date="2026-10-02">
+      <description>
+        <ul>
+          <li>Remove inactive browser conversion work from USB-only display sessions.</li>
+          <li>Show fresh compositor, queue, encoded, cable, and receiver frame rates independently.</li>
+          <li>Prevent standalone diagnostics from starting a competing managed display service.</li>
+          <li>Keep the 1536 by 1152 preset as the balanced smooth iPad profile.</li>
+          <li>Offer a compatible visible pointer and an optional low-power cursor overlay.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.4.19" date="2026-09-28">
+      <description>
+        <ul>
+          <li>Track the XWayland pointer independently at up to 60 Hz.</li>
+          <li>Echo tablet pointer input directly through the OpenDisplay cursor overlay.</li>
+          <li>Discard cursor-only PipeWire updates before color conversion and H.264 encoding.</li>
+          <li>Add a balanced 1536 by 1152 resolution preset and a scriptable configuration command.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.4.18" date="2026-09-28">
+      <description>
+        <ul>
+          <li>Move the pointer through OpenDisplay cursor metadata instead of the full video frame.</li>
+          <li>Coalesce pointer positions so cursor motion does not block desktop capture.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.17" date="2026-09-28">
       <description>
         <ul>

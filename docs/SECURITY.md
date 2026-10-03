@@ -18,6 +18,19 @@ Lock or disconnect the tablet, revoke its trust/USB-debugging authorization, or 
 
 TuxDisplay passes the selected Android serial as a direct process argument, allocates a host port through ADB, binds the forwarding side to loopback, and removes that forward on disconnect. It does not invoke an Android shell command or install the receiver APK.
 
+### AVNC over Android USB
+
+The AVNC compatibility path reverses Android `127.0.0.1:VNC_PORT` to a VNC server bound only to the laptop's `127.0.0.1:VNC_PORT`. It never exposes VNC on a LAN address. The mapping is scoped to the serial number returned by ADB and is removed when TuxDisplay stops.
+
+The embedded GNOME Wayland VNC server negotiates RFB security type `None`; Android's USB-debugging authorization and physical cable are its trust boundary. This has two important consequences:
+
+- connect AVNC only through the automatically created localhost mapping;
+- never proxy or forward the configured VNC port to another host;
+- remember that another process running locally on the laptop can reach the loopback VNC socket while TuxDisplay is active;
+- revoke Android USB-debugging authorization after using an untrusted computer.
+
+The X11 compatibility backend continues to use x11vnc password authentication with the displayed TuxDisplay PIN. Neither VNC mode provides application-layer end-to-end encryption over the ADB cable.
+
 ### Browser fallback
 
 The browser service listens on local interfaces so it can be reached from a LAN or USB network. It uses a generated six-digit PIN and an HTTP-only, same-site session cookie. Video, credentials, and input still travel over ordinary HTTP.
@@ -58,7 +71,7 @@ The Debian package installs system files as root-owned, while the display servic
 
 ## Input implications
 
-An attached receiver can move the pointer, click, scroll, and—in the browser path—send keyboard input. In Mirror mode those events target the primary physical monitor; in Extend mode they target `Meta-0`. This can interact with applications under the desktop user's authority. GNOME's own permission and session boundaries still apply, but TuxDisplay should not be left connected to an untrusted receiver.
+An attached receiver can move the pointer, click, scroll, and—in the AVNC or browser path—send keyboard input. In Mirror mode those events target the primary physical monitor; in Extend mode they target `Meta-0`. This can interact with applications under the desktop user's authority. GNOME's own permission and session boundaries still apply, but TuxDisplay should not be left connected to an untrusted receiver.
 
 OpenDisplay input is reduced to a guarded single-pointer stream. This protects compositor stability; it is not an authorization mechanism.
 
@@ -79,7 +92,8 @@ These checks protect against accidental corruption, unsafe redirects, and asset 
 ## Hardening recommendations
 
 - Prefer direct USB over the browser fallback.
-- Keep TuxDisplay, the selected OpenDisplay receiver, the tablet OS, GNOME, GStreamer, usbmuxd/libimobiledevice, and ADB updated.
+- Keep TuxDisplay, the selected OpenDisplay or AVNC receiver, the tablet OS, GNOME, GStreamer, usbmuxd/libimobiledevice, and ADB updated.
+- Install AVNC through F-Droid or verify it against its official source; do not install repackaged APKs from unrelated download sites.
 - Bind or firewall the browser port to trusted interfaces when using a persistent setup.
 - Use `tuxdisplay password --reset` after temporary browser sharing.
 - Do not run the display service as root.
@@ -91,6 +105,7 @@ These checks protect against accidental corruption, unsafe redirects, and asset 
 ## Known limitations
 
 - OpenDisplay v3 provides no application-layer encryption or authentication.
+- Wayland AVNC uses unauthenticated RFB only on the loopback endpoint behind ADB authorization.
 - Browser access is HTTP rather than HTTPS.
 - The six-digit browser PIN has a small brute-force space.
 - There is no persistent per-device allowlist above iPadOS pairing or Android ADB authorization.

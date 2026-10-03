@@ -1,6 +1,6 @@
 # Competitive analysis
 
-**Snapshot date:** 2026-09-27. The linked first-party sources were rechecked on that date; product support and commercial terms can change independently of this repository.
+**Snapshot date:** 2026-10-03. The linked first-party sources were rechecked on that date; product support and commercial terms can change independently of this repository.
 
 TuxDisplay serves a narrow combination that many second-display products do not: a Debian/Ubuntu GNOME Wayland host, an iPadOS or Android receiver, a real extended desktop or touch-controlled primary-screen mirror, and operation through an ordinary USB data cable without Internet access or IP networking.
 
@@ -24,7 +24,7 @@ The comparison emphasizes:
 
 | Product | Linux host | Real extra desktop | Tablet receiver | Offline cable path | Input | Main trade-off |
 | --- | --- | --- | --- | --- | --- | --- |
-| **TuxDisplay** | Yes; Debian/Ubuntu, GNOME Wayland focus | Yes on GNOME Wayland, plus primary-screen mirroring; isolated workspace elsewhere | OpenDisplay on iPadOS/Android or a browser | Yes; usbmuxd or Android ADB, no IP | Tap, drag, scroll; Pencil as pointer on iPadOS | GNOME-specific native path; VA-API depends on the host driver; no native multi-touch |
+| **TuxDisplay** | Yes; Debian/Ubuntu, GNOME Wayland focus | Yes on GNOME Wayland, plus primary-screen mirroring; isolated workspace elsewhere | OpenDisplay on iPadOS/Android, AVNC on Android, or a browser | Yes; usbmuxd or Android ADB, no IP | Tap, drag, scroll; keyboard through AVNC/browser; Pencil as pointer on iPadOS | GNOME-specific native path; AVNC uses a less efficient JPEG compatibility stream; no native multi-touch |
 | **OpenDisplay Linux sender** | Yes; KDE Plasma Wayland and Hyprland documented | Yes on documented compositors | OpenDisplay | Yes; usbmuxd, plus Wi-Fi | Project-dependent | Closest open-source alternative, but explicitly experimental and not GNOME-focused |
 | **Weylus** | Yes, plus macOS and Windows | Conditional; needs a host-created output/region | Any modern browser | Network transport; can use an existing tethered network | Strong stylus, pressure, tilt, and multi-touch support | Broad input support, but not a turnkey native GNOME extra monitor |
 | **Deskreen CE** | Yes, plus macOS and Windows | Conditional; a virtual output or dummy plug supplies a second screen | Any modern browser | Network/WebRTC | Browser interaction model | Very broad receiver compatibility; second-monitor setup is separate |
@@ -41,6 +41,14 @@ The comparison emphasizes:
 The official [OpenDisplay repository](https://github.com/peetzweg/opendisplay) describes an open protocol and a macOS-to-iPhone/iPad product with extension and mirroring, USB and Wi-Fi connections, touch/scroll input, and support for multiple receivers. Its current iOS receiver requires iOS/iPadOS 15 or newer. The [protocol specification](https://github.com/peetzweg/opendisplay/blob/main/PROTOCOL.md) defines H.264 video, control/input messages, and a transport-independent TCP receiver on port 9000. The project lists [OpenDisplay Android](https://github.com/josepacelli/opendisplay-android) as a compatible third-party receiver; that receiver publishes Android 8+ APK releases and documents ADB forwarding for USB use.
 
 TuxDisplay is an independent Linux sender for that public protocol. The separate [opendisplay-linux project](https://github.com/tixwho/opendisplay-linux) documents KDE Plasma Wayland and Hyprland support, USB and Wi-Fi transport, PipeWire/FFmpeg capture, hardware-encoder options, and an experimental Qt interface. Its own README calls the project highly experimental and does not list GNOME as a supported compositor. It is the closest technical alternative and also a useful adjacent implementation, not merely a generic competitor.
+
+### AVNC, MultiVNC, and the selected Android fallback
+
+[AVNC](https://github.com/gujjwal00/avnc) is a GPL-3.0 Android VNC client with configurable gestures, virtual keys, picture-in-picture, clipboard sync, TLS options, and Tight encoding. [F-Droid](https://f-droid.org/packages/com.gaurav.avnc/) publishes reproducibly tracked APK builds, currently lists Android 5 or newer, and recommends installation through the F-Droid client for update notifications. Those properties make it easier to obtain and maintain than a receiver distributed only through manually downloaded release APKs.
+
+[MultiVNC](https://github.com/bk138/multivnc) is another open-source Android VNC viewer and remains a useful compatibility option. AVNC was selected as TuxDisplay's documented default because its current F-Droid package, focused Android interface, gesture controls, and explicit Tight support fit the embedded Tight/JPEG server directly. TuxDisplay implements standard RFB rather than an AVNC-private protocol, so other Tight-capable viewers may work, but only AVNC is documented and covered by protocol tests.
+
+The AVNC path is not expected to outperform OpenDisplay: it reuses the CPU JPEG compatibility branch rather than the VA-API H.264 stream, lacks receiver-specific health telemetry, and uses USB-debugging authorization plus an unauthenticated loopback RFB endpoint. Tight/JPEG also limits an individual encoded rectangle to 2048 pixels wide, so TuxDisplay rejects its 2160-wide preset on this receiver path instead of sending a non-standard frame. Its value is availability, conventional protocol support, and easy open-source installation—not maximum frame rate.
 
 ### Weylus
 
@@ -82,15 +90,15 @@ In Extend mode the virtual monitor belongs to Mutter and participates in GNOME's
 
 ### 3. No account, subscription, or display dongle
 
-The host is MIT-licensed, compatible OpenDisplay receivers are available without a subscription, and the preferred connection uses an ordinary data cable. The product can be used entirely offline after the receiver app and Debian dependencies are present. The third-party Android receiver is separately licensed under GPL-3.0.
+The host is MIT-licensed, compatible OpenDisplay receivers are available without a subscription, AVNC is GPL-3.0 and distributed through F-Droid, and the preferred connection uses an ordinary data cable. The product can be used entirely offline after the receiver app and Debian dependencies are present.
 
 ### 4. Compatibility paths are included
 
-Safari/MJPEG and X11/noVNC are not as efficient as the OpenDisplay route, but they keep the package useful when direct USB or GNOME's virtual-monitor API is unavailable.
+AVNC/Tight-JPEG, Safari/MJPEG, and X11/noVNC are not as efficient as the OpenDisplay route, but they keep the package useful when a particular receiver app or GNOME's virtual-monitor API is unavailable.
 
 ### 5. The sender exposes the performance path
 
-TuxDisplay reports the selected encoder, measured PipeWire capture rate, encoded source rate, cable send rate, queue depth, dropped access units, chain recoveries, and receiver telemetry. Version 0.4.17 encodes changed frames immediately, reduces a static desktop to a low-rate liveness pulse, and uses variable bitrate on VA-API. These diagnostics distinguish a slow compositor capture from an encoder, USB, or receiver bottleneck without claiming a universal latency advantage.
+TuxDisplay reports the selected encoder, measured PipeWire source rate, post-queue rate, completed encode rate, cable send rate, queue depth, dropped access units, chain recoveries, cursor-control updates, and receiver telemetry. Version 0.4.17 encodes changed frames immediately, reduces a static desktop to a low-rate liveness pulse, and uses variable bitrate on VA-API. Version 0.4.18 moves the cursor through OpenDisplay's overlay control path; version 0.4.19 independently tracks physical pointer movement and directly echoes tablet input, preventing pointer-only motion from requiring a full monitor encode. Version 0.4.20 refreshes stage-by-stage telemetry once per second and bypasses inactive browser conversion work. Version 0.4.21 wakes that conversion branch only for an AVNC or browser viewer. These diagnostics distinguish a slow compositor capture from an encoder, USB, receiver, or cursor-path bottleneck without claiming a universal latency advantage.
 
 ## Where alternatives are stronger
 
@@ -111,6 +119,7 @@ TuxDisplay reports the selected encoder, measured PipeWire capture rate, encoded
 | Single-pointer input | No multi-touch or Pencil pressure/tilt | Extend the protocol or add an input path with stable slot identity |
 | USB-only OpenDisplay sender | Cable required even on a trusted LAN | Add optional authenticated Wi-Fi OpenDisplay discovery/transport |
 | HTTP browser fallback | Unsafe on untrusted networks | Bind to selected interfaces; add TLS or a secure local tunnel option |
+| AVNC compatibility authentication | Loopback RFB relies on Android USB-debugging trust and is reachable by local processes | Keep it loopback-only; add VeNCrypt or VNC authentication without exposing a LAN listener |
 | GNOME-only native extension | KDE/Hyprland users get fallback rather than native output | Add compositor backends or coordinate with the OpenDisplay Linux sender |
 | Debian-centric packaging | Installation friction on other distributions | Add reproducible Flatpak/RPM/Arch packaging where compositor permissions allow |
 
@@ -127,7 +136,7 @@ This statement is specific and supportable. TuxDisplay should not claim universa
 3. Add a secure optional Wi-Fi OpenDisplay transport.
 4. Provide native KDE Plasma and Hyprland backends, potentially sharing findings with the existing OpenDisplay Linux sender.
 5. Design crash-safe multi-touch and Pencil pressure/tilt around explicit contact identities.
-6. Add per-device authorization, interface binding, and encrypted browser access.
+6. Add per-device authorization, authenticated AVNC transport, interface binding, and encrypted browser access.
 7. Publish signed, reproducible packages and a supported GNOME/distribution matrix.
 8. Benchmark the measured 0.4.15 frame-pacing baseline against open-source alternatives on several GPUs, tablet generations, and cables.
 

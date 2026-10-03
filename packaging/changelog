@@ -1,3 +1,57 @@
+tuxdisplay (0.4.21) unstable; urgency=medium
+
+  * Add a loopback-only Tight/JPEG VNC receiver path for the open-source AVNC
+    Android client, including pointer, click, scroll, and keyboard input.
+  * Create and clean up a device-scoped ADB reverse tunnel automatically so
+    AVNC connects to 127.0.0.1:5900 without Wi-Fi, tethering, or Internet.
+  * Reuse the demand-driven JPEG branch and keep it disabled until a browser or
+    AVNC viewer connects, preserving OpenDisplay performance when unused.
+  * Enforce Tight/JPEG capability and width limits with an explicit status
+    instead of allowing an incompatible viewer or preset to show a black frame.
+  * Make Debian builds reproducible by pinning archive metadata to the release
+    changelog timestamp.
+  * Extend manager, tray, status, diagnostics, security guidance, architecture,
+    troubleshooting, and competitive analysis for the alternative receiver.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Sat, 03 Oct 2026 11:01:00 +0200
+
+tuxdisplay (0.4.20) unstable; urgency=high
+
+  * Stop inactive browser fallback work before its queue so USB-only sessions
+    avoid unnecessary queue wakeups and JPEG-path pressure.
+  * Report compositor, post-queue, encoded, cable, and receiver frame rates
+    independently and refresh the local telemetry once per second.
+  * Forward gap and sticky events through the disabled browser branch so it
+    cannot prevent the H.264 pipeline from reaching its playing state.
+  * Restrict automatic service recovery to the installed managed unit so a
+    diagnostic instance cannot accidentally start a competing display.
+  * Default to a cursor embedded in the video for compatibility, while keeping
+    the low-power OpenDisplay cursor overlay as an explicit manager option.
+  * Validate sustained full-screen motion at about 60 real FPS over USB at
+    both 1536x1152 and 2048x1536 with the VA-API encoder and zero sender drops.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Fri, 02 Oct 2026 21:10:00 +0200
+
+tuxdisplay (0.4.19) unstable; urgency=high
+
+  * Track the XWayland pointer independently at up to 60 Hz so cursor motion
+    remains smooth while the damage-driven video stream is otherwise quiet.
+  * Echo tablet pointer input directly through OpenDisplay's cursor overlay,
+    avoiding a compositor capture and full-frame encode for every movement.
+  * Drop cursor-only PipeWire buffers before color conversion and H.264
+    encoding, reducing compositor and GPU work during pointer movement.
+  * Add a balanced 1536x1152 iPad preset and a scriptable configure command.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Mon, 28 Sep 2026 19:35:00 +0200
+
+tuxdisplay (0.4.18) unstable; urgency=high
+
+  * Send the GNOME pointer through OpenDisplay cursor metadata instead of
+    painting it into every full-size captured frame.
+  * Coalesce cursor positions on a non-blocking control path and provide a
+    compact cursor sprite to compatible iPad and Android receivers.
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Mon, 28 Sep 2026 18:20:00 +0200
+
 tuxdisplay (0.4.17) unstable; urgency=high
 
   * Detect a stopped encoded-frame callback even when the USB transport and

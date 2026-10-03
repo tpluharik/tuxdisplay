@@ -9,7 +9,7 @@ The primary supported environment is:
 - Debian or Ubuntu;
 - GNOME on Wayland;
 - PipeWire and the GStreamer plugin set declared in `packaging/DEBIAN/control`;
-- an iPad running OpenDisplay and/or an Android 8+ device running OpenDisplay Android;
+- an iPad running OpenDisplay and/or an Android device running OpenDisplay Android or AVNC;
 - usbmuxd/libimobiledevice for iPadOS testing and ADB for Android USB testing.
 
 The X11/noVNC backend should continue to start on sessions without the required Mutter virtual-monitor APIs.
@@ -22,6 +22,7 @@ The X11/noVNC backend should continue to start on sessions without the required 
 | `packaging/usr/lib/tuxdisplay/tuxdisplay-wayland` | GNOME extension/mirroring, capture, browser service, and input |
 | `packaging/usr/lib/tuxdisplay/display_source.py` | Primary-monitor selection and mirrored touch mapping |
 | `packaging/usr/lib/tuxdisplay/opendisplay_usb.py` | OpenDisplay protocol plus usbmuxd and Android ADB transports |
+| `packaging/usr/lib/tuxdisplay/tightvnc_usb.py` | Loopback Tight/JPEG RFB server and Android ADB reverse lifecycle |
 | `packaging/usr/lib/tuxdisplay/video_pipeline.py` | Bounded GStreamer graphs, pacing, and encoder selection |
 | `packaging/usr/lib/tuxdisplay/tuxdisplay-session` | X11 fallback session |
 | `packaging/usr/sbin/tuxdisplay-usb` | Optional privileged gadget helper |
@@ -37,7 +38,9 @@ python3 -m unittest discover -s tests -v
 python3 -m py_compile \
   packaging/usr/bin/tuxdisplay \
   packaging/usr/lib/tuxdisplay/display_source.py \
+  packaging/usr/lib/tuxdisplay/cursor_tracking.py \
   packaging/usr/lib/tuxdisplay/opendisplay_usb.py \
+  packaging/usr/lib/tuxdisplay/tightvnc_usb.py \
   packaging/usr/lib/tuxdisplay/video_pipeline.py \
   packaging/usr/lib/tuxdisplay/tuxdisplay-wayland
 git diff --check
@@ -47,11 +50,11 @@ For a package candidate:
 
 ~~~sh
 ./build-deb.sh
-dpkg-deb --info dist/tuxdisplay_0.4.17_all.deb
-dpkg-deb --contents dist/tuxdisplay_0.4.17_all.deb
+dpkg-deb --info dist/tuxdisplay_0.4.21_all.deb
+dpkg-deb --contents dist/tuxdisplay_0.4.21_all.deb
 ~~~
 
-The build replaces the package for the current version and regenerates `dist/SHA256SUMS`. Do not commit a rebuilt binary unless the change is intended for a release asset.
+The build replaces the package for the current version and regenerates `dist/SHA256SUMS`. Keep `SOURCE_DATE_EPOCH` in `build-deb.sh` equal to the Unix timestamp of the newest Debian changelog entry so repeated builds remain byte-for-byte reproducible. Do not commit a rebuilt binary unless the change is intended for a release asset.
 
 ## Manual test checklist
 
@@ -73,6 +76,8 @@ For GNOME Wayland changes:
 14. After the receiver has reported health, stop only its statistics while leaving control traffic and active video running. Confirm 0.4.16+ marks the data stale and requests a keyframe near eight seconds, then reconnects near fifteen seconds. Confirm a receiver that never sends statistics is not disconnected by this watchdog.
 15. Stop the encoded-frame callback and receiver statistics together. Confirm 0.4.17+ requests one service recycle near eight seconds, records a 24-hour software fallback after a hardware stall, and suppresses a third automatic recycle within ten minutes.
 16. Exercise both automatic and software encoding. If VA-API is available, confirm Automatic selects it; if initialization fails, confirm the service falls back once to x264 without a restart loop.
+17. Move the pointer across the tablet without changing desktop content. Confirm `Cursor transport` reports `xwayland-poll`, its update count rises smoothly, and capture/source rates remain near the quiet-screen cadence.
+18. Install AVNC from F-Droid, connect it to Android `127.0.0.1:5900`, and confirm Tight/JPEG video plus pointer, buttons, wheel, and keyboard. Verify `adb reverse --list` while running and confirm the mapping disappears after stop.
 
 For fallback changes:
 
@@ -80,6 +85,7 @@ For fallback changes:
 2. Confirm noVNC loads after PIN authentication.
 3. Launch an application with `tuxdisplay launch`.
 4. Stop the service and confirm Xvfb, x11vnc, websockify, Openbox, and tint2 exit.
+5. Connect AVNC through the ADB reverse mapping with the browser PIN as its VNC password, then confirm the helper and mapping exit with the service.
 
 Run `tuxdisplay doctor` in both modes.
 

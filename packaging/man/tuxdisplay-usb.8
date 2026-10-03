@@ -1,4 +1,4 @@
-.TH TUXDISPLAY-USB 8 "September 2026" "TuxDisplay 0.4.17" "System Administration"
+.TH TUXDISPLAY-USB 8 "October 2026" "TuxDisplay 0.4.21" "System Administration"
 .SH NAME
 tuxdisplay-usb \- configure optional USB Ethernet for the TuxDisplay browser fallback
 .SH SYNOPSIS
@@ -11,9 +11,9 @@ creates a USB CDC ECM Ethernet gadget using Linux ConfigFS, assigns
 It is intended only for computers with a USB Device Controller and a device or
 dual-role USB port.
 .PP
-This helper is not used by the preferred OpenDisplay connection. Direct
-OpenDisplay video and input travel through usbmuxd on iPadOS or an ADB forward
-on Android using an ordinary host port. They need no IP address, DHCP,
+This helper is not used by direct OpenDisplay or AVNC connections. OpenDisplay
+video and input travel through usbmuxd on iPadOS or an ADB forward on Android;
+AVNC uses a loopback-only ADB reverse tunnel. They need no IP address, DHCP,
 tethering, or gadget support. Use
 .B tuxdisplay usb connect
 for that mode.
@@ -70,11 +70,11 @@ If an iPad is trusted and
 .B idevice_id -l
 lists it, or Android is authorized and
 .B adb devices -l
-lists it, use direct OpenDisplay USB. A network interface is neither expected
-nor required for that transport.
+lists it, use direct OpenDisplay or AVNC USB. A network interface is neither
+expected nor required for those transports.
 .PP
 The private 10.55.0.1 address exists only after successful gadget setup. Do not
-use it for the preferred usbmuxd or ADB OpenDisplay connection.
+use it for usbmuxd, ADB OpenDisplay, or AVNC connections.
 .SH SECURITY
 The helper changes system-wide USB and network state with root privileges.
 Enable it only when needed. The browser service uses PIN authentication over

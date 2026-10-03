@@ -24,7 +24,7 @@ import urllib.request
 
 
 APP_NAME = "TuxDisplay"
-VERSION = "0.4.17"
+VERSION = "0.4.21"
 SERVICE = "tuxdisplay.service"
 USB_GADGET_ADDRESS = "10.55.0.1"
 UPDATE_API = "https://api.github.com/repos/tpluharik/tuxdisplay/releases/latest"
@@ -34,6 +34,7 @@ MAX_UPDATE_PACKAGE = 100 << 20
 DEFAULTS = {
     "DISPLAY_MODE": "extend",
     "ENCODER": "auto",
+    "CURSOR_MODE": "embedded",
     "RESOLUTION": "1920x1080",
     "FPS": "30",
     "KEEP_AWAKE_WITH_LID_CLOSED": "0",
@@ -49,10 +50,15 @@ ENCODER_MODES = (
     ("auto", "Automatic (hardware preferred)"),
     ("software", "Software compatibility"),
 )
+CURSOR_MODES = (
+    ("embedded", "Visible in video (compatible)"),
+    ("overlay", "Low-power OpenDisplay overlay"),
+)
 RESOLUTIONS = (
     "1024x768",
     "1280x800",
     "1366x768",
+    "1536x1152",
     "1920x1080",
     "2048x1536",
     "2160x1620",
@@ -233,6 +239,8 @@ def validate_config(values: dict[str, str]) -> dict[str, str]:
         result["DISPLAY_MODE"] = values["DISPLAY_MODE"]
     if values.get("ENCODER") in {mode for mode, _label in ENCODER_MODES}:
         result["ENCODER"] = values["ENCODER"]
+    if values.get("CURSOR_MODE") in {mode for mode, _label in CURSOR_MODES}:
+        result["CURSOR_MODE"] = values["CURSOR_MODE"]
     if re.fullmatch(r"[0-9]{3,5}x[0-9]{3,5}", values.get("RESOLUTION", "")):
         result["RESOLUTION"] = values["RESOLUTION"]
     if values.get("FPS") in {"15", "30", "60"}:
@@ -328,6 +336,18 @@ def opendisplay_connected() -> bool:
 
 def opendisplay_receiver() -> str:
     return str(read_client_state().get("opendisplay_status", "")).strip()
+
+
+def vnc_connected() -> bool:
+    return bool(read_client_state().get("vnc_usb", False))
+
+
+def vnc_status() -> str:
+    return str(read_client_state().get("vnc_status", "")).strip()
+
+
+def direct_usb_connected() -> bool:
+    return opendisplay_connected() or vnc_connected()
 
 
 def service_action(action: str) -> int:
@@ -431,12 +451,18 @@ def usb_status() -> tuple[str, str, str | None]:
     if opendisplay_connected():
         receiver = opendisplay_receiver() or "OpenDisplay receiver"
         return "ready", f"OpenDisplay connected directly through the USB cable ({receiver})", None
+    if vnc_connected():
+        return "ready", "AVNC connected directly through the Android USB cable", None
     apple_devices = usb_device_ids()
     android_devices = android_device_states()
     authorized_android = [device for device in android_devices if device.get("state") == "device"]
     if authorized_android:
         model = authorized_android[0].get("model", "Android device").replace("_", " ")
-        return "android", f"{model} cable ready; open OpenDisplay Android", None
+        port = ensure_config()["VNC_PORT"]
+        compatibility = vnc_status()
+        if compatibility.startswith("AVNC USB unavailable:"):
+            return "android", f"{model} cable ready; open OpenDisplay Android. {compatibility}", None
+        return "android", f"{model} cable ready; open OpenDisplay Android or connect AVNC to 127.0.0.1:{port}", None
     if any(device.get("state") == "unauthorized" for device in android_devices):
         return "android-authorization", "Unlock Android and allow USB debugging for this computer", None
     if apple_devices:
@@ -454,8 +480,8 @@ def usb_status() -> tuple[str, str, str | None]:
 
 def usb_connect(wait_seconds: int = 12) -> tuple[int, str]:
     status, _message, url = usb_status()
-    if status == "ready" and opendisplay_connected():
-        return 0, "OpenDisplay is connected directly through USB."
+    if status == "ready" and direct_usb_connected():
+        return 0, "The tablet is connected directly through USB."
     if status == "ready" and url:
         result = 0 if is_active() else service_action("start")
         return result, f"USB connection ready: {url}" if result == 0 else "USB is ready, but the display could not start."
@@ -483,11 +509,18 @@ def usb_connect(wait_seconds: int = 12) -> tuple[int, str]:
             device = "iPad" if status == "cable" else "Android device"
             return result, f"The {device} is ready, but the display service could not start."
         for _attempt in range(max(1, wait_seconds)):
-            if opendisplay_connected():
-                return 0, "OpenDisplay connected directly through USB."
+            if direct_usb_connected():
+                return 0, "The tablet connected directly through USB."
             time.sleep(1)
         if status == "android":
-            return 0, "The USB display is ready. Open OpenDisplay Android and keep USB debugging enabled."
+            port = ensure_config()["VNC_PORT"]
+            compatibility = vnc_status()
+            if compatibility.startswith("AVNC USB unavailable:"):
+                return 0, f"The USB display is ready for OpenDisplay Android. {compatibility}"
+            return 0, (
+                "The USB display is ready. Open OpenDisplay Android, or open AVNC and connect to "
+                f"127.0.0.1:{port}. Keep USB debugging enabled."
+            )
         return 0, "The USB display is ready. Open the OpenDisplay app on the iPad; Personal Hotspot is not required."
 
     if status == "gadget":
@@ -500,7 +533,7 @@ def usb_connect(wait_seconds: int = 12) -> tuple[int, str]:
         display_result = 0 if is_active() else service_action("start")
         return display_result, f"USB connection ready: http://{USB_GADGET_ADDRESS}:{ensure_config()['WEB_PORT']}/"
 
-    return 4, "Connect an iPad or Android device with a USB data cable, then open its OpenDisplay app."
+    return 4, "Connect an iPad or Android device with a USB data cable, then open OpenDisplay or AVNC."
 
 
 def usb_disconnect() -> tuple[int, str]:
@@ -676,6 +709,7 @@ def doctor() -> int:
     print(f"Browser fallback URL: {preferred_url()}")
     receiver_name = opendisplay_receiver()
     print(f"OpenDisplay USB: {'connected to ' + receiver_name if opendisplay_connected() and receiver_name else 'connected' if opendisplay_connected() else 'waiting'}")
+    print(f"AVNC USB: {'connected' if vnc_connected() else vnc_status() or 'waiting'}")
     android_devices = android_device_states()
     authorized_android = [device for device in android_devices if device.get("state") == "device"]
     if authorized_android:
@@ -807,7 +841,9 @@ def run_gui(background: bool = False) -> int:
             for resolution in RESOLUTIONS:
                 self.resolution.append_text(resolution)
             current = ensure_config()["RESOLUTION"]
-            self.resolution.set_active(RESOLUTIONS.index(current) if current in RESOLUTIONS else 3)
+            self.resolution.set_active(
+                RESOLUTIONS.index(current) if current in RESOLUTIONS else RESOLUTIONS.index(DEFAULTS["RESOLUTION"])
+            )
             self.resolution.connect("changed", self.on_resolution_changed)
             grid.attach(self.resolution, 1, 3, 1, 1)
 
@@ -837,22 +873,37 @@ def run_gui(background: bool = False) -> int:
             self.encoder.connect("changed", self.on_encoder_changed)
             grid.attach(self.encoder, 1, 5, 1, 1)
 
+            cursor_mode_label = Gtk.Label(label="Mouse pointer")
+            cursor_mode_label.set_halign(Gtk.Align.END)
+            grid.attach(cursor_mode_label, 0, 6, 1, 1)
+            self.cursor_mode = Gtk.ComboBoxText()
+            for _value, label in CURSOR_MODES:
+                self.cursor_mode.append_text(label)
+            configured_cursor_mode = ensure_config()["CURSOR_MODE"]
+            cursor_mode_index = next(
+                (index for index, (value, _label) in enumerate(CURSOR_MODES) if value == configured_cursor_mode),
+                0,
+            )
+            self.cursor_mode.set_active(cursor_mode_index)
+            self.cursor_mode.connect("changed", self.on_cursor_mode_changed)
+            grid.attach(self.cursor_mode, 1, 6, 1, 1)
+
             keep_awake_label = Gtk.Label(label="Keep awake with lid closed")
             keep_awake_label.set_halign(Gtk.Align.END)
-            grid.attach(keep_awake_label, 0, 6, 1, 1)
+            grid.attach(keep_awake_label, 0, 7, 1, 1)
             self.keep_awake = Gtk.Switch()
             self.keep_awake.set_halign(Gtk.Align.START)
             self.keep_awake.set_active(ensure_config()["KEEP_AWAKE_WITH_LID_CLOSED"] == "1")
             self.keep_awake.connect("notify::active", self.on_keep_awake_changed)
-            grid.attach(self.keep_awake, 1, 6, 1, 1)
+            grid.attach(self.keep_awake, 1, 7, 1, 1)
 
             usb_label = Gtk.Label(label="USB cable")
             usb_label.set_halign(Gtk.Align.END)
-            grid.attach(usb_label, 0, 7, 1, 1)
+            grid.attach(usb_label, 0, 8, 1, 1)
             self.usb_status_label = Gtk.Label()
             self.usb_status_label.set_halign(Gtk.Align.START)
             self.usb_status_label.set_line_wrap(True)
-            grid.attach(self.usb_status_label, 1, 7, 1, 1)
+            grid.attach(self.usb_status_label, 1, 8, 1, 1)
 
             lid_note = Gtk.Label(
                 label=(
@@ -871,7 +922,7 @@ def run_gui(background: bool = False) -> int:
             add_css_class(self.start_button, "suggested-action")
             self.start_button.connect("clicked", self.on_start)
             controls.pack_start(self.start_button, False, False, 0)
-            self.usb_button = Gtk.Button(label="Connect OpenDisplay")
+            self.usb_button = Gtk.Button(label="Connect tablet")
             self.usb_button.connect("clicked", self.on_usb)
             controls.pack_start(self.usb_button, False, False, 0)
             self.stop_button = Gtk.Button(label="Close connection")
@@ -902,9 +953,9 @@ def run_gui(background: bool = False) -> int:
 
             usb_note = Gtk.Label(
                 label=(
-                    "Install and open OpenDisplay on the tablet, then connect a USB data cable. "
-                    "On Android, enable USB debugging and approve this computer once. "
-                    "The direct connection works without Wi-Fi or an IP address."
+                    "Use OpenDisplay on iPadOS or Android for the fastest direct stream. On Android, AVNC from "
+                    "F-Droid is also supported: enable USB debugging, approve this computer, and connect AVNC "
+                    f"to 127.0.0.1:{ensure_config()['VNC_PORT']}. Both paths work without Wi-Fi or Internet."
                 )
             )
             usb_note.set_line_wrap(True)
@@ -941,7 +992,7 @@ def run_gui(background: bool = False) -> int:
             state = connection_state()
             labels = {
                 "connected": "● Connected — tablet is viewing the monitor",
-                "running": "● Running — waiting for an OpenDisplay tablet",
+                "running": "● Running — waiting for a tablet app",
                 "disconnected": "○ Disconnected",
             }
             self.status.set_label(labels[state])
@@ -954,7 +1005,7 @@ def run_gui(background: bool = False) -> int:
                 context.add_class("warning")
             usb_kind, usb_message, usb_url = usb_status()
             self.usb_status_label.set_label(usb_message)
-            self.usb_button.set_label("OpenDisplay connected" if usb_kind == "ready" and not usb_url else "Connect OpenDisplay")
+            self.usb_button.set_label("Tablet connected" if usb_kind == "ready" and not usb_url else "Connect tablet")
             self.url_entry.set_text(usb_url or preferred_url())
             self.pin_entry.set_text(read_password())
             self.start_button.set_sensitive(state == "disconnected")
@@ -972,7 +1023,7 @@ def run_gui(background: bool = False) -> int:
 
         def on_start(self, _button: Gtk.Button) -> None:
             result = service_action("start")
-            self.show_message("Display started. Open OpenDisplay on the tablet." if result == 0 else "The display could not start. Run ‘tuxdisplay status’ for details.")
+            self.show_message("Display started. Open OpenDisplay or AVNC on the tablet." if result == 0 else "The display could not start. Run ‘tuxdisplay status’ for details.")
             self.refresh()
 
         def on_stop(self, _button: Gtk.Button) -> None:
@@ -982,7 +1033,7 @@ def run_gui(background: bool = False) -> int:
 
         def on_usb(self, _button: Gtk.Button) -> None:
             self.usb_button.set_sensitive(False)
-            self.show_message("Connecting to OpenDisplay through USB…")
+            self.show_message("Preparing the tablet connection through USB…")
 
             def finished(_result: int, message: str) -> bool:
                 self.usb_button.set_sensitive(True)
@@ -1099,6 +1150,23 @@ def run_gui(background: bool = False) -> int:
             else:
                 self.show_message("Normal system sleep behavior restored.")
 
+        def on_cursor_mode_changed(self, dropdown: Gtk.ComboBoxText) -> None:
+            selected = dropdown.get_active()
+            if not 0 <= selected < len(CURSOR_MODES):
+                return
+            configuration = ensure_config()
+            cursor_mode = CURSOR_MODES[selected][0]
+            if configuration["CURSOR_MODE"] == cursor_mode:
+                return
+            configuration["CURSOR_MODE"] = cursor_mode
+            save_config(configuration)
+            if is_active():
+                self.schedule_display_restart("Mouse pointer mode")
+            elif cursor_mode == "embedded":
+                self.show_message("The pointer will remain visible on every OpenDisplay receiver.")
+            else:
+                self.show_message("The low-power overlay requires cursor support in the tablet app.")
+
         def schedule_display_restart(self, reason: str) -> None:
             self.restart_reason = reason
             if self.restart_timeout:
@@ -1171,7 +1239,7 @@ def run_gui(background: bool = False) -> int:
             self.start_item = Gtk.MenuItem(label="Start display")
             self.start_item.connect("activate", self.start_display)
             menu.append(self.start_item)
-            self.usb_item = Gtk.MenuItem(label="Connect OpenDisplay with USB")
+            self.usb_item = Gtk.MenuItem(label="Connect tablet with USB")
             self.usb_item.connect("activate", self.connect_usb)
             menu.append(self.usb_item)
             self.close_item = Gtk.MenuItem(label="Close connection")
@@ -1374,6 +1442,7 @@ def print_status() -> int:
     )
     receiver_name = opendisplay_receiver()
     print(f"OpenDisplay USB: {'connected to ' + receiver_name if opendisplay_connected() and receiver_name else 'connected' if opendisplay_connected() else 'waiting'}")
+    print(f"AVNC USB: {'connected' if vnc_connected() else vnc_status() or 'waiting'}")
     android_devices = android_device_states()
     authorized_android = [device for device in android_devices if device.get("state") == "device"]
     if authorized_android:
@@ -1387,11 +1456,20 @@ def print_status() -> int:
     if isinstance(receiver, dict) and receiver:
         print("Receiver health: " + ", ".join(f"{key}={value}" for key, value in receiver.items()))
     sender = client_state.get("sender", {})
+    pipewire_fps = client_state.get("pipewire_fps")
     capture_fps = client_state.get("capture_fps")
+    encoded_fps = client_state.get("encoded_fps")
+    if isinstance(pipewire_fps, (int, float)):
+        print(f"PipeWire source: {pipewire_fps} FPS (fresh compositor frames)")
     if isinstance(capture_fps, (int, float)):
-        print(f"Capture rate: {capture_fps} FPS (recent PipeWire output)")
+        print(f"Pipeline input: {capture_fps} FPS (after latest-frame queue)")
+    if isinstance(encoded_fps, (int, float)):
+        print(f"Encoded video: {encoded_fps} FPS (ready for USB)")
     if isinstance(sender, dict) and sender:
         print("Sender health: " + ", ".join(f"{key}={value}" for key, value in sender.items()))
+    cursor = client_state.get("cursor", {})
+    if isinstance(cursor, dict) and cursor:
+        print("Cursor transport: " + ", ".join(f"{key}={value}" for key, value in cursor.items()))
     pipeline = client_state.get("pipeline", {})
     if isinstance(pipeline, dict) and pipeline:
         print("Pipeline health: " + ", ".join(f"{key}={value}" for key, value in pipeline.items()))
@@ -1407,6 +1485,35 @@ def print_status() -> int:
     return 0 if running else 3
 
 
+def configure_settings(arguments: argparse.Namespace) -> int:
+    values = ensure_config()
+    changed = False
+    for option, key in (
+        ("resolution", "RESOLUTION"),
+        ("fps", "FPS"),
+        ("display_mode", "DISPLAY_MODE"),
+        ("encoder", "ENCODER"),
+        ("cursor_mode", "CURSOR_MODE"),
+    ):
+        value = getattr(arguments, option, None)
+        if value is not None and values[key] != value:
+            values[key] = value
+            changed = True
+    if changed:
+        save_config(values)
+        print(
+            f"TuxDisplay configured for {values['RESOLUTION']} at {values['FPS']} FPS "
+            f"({values['DISPLAY_MODE']}, {values['ENCODER']} encoder)."
+        )
+    else:
+        print("TuxDisplay settings are unchanged.")
+    if arguments.restart and is_active() and changed:
+        return service_action("restart")
+    if changed and is_active():
+        print("Restart TuxDisplay to apply the new display settings.")
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Use an iPad or Android tablet as a USB secondary Linux monitor.")
     subparsers = parser.add_subparsers(dest="command")
@@ -1420,6 +1527,13 @@ def build_parser() -> argparse.ArgumentParser:
     password_parser.add_argument("--reset", action="store_true", help="generate a new six-digit access PIN")
     launch_parser = subparsers.add_parser("launch")
     launch_parser.add_argument("application", nargs=argparse.REMAINDER)
+    configure_parser = subparsers.add_parser("configure", help="change display performance settings")
+    configure_parser.add_argument("--resolution", choices=RESOLUTIONS)
+    configure_parser.add_argument("--fps", choices=FRAME_RATES)
+    configure_parser.add_argument("--display-mode", choices=tuple(value for value, _label in DISPLAY_MODES))
+    configure_parser.add_argument("--encoder", choices=tuple(value for value, _label in ENCODER_MODES))
+    configure_parser.add_argument("--cursor-mode", choices=tuple(value for value, _label in CURSOR_MODES))
+    configure_parser.add_argument("--restart", action="store_true", help="restart a running display to apply changes")
     return parser
 
 
@@ -1431,6 +1545,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return service_action(command)
     if command == "status":
         return print_status()
+    if command == "configure":
+        return configure_settings(arguments)
     if command == "url":
         print(preferred_url())
         return 0

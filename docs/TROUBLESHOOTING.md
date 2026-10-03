@@ -14,20 +14,22 @@ The first three commands are safe to paste into a bug report. Review logs before
 
 ## Do not run 0.4.0 on GNOME Wayland
 
-TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. TuxDisplay 0.4.3 could reject GNOME's negotiated PipeWire rate, 0.4.4 could periodically reconnect a healthy low-FPS stream, 0.4.9 could leave the GStreamer pipeline in a pending state after displays were rearranged, 0.4.11 could repeatedly recreate the virtual monitor after a capture failure, 0.4.15 could leave stale receiver health, and 0.4.16 could miss a simultaneous host-pipeline and receiver freeze. Upgrade to 0.4.17 or newer:
+TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. TuxDisplay 0.4.3 could reject GNOME's negotiated PipeWire rate, 0.4.4 could periodically reconnect a healthy low-FPS stream, 0.4.9 could leave the GStreamer pipeline in a pending state after displays were rearranged, 0.4.11 could repeatedly recreate the virtual monitor after a capture failure, 0.4.15 could leave stale receiver health, and 0.4.16 could miss a simultaneous host-pipeline and receiver freeze. Upgrade to 0.4.21 or newer for the current stability, cursor, rendering-performance, and AVNC compatibility fixes:
 
 ~~~sh
-sudo apt install ./tuxdisplay_0.4.17_all.deb
+sudo apt install ./tuxdisplay_0.4.21_all.deb
 tuxdisplay restart
 ~~~
 
-Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate. Version 0.4.5 prevents false watchdog reconnects on quiet or low-FPS desktops. Version 0.4.6 adds optional closed-lid operation. Version 0.4.7 unifies the desktop application and adds verified in-app updates. Version 0.4.8 adds Android OpenDisplay over an ADB USB tunnel. Version 0.4.9 introduced monitor-placement persistence. Version 0.4.10 keeps PipeWire running during layout refresh. Version 0.4.11 restores the complete validated layout instead of reconstructing the tablet from one anchor. Version 0.4.12 suppresses duplicate topology events, settles real changes before refreshing capture, and prevents service failures from creating a virtual-monitor restart loop. Version 0.4.13 adds touch-controlled primary-screen mirroring. Version 0.4.14 adds automatic hardware encoding and a bounded low-latency video path. Version 0.4.15 added fixed-rate latest-frame pacing. Version 0.4.16 detects a receiver whose video telemetry freezes while its control channel remains alive. Version 0.4.17 adds independent host-pipeline recovery, a bounded automatic software fallback, and damage-driven variable-bitrate encoding to reduce duplicate work.
+Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate. Version 0.4.5 prevents false watchdog reconnects on quiet or low-FPS desktops. Version 0.4.6 adds optional closed-lid operation. Version 0.4.7 unifies the desktop application and adds verified in-app updates. Version 0.4.8 adds Android OpenDisplay over an ADB USB tunnel. Version 0.4.9 introduced monitor-placement persistence. Version 0.4.10 keeps PipeWire running during layout refresh. Version 0.4.11 restores the complete validated layout instead of reconstructing the tablet from one anchor. Version 0.4.12 suppresses duplicate topology events, settles real changes before refreshing capture, and prevents service failures from creating a virtual-monitor restart loop. Version 0.4.13 adds touch-controlled primary-screen mirroring. Version 0.4.14 adds automatic hardware encoding and a bounded low-latency video path. Version 0.4.15 added fixed-rate latest-frame pacing. Version 0.4.16 detects a receiver whose video telemetry freezes while its control channel remains alive. Version 0.4.17 adds independent host-pipeline recovery, a bounded automatic software fallback, and damage-driven variable-bitrate encoding to reduce duplicate work. Version 0.4.18 separates the cursor from video. Version 0.4.19 independently tracks physical pointer movement, echoes tablet input through the cursor overlay, discards cursor-only capture buffers, and adds a balanced 1536×1152 iPad preset. Version 0.4.20 removes inactive browser-branch work, reports every rendering stage once per second, and prevents standalone diagnostics from launching a duplicate managed service. Version 0.4.21 adds the AVNC Android USB compatibility transport.
 
 ## Motion on the tablet is jumpy
 
 Open the manager and leave **Video acceleration** on **Automatic (hardware preferred)**. Then run `tuxdisplay status` while moving a window or scrolling on the tablet. `Capture rate` is recent PipeWire output, `source_fps` is encoded H.264 entering the USB sender, `sent_fps` is the rate written to the cable, and the receiver line is OpenDisplay's own non-normative telemetry. Version 0.4.17 reports these separately so repeated or quiet frames cannot be mistaken for fresh desktop updates.
 
 At a configured 30 FPS, values around 29–30 FPS during sustained motion are normal because the sender and receiver sample over independent time windows. The rates intentionally fall toward the one-frame-per-second liveness cadence while the desktop is static. A healthy session normally has `queued` near zero and keeps `drops=0` and `recoveries=0`.
+
+Version 0.4.20 defaults to **Visible in video (compatible)** because OpenDisplay cursor controls are optional and some receiver builds ignore them. If the pointer is missing, select that mode in the manager or run `tuxdisplay configure --cursor-mode embedded --restart`. The optional **Low-power OpenDisplay overlay** should show `Cursor transport: mode=xwayland-poll`; its update count should rise while the pointer moves over the tablet even when video rates stay near the static cadence. If it reports `pipewire-metadata`, XWayland cursor polling was unavailable. For smoother full-window motion on a 4:3 iPad, select `1536x1152` in the manager or run `tuxdisplay configure --resolution 1536x1152 --restart`.
 
 If receiver health changes to `stale=True`, TuxDisplay has stopped trusting the displayed receiver counters. It first sends a cached frame and requests a fresh IDR. If a valid report does not return within roughly seven more seconds, the USB session reconnects automatically; manually restarting the whole display service should no longer be necessary.
 
@@ -151,6 +153,27 @@ The ADB state must be `device`. If it is `unauthorized`, unlock Android, disconn
 
 After closing TuxDisplay, `adb forward --list` should not contain a TuxDisplay forwarding entry. TuxDisplay removes its dynamically allocated forward after disconnect or failure.
 
+## AVNC does not connect over the Android cable
+
+Install [AVNC from F-Droid](https://f-droid.org/packages/com.gaurav.avnc/), start TuxDisplay, and configure AVNC with host `127.0.0.1` and port `5900`. Leave authentication empty in GNOME Wayland mode. The address is Android's own loopback interface; TuxDisplay carries it to the laptop through `adb reverse`, so no Wi-Fi address should be entered.
+
+Check:
+
+~~~sh
+adb devices -l
+adb reverse --list
+tuxdisplay status
+journalctl --user -u tuxdisplay.service --since "5 minutes ago"
+~~~
+
+The device state must be `device`, and the reverse list should contain `tcp:5900 tcp:5900` for its serial. If the entry is absent, unlock Android, approve USB debugging, choose **Connect tablet**, and restart TuxDisplay. If another application already owns Android port 5900, set a different `VNC_PORT` in `~/.config/tuxdisplay/config`, restart TuxDisplay, and use the same port in AVNC.
+
+If AVNC connects but remains black, confirm `tuxdisplay status` reports `AVNC USB: connected` and move a window on the selected monitor. The JPEG branch starts only after the RFB handshake and is damage-driven. Disconnect and reconnect AVNC after a TuxDisplay resolution change.
+
+AVNC is a compatibility path. At high resolutions its JPEG conversion may use more CPU and run below OpenDisplay's hardware-H.264 frame rate. Tight/JPEG limits each encoded rectangle to 2048 pixels wide, so use `2048x1536` or a smaller preset; `2160x1620` is OpenDisplay-only. Start with 1280×800 for a 16:10 Android tablet or 1024×768 for diagnosis. Use OpenDisplay when smooth motion and power efficiency are more important than installing from F-Droid.
+
+In the isolated X11 fallback, AVNC connects to the same address and port but must use the six-digit TuxDisplay PIN as its VNC password.
+
 ## “USB gadget unavailable” on a laptop
 
 This message normally means the computer has no USB Device Controller in `/sys/class/udc`. Most x86 laptop ports are host-only. Do not enable the gadget service; use direct OpenDisplay USB instead.
@@ -218,7 +241,7 @@ Include:
 - TuxDisplay version and installation source;
 - Linux distribution and version;
 - desktop and session type from `echo "$XDG_CURRENT_DESKTOP / $XDG_SESSION_TYPE"`;
-- tablet model, OS version, OpenDisplay receiver and version;
+- tablet model, OS version, receiver application and version;
 - selected display mode, resolution, frame rate, and acceleration setting;
 - whether the tray is gray, amber, or green;
 - output from `tuxdisplay status`, `tuxdisplay usb status`, and `tuxdisplay doctor`;

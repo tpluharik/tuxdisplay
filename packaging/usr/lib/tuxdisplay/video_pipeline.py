@@ -42,13 +42,13 @@ def pipeline_description(
     key_int_max = keyframe_interval(frames_per_second)
     queue = "queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream"
     browser_branch = (
-        f"displaytee. ! {queue} "
-        "! valve name=jpeg_valve drop=false "
+        "displaytee. ! valve name=jpeg_valve drop=true drop-mode=transform-to-gap "
+        f"! {queue} "
         "! videoconvert n-threads=2 "
         "! videoscale n-threads=2 add-borders=true "
         f"! video/x-raw,format=I420,width={width},height={height},pixel-aspect-ratio=1/1 "
         "! jpegenc quality=76 "
-        "! appsink name=jpeg_sink emit-signals=true max-buffers=1 drop=true sync=false "
+        "! appsink name=jpeg_sink emit-signals=true max-buffers=1 drop=true sync=false async=false "
     )
     if encoder == "hardware":
         h264_branch = (
@@ -76,8 +76,9 @@ def pipeline_description(
     return (
         f"pipewiresrc path={node_id} do-timestamp=true keepalive-time={STATIC_KEEPALIVE_MS} "
         "min-buffers=2 max-buffers=8 "
+        "! identity name=source_probe silent=true "
         f"! {queue} name=capture_queue "
-        "! identity name=capture_probe signal-handoffs=true silent=true "
+        "! identity name=capture_probe silent=true "
         "! tee name=displaytee "
         + browser_branch
         + h264_branch

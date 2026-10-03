@@ -52,6 +52,7 @@ class TuxDisplayTests(unittest.TestCase):
         values = {
             "DISPLAY_MODE": "unsafe",
             "ENCODER": "slow-and-unsafe",
+            "CURSOR_MODE": "invisible",
             "RESOLUTION": "bad;command",
             "FPS": "144",
             "KEEP_AWAKE_WITH_LID_CLOSED": "yes",
@@ -62,6 +63,7 @@ class TuxDisplayTests(unittest.TestCase):
         validated = MODULE.validate_config(values)
         self.assertEqual(validated["DISPLAY_MODE"], "extend")
         self.assertEqual(validated["ENCODER"], "auto")
+        self.assertEqual(validated["CURSOR_MODE"], "embedded")
         self.assertEqual(validated["RESOLUTION"], "1920x1080")
         self.assertEqual(validated["FPS"], "30")
         self.assertEqual(validated["KEEP_AWAKE_WITH_LID_CLOSED"], "0")
@@ -69,10 +71,43 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertEqual(validated["WEB_PORT"], "6080")
         self.assertEqual(validated["VNC_PORT"], "5900")
 
+    def test_configure_supports_balanced_ipad_resolution_and_restart(self) -> None:
+        arguments = MODULE.build_parser().parse_args(
+            [
+                "configure",
+                "--resolution",
+                "1536x1152",
+                "--fps",
+                "30",
+                "--cursor-mode",
+                "embedded",
+                "--restart",
+            ]
+        )
+        with mock.patch.object(MODULE, "is_active", return_value=True), mock.patch.object(
+            MODULE, "service_action", return_value=0
+        ) as restart:
+            self.assertEqual(MODULE.configure_settings(arguments), 0)
+
+        self.assertEqual(MODULE.ensure_config()["RESOLUTION"], "1536x1152")
+        restart.assert_called_once_with("restart")
+
     def test_usb_gadget_url_is_preferred(self) -> None:
         with mock.patch.object(MODULE, "network_addresses", return_value=[("usb0", "10.55.0.1"), ("wlan0", "192.0.2.5")]):
             url = MODULE.preferred_url()
         self.assertEqual(url, "http://10.55.0.1:6080/")
+
+    def test_android_avnc_connection_counts_as_a_direct_usb_client(self) -> None:
+        with mock.patch.object(MODULE, "read_client_state", return_value={"vnc_usb": True}):
+            self.assertTrue(MODULE.vnc_connected())
+            self.assertTrue(MODULE.direct_usb_connected())
+
+    def test_wayland_starts_loopback_avnc_transport(self) -> None:
+        daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"
+        text = daemon.read_text(encoding="utf-8")
+        self.assertIn("self.start_vnc()", text)
+        self.assertIn('"vnc_usb": self.vnc_streams > 0', text)
+        self.assertIn("AndroidReverseManager", text)
 
     def test_ipad_login_has_touch_keypad_and_does_not_capture_pin_keys(self) -> None:
         viewer = SCRIPT.parents[1] / 'share' / 'tuxdisplay' / 'wayland-viewer.html'
@@ -116,17 +151,47 @@ class TuxDisplayTests(unittest.TestCase):
         pipeline = daemon.parent / "video_pipeline.py"
         pipeline_text = pipeline.read_text(encoding="utf-8")
         self.assertIn('keepalive-time={STATIC_KEEPALIVE_MS}', pipeline_text)
-        self.assertIn('identity name=capture_probe signal-handoffs=true', pipeline_text)
+        self.assertIn('identity name=source_probe silent=true', pipeline_text)
+        self.assertIn('identity name=capture_probe silent=true', pipeline_text)
         self.assertNotIn('imagefreeze', pipeline_text)
         self.assertNotIn('video/x-raw,framerate=', pipeline_text)
         self.assertIn('max-size-buffers=1', pipeline_text)
-        self.assertIn('valve name=jpeg_valve drop=false', pipeline_text)
+        self.assertIn('valve name=jpeg_valve drop=true', pipeline_text)
+        self.assertIn('drop-mode=transform-to-gap', pipeline_text)
         self.assertIn('profile=constrained-baseline', pipeline_text)
         self.assertIn('rate-control=vbr', pipeline_text)
         self.assertIn('appsink name=h264_sink emit-signals=true max-buffers=1 drop=false', pipeline_text)
         self.assertNotIn('limit_frame_rate', text)
         self.assertIn('"capture_fps": self.capture_fps()', text)
-        self.assertIn('Capture rate: {capture_fps} FPS', SCRIPT.read_text(encoding="utf-8"))
+        manager_text = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('PipeWire source: {pipewire_fps} FPS', manager_text)
+        self.assertIn('Pipeline input: {capture_fps} FPS', manager_text)
+        self.assertIn('Encoded video: {encoded_fps} FPS', manager_text)
+        service = SCRIPT.parents[1] / "lib" / "systemd" / "user" / "tuxdisplay.service"
+        self.assertIn("Environment=TUXDISPLAY_MANAGED_SERVICE=1", service.read_text(encoding="utf-8"))
+        self.assertIn('os.environ.get("TUXDISPLAY_MANAGED_SERVICE") != "1"', text)
+
+    def test_wayland_uses_cursor_metadata_without_encoding_cursor_only_buffers(self) -> None:
+        daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"
+        text = daemon.read_text(encoding="utf-8")
+        self.assertIn("CURSOR_MODE_METADATA = 2", text)
+        self.assertIn("CURSOR_MODE_EMBEDDED = 1", text)
+        self.assertEqual(
+            text.count('CURSOR_MODE_METADATA if self.cursor_mode == "overlay" else CURSOR_MODE_EMBEDDED'),
+            2,
+        )
+        self.assertIn("GstVideo.buffer_get_video_region_of_interest_meta_id(buffer, 0)", text)
+        self.assertIn("self.opendisp.submit_cursor(", text)
+        self.assertIn("if buffer.get_size() == 0:", text)
+        self.assertIn("return Gst.PadProbeReturn.DROP", text)
+        self.assertIn('"video_frames_avoided": self.cursor_only_updates', text)
+        self.assertIn("self.start_cursor_tracking()", text)
+        self.assertIn("CURSOR_POLL_INTERVAL_MS = 16", text)
+        self.assertIn("self.opendisp.submit_cursor(cursor_x, cursor_y, True)", text)
+        self.assertIn("position == self.last_physical_cursor_position", text)
+        manager = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('(\"embedded\", \"Visible in video (compatible)\")', manager)
+        self.assertIn('(\"overlay\", \"Low-power OpenDisplay overlay\")', manager)
 
     def test_video_acceleration_has_automatic_fallback_and_gui_control(self) -> None:
         daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"
@@ -286,6 +351,20 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertEqual(status, "android")
         self.assertIn("Pixel Tablet", message)
         self.assertIn("OpenDisplay Android", message)
+        self.assertIsNone(url)
+
+    def test_usb_status_surfaces_an_avnc_resolution_limit(self) -> None:
+        android = [{"serial": "ABC123", "state": "device", "model": "Pixel_Tablet"}]
+        with mock.patch.object(MODULE, "usb_device_ids", return_value=[]), mock.patch.object(
+            MODULE, "android_device_states", return_value=android
+        ), mock.patch.object(MODULE, "opendisplay_connected", return_value=False), mock.patch.object(
+            MODULE, "vnc_status", return_value="AVNC USB unavailable: Tight/JPEG supports widths up to 2048"
+        ):
+            status, message, url = MODULE.usb_status()
+        self.assertEqual(status, "android")
+        self.assertIn("OpenDisplay Android", message)
+        self.assertIn("widths up to 2048", message)
+        self.assertNotIn("connect AVNC", message)
         self.assertIsNone(url)
 
     def test_usb_status_reports_android_authorization_required(self) -> None:

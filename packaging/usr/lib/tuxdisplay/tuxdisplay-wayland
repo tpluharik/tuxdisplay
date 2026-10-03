@@ -28,7 +28,9 @@ from gi.repository import Gio, GLib, Gst, GstVideo  # type: ignore  # noqa: E402
 
 from display_layout import capture_layout, current_mode_id, layout_signature, restore_layout  # noqa: E402
 from display_source import map_letterboxed_point, primary_monitor_connector, stream_size  # noqa: E402
-from opendisplay_usb import OpenDisplayPointerTranslator, OpenDisplayUSB  # noqa: E402
+from cursor_tracking import MonitorGeometry, X11PointerTracker, monitor_geometry  # noqa: E402
+from opendisplay_usb import OpenDisplayPointerTranslator, OpenDisplayUSB, list_android_devices  # noqa: E402
+from tightvnc_usb import AndroidReverseManager, TightVNCServer  # noqa: E402
 from video_pipeline import encoder_candidates, pipeline_description  # noqa: E402
 
 
@@ -50,6 +52,9 @@ PIPELINE_START_GRACE_SECONDS = 12.0
 PIPELINE_RECOVERY_WINDOW_SECONDS = 600.0
 MAX_PIPELINE_RECOVERIES = 2
 HARDWARE_FALLBACK_SECONDS = 86_400.0
+CURSOR_MODE_EMBEDDED = 1
+CURSOR_MODE_METADATA = 2
+CURSOR_POLL_INTERVAL_MS = 16
 
 
 def unpack(value: Any) -> Any:
@@ -58,13 +63,15 @@ def unpack(value: Any) -> Any:
     return value
 
 
-def read_config() -> tuple[str, str, int, int, int, int]:
+def read_config() -> tuple[str, str, str, int, int, int, int, int]:
     config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     values = {
         "DISPLAY_MODE": "extend",
         "ENCODER": "auto",
+        "CURSOR_MODE": "embedded",
         "RESOLUTION": "1920x1080",
         "WEB_PORT": "6080",
+        "VNC_PORT": "5900",
         "FPS": "30",
     }
     path = config_home / "tuxdisplay" / "config"
@@ -78,18 +85,22 @@ def read_config() -> tuple[str, str, int, int, int, int]:
     try:
         width, height = (int(part) for part in values["RESOLUTION"].split("x", 1))
         port = int(values["WEB_PORT"])
+        vnc_port = int(values["VNC_PORT"])
         frames_per_second = int(values["FPS"])
     except (ValueError, TypeError):
-        return "extend", "auto", 1920, 1080, 6080, 30
+        return "extend", "auto", "embedded", 1920, 1080, 6080, 5900, 30
     display_mode = values["DISPLAY_MODE"] if values["DISPLAY_MODE"] in {"extend", "mirror"} else "extend"
     encoder = values["ENCODER"] if values["ENCODER"] in {"auto", "software"} else "auto"
+    cursor_mode = values["CURSOR_MODE"] if values["CURSOR_MODE"] in {"embedded", "overlay"} else "embedded"
     if not (320 <= width <= 8192 and 240 <= height <= 8192):
         width, height = 1920, 1080
     if not 1024 <= port <= 65535:
         port = 6080
+    if not 1024 <= vnc_port <= 65535 or vnc_port == port:
+        vnc_port = 5900 if port != 5900 else 5901
     if frames_per_second not in (15, 30, 60):
         frames_per_second = 30
-    return display_mode, encoder, width, height, port, frames_per_second
+    return display_mode, encoder, cursor_mode, width, height, port, vnc_port, frames_per_second
 
 
 def ensure_pin() -> str:
@@ -272,9 +283,11 @@ class WaylandDisplay:
         (
             self.display_mode,
             self.encoder_preference,
+            self.cursor_mode,
             self.width,
             self.height,
             self.port,
+            self.vnc_port,
             self.frames_per_second,
         ) = read_config()
         self.input_width = self.width
@@ -289,7 +302,9 @@ class WaylandDisplay:
         self.stopping = False
         self.active_streams = 0
         self.browser_streams = 0
+        self.vnc_streams = 0
         self.client_lock = threading.Lock()
+        self.state_write_lock = threading.Lock()
         self.browser_input_lock = threading.Lock()
         self.browser_buttons: set[int] = set()
         self.browser_touches: set[int] = set()
@@ -300,10 +315,25 @@ class WaylandDisplay:
         self.receiver_stats: dict[str, Any] = {}
         self.last_video_at = 0.0
         self.last_video_monotonic = 0.0
+        self.pipewire_frame_times: deque[float] = deque()
         self.capture_frame_times: deque[float] = deque()
+        self.encoded_frame_times: deque[float] = deque()
         self.capture_frame_lock = threading.Lock()
+        self.cursor_visible = False
+        self.cursor_metadata_updates = 0
+        self.cursor_only_updates = 0
+        self.cursor_poll_updates = 0
+        self.cursor_tracker: X11PointerTracker | None = None
+        self.cursor_geometry: MonitorGeometry | None = None
+        self.cursor_poll_source = 0
+        self.cursor_poll_ticks = 0
+        self.last_cursor_sample: tuple[float, float, bool] | None = None
+        self.last_physical_cursor_position: tuple[int, int] | None = None
+        self.cursor_input_updates = 0
+        self.remote_cursor_active = False
         self.pipeline_started_monotonic = 0.0
         self.pipeline_watchdog_source = 0
+        self.telemetry_source = 0
         self.pipeline_recovery_requested = False
         self.pipeline_health: dict[str, Any] = {}
         self.opendisp_pointer = OpenDisplayPointerTranslator()
@@ -321,6 +351,9 @@ class WaylandDisplay:
         if self.hardware_unavailable:
             self.pipeline_health = {"fallback": "software", "reason": "previous hardware pipeline stall"}
         self.opendisp: OpenDisplayUSB | None = None
+        self.vnc_server: TightVNCServer | None = None
+        self.vnc_reverse: AndroidReverseManager | None = None
+        self.vnc_reverse_status = "Waiting for an authorized Android device for AVNC"
         self.fatal_error: str | None = None
         self.remote_session = ""
         self.stream_path = ""
@@ -357,6 +390,19 @@ class WaylandDisplay:
         if self.pipeline_recovery_requested or self.stopping:
             return
         self.pipeline_recovery_requested = True
+        if os.environ.get("TUXDISPLAY_MANAGED_SERVICE") != "1":
+            self.pipeline_health = {
+                "stale": True,
+                "age_seconds": round(age, 1),
+                "recovery": "manual restart required",
+            }
+            self.write_client_state()
+            print(
+                "TuxDisplay video recovery requires a manual restart outside the installed service",
+                file=sys.stderr,
+                flush=True,
+            )
+            return
         now = time.time()
         recovery_state = self.load_pipeline_recovery_state()
         raw_restarts = recovery_state.get("restarts", [])
@@ -478,7 +524,11 @@ class WaylandDisplay:
                     "(sa{sv})",
                     (
                         self.source_connector,
-                        {"cursor-mode": GLib.Variant("u", 1)},
+                        {
+                            "cursor-mode": GLib.Variant(
+                                "u", CURSOR_MODE_METADATA if self.cursor_mode == "overlay" else CURSOR_MODE_EMBEDDED
+                            )
+                        },
                     ),
                 ),
             ).unpack()[0]
@@ -497,7 +547,9 @@ class WaylandDisplay:
                     "(a{sv})",
                     (
                         {
-                            "cursor-mode": GLib.Variant("u", 1),
+                            "cursor-mode": GLib.Variant(
+                                "u", CURSOR_MODE_METADATA if self.cursor_mode == "overlay" else CURSOR_MODE_EMBEDDED
+                            ),
                             "is-platform": GLib.Variant("b", True),
                             "modes": GLib.Variant("aa{sv}", [mode]),
                         },
@@ -721,6 +773,47 @@ class WaylandDisplay:
             self.opendisp.recover_video()
         else:
             self.force_keyframe()
+        self.refresh_cursor_tracking_geometry()
+
+    def refresh_cursor_tracking_geometry(self) -> None:
+        connector = self.source_connector if self.display_mode == "mirror" else "Meta-0"
+        self.cursor_geometry = monitor_geometry(connector)
+
+    def start_cursor_tracking(self) -> None:
+        if self.cursor_mode != "overlay":
+            return
+        self.refresh_cursor_tracking_geometry()
+        try:
+            self.cursor_tracker = X11PointerTracker()
+        except RuntimeError as error:
+            print(f"TuxDisplay will use PipeWire cursor metadata: {error}", file=sys.stderr, flush=True)
+            return
+        self.cursor_poll_source = GLib.timeout_add(CURSOR_POLL_INTERVAL_MS, self.poll_cursor)
+
+    def poll_cursor(self) -> bool:
+        if self.stopping or self.cursor_tracker is None:
+            return GLib.SOURCE_REMOVE
+        self.cursor_poll_ticks += 1
+        if self.cursor_geometry is None and self.cursor_poll_ticks % 300 == 0:
+            self.refresh_cursor_tracking_geometry()
+        position = self.cursor_tracker.position()
+        if position is None or position == self.last_physical_cursor_position:
+            return GLib.SOURCE_CONTINUE
+        self.last_physical_cursor_position = position
+        self.remote_cursor_active = False
+        normalized = self.cursor_geometry.normalized_pointer(*position) if position and self.cursor_geometry else None
+        if normalized is None:
+            sample = (0.0, 0.0, False)
+        else:
+            sample = (round(normalized[0], 6), round(normalized[1], 6), True)
+        if sample == self.last_cursor_sample:
+            return GLib.SOURCE_CONTINUE
+        self.last_cursor_sample = sample
+        self.cursor_visible = sample[2]
+        self.cursor_poll_updates += 1
+        if self.opendisp is not None:
+            self.opendisp.submit_cursor(sample[0], sample[1], sample[2])
+        return GLib.SOURCE_CONTINUE
 
     def start_pipeline(self, force_software: bool = False) -> None:
         Gst.init(None)
@@ -761,11 +854,18 @@ class WaylandDisplay:
             raise RuntimeError("Could not create the video pipeline")
         jpeg_sink = pipeline.get_by_name("jpeg_sink")
         h264_sink = pipeline.get_by_name("h264_sink")
+        source_probe = pipeline.get_by_name("source_probe")
         capture_probe = pipeline.get_by_name("capture_probe")
-        if jpeg_sink is None or h264_sink is None or capture_probe is None:
+        if jpeg_sink is None or h264_sink is None or source_probe is None or capture_probe is None:
             pipeline.set_state(Gst.State.NULL)
             raise RuntimeError("Could not create the encoded video sinks")
-        capture_probe.connect("handoff", self.on_capture_frame)
+        source_pad = source_probe.get_static_pad("sink")
+        capture_pad = capture_probe.get_static_pad("sink")
+        if source_pad is None or capture_pad is None:
+            pipeline.set_state(Gst.State.NULL)
+            raise RuntimeError("Could not inspect PipeWire cursor metadata")
+        source_pad.add_probe(Gst.PadProbeType.BUFFER, self.on_source_buffer)
+        capture_pad.add_probe(Gst.PadProbeType.BUFFER, self.on_capture_buffer)
         jpeg_sink.connect("new-sample", self.on_sample)
         h264_sink.connect("new-sample", self.on_h264_sample)
         messages = pipeline.get_bus()
@@ -793,7 +893,9 @@ class WaylandDisplay:
         self.pipeline_started_monotonic = time.monotonic()
         self.last_video_monotonic = 0.0
         with self.capture_frame_lock:
+            self.pipewire_frame_times.clear()
             self.capture_frame_times.clear()
+            self.encoded_frame_times.clear()
         self.video_encoder = encoder
         if encoder == "software" and self.hardware_unavailable:
             print(
@@ -849,29 +951,67 @@ class WaylandDisplay:
             self.frame_generation += 1
             self.frame_ready.notify_all()
         with self.client_lock:
-            browser_active = self.browser_streams > 0
-        if not browser_active and self.pipeline is not None:
+            jpeg_active = self.browser_streams + self.vnc_streams > 0
+        if not jpeg_active and self.pipeline is not None:
             jpeg_valve = self.pipeline.get_by_name("jpeg_valve")
             if jpeg_valve is not None:
                 jpeg_valve.set_property("drop", True)
         return Gst.FlowReturn.OK
 
-    def on_capture_frame(self, _probe: Any, _buffer: Gst.Buffer) -> None:
+    def _record_frame(self, frame_times: deque[float]) -> None:
         now = time.monotonic()
         cutoff = now - 5.0
         with self.capture_frame_lock:
-            self.capture_frame_times.append(now)
-            while self.capture_frame_times and self.capture_frame_times[0] < cutoff:
-                self.capture_frame_times.popleft()
+            frame_times.append(now)
+            while frame_times and frame_times[0] < cutoff:
+                frame_times.popleft()
+
+    def on_source_buffer(self, _pad: Gst.Pad, info: Gst.PadProbeInfo) -> Gst.PadProbeReturn:
+        buffer = info.get_buffer()
+        if buffer is not None and buffer.get_size() > 0:
+            self._record_frame(self.pipewire_frame_times)
+        return Gst.PadProbeReturn.OK
+
+    def on_capture_buffer(self, _pad: Gst.Pad, info: Gst.PadProbeInfo) -> Gst.PadProbeReturn:
+        buffer = info.get_buffer()
+        if buffer is None:
+            return Gst.PadProbeReturn.OK
+        cursor = GstVideo.buffer_get_video_region_of_interest_meta_id(buffer, 0)
+        has_cursor = cursor is not None and GLib.quark_to_string(cursor.roi_type) == "cursor"
+        if self.cursor_mode == "overlay" and self.opendisp is not None and self.cursor_tracker is None:
+            if has_cursor:
+                self.cursor_visible = True
+                self.cursor_metadata_updates += 1
+                self.opendisp.submit_cursor(cursor.x / max(1, self.width), cursor.y / max(1, self.height), True)
+            elif buffer.get_size() == 0 and self.cursor_visible:
+                self.cursor_visible = False
+                self.cursor_metadata_updates += 1
+                self.opendisp.submit_cursor(visible=False)
+        # Metadata-only buffers are pointer updates, not new desktop pixels.
+        # Keep them away from full-frame conversion and H.264 encoding.
+        if buffer.get_size() == 0:
+            self.cursor_only_updates += 1
+            return Gst.PadProbeReturn.DROP
+        self._record_frame(self.capture_frame_times)
+        return Gst.PadProbeReturn.OK
+
+    def _recent_fps(self, frame_times: deque[float]) -> float:
+        now = time.monotonic()
+        cutoff = now - 5.0
+        with self.capture_frame_lock:
+            while frame_times and frame_times[0] < cutoff:
+                frame_times.popleft()
+            elapsed = min(5.0, max(0.001, now - self.pipeline_started_monotonic))
+            return round(len(frame_times) / elapsed, 1)
+
+    def pipewire_fps(self) -> float:
+        return self._recent_fps(self.pipewire_frame_times)
 
     def capture_fps(self) -> float:
-        now = time.monotonic()
-        cutoff = now - 5.0
-        with self.capture_frame_lock:
-            while self.capture_frame_times and self.capture_frame_times[0] < cutoff:
-                self.capture_frame_times.popleft()
-            elapsed = min(5.0, max(0.001, now - self.pipeline_started_monotonic))
-            return round(len(self.capture_frame_times) / elapsed, 1)
+        return self._recent_fps(self.capture_frame_times)
+
+    def encoded_fps(self) -> float:
+        return self._recent_fps(self.encoded_frame_times)
 
     def on_h264_sample(self, sink: Any) -> Gst.FlowReturn:
         sample = sink.emit("pull-sample")
@@ -887,6 +1027,7 @@ class WaylandDisplay:
             buffer.unmap(info)
         if self.opendisp is not None:
             self.opendisp.submit_video(data, int(time.time() * 1000))
+        self._record_frame(self.encoded_frame_times)
         self.last_video_at = time.time()
         self.last_video_monotonic = time.monotonic()
         return Gst.FlowReturn.OK
@@ -942,6 +1083,13 @@ class WaylandDisplay:
         kind = str(event.get("type", ""))
         x = min(float(self.width), max(0.0, float(event.get("x", 0))))
         y = min(float(self.height), max(0.0, float(event.get("y", 0))))
+        cursor_x = x / max(1, self.width)
+        cursor_y = y / max(1, self.height)
+        if kind in {"motion", "button"} and self.cursor_mode == "overlay" and self.opendisp is not None:
+            self.remote_cursor_active = True
+            self.cursor_visible = True
+            self.cursor_input_updates += 1
+            self.opendisp.submit_cursor(cursor_x, cursor_y, True)
         if self.display_mode == "mirror":
             x, y = map_letterboxed_point(
                 x,
@@ -1122,36 +1270,109 @@ class WaylandDisplay:
         self.http_thread = threading.Thread(target=self.http.serve_forever, name="tuxdisplay-http", daemon=True)
         self.http_thread.start()
 
+    def frame_snapshot(self) -> tuple[int, bytes]:
+        return self.frame_generation, self.frame
+
+    def set_vnc_reverse_status(self, status: str) -> None:
+        with self.client_lock:
+            self.vnc_reverse_status = status
+            self.write_client_state()
+
+    def set_vnc_client_connected(self, connected: bool) -> None:
+        with self.client_lock:
+            if connected:
+                self.vnc_streams += 1
+                self.active_streams += 1
+            else:
+                self.vnc_streams = max(0, self.vnc_streams - 1)
+                self.active_streams = max(0, self.active_streams - 1)
+            self.write_client_state()
+            jpeg_active = self.browser_streams + self.vnc_streams > 0
+        if self.pipeline is not None:
+            jpeg_valve = self.pipeline.get_by_name("jpeg_valve")
+            if jpeg_valve is not None:
+                jpeg_valve.set_property("drop", not jpeg_active)
+
+    def start_vnc(self) -> None:
+        try:
+            self.vnc_server = TightVNCServer(
+                width=self.width,
+                height=self.height,
+                port=self.vnc_port,
+                frame_ready=self.frame_ready,
+                frame_snapshot=self.frame_snapshot,
+                on_client=self.set_vnc_client_connected,
+                on_input=self.handle_input,
+            )
+            self.vnc_server.start()
+        except (OSError, ValueError) as error:
+            self.vnc_server = None
+            self.vnc_reverse_status = f"AVNC USB unavailable: {error}"
+            self.write_client_state()
+            print(f"TuxDisplay could not start the AVNC compatibility server: {error}", file=sys.stderr, flush=True)
+            return
+        self.vnc_reverse = AndroidReverseManager(
+            self.vnc_port,
+            list_android_devices,
+            self.set_vnc_reverse_status,
+        )
+        self.vnc_reverse.start()
+
+    def refresh_telemetry_state(self) -> bool:
+        if self.stopping:
+            return GLib.SOURCE_REMOVE
+        self.write_client_state()
+        return GLib.SOURCE_CONTINUE
+
     def write_client_state(self) -> None:
         directory = self.state_directory
-        directory.mkdir(mode=0o700, parents=True, exist_ok=True)
-        path = directory / "clients.json"
-        temporary = path.with_suffix(".tmp")
-        temporary.write_text(
-            json.dumps(
-                {
-                    "pid": os.getpid(),
-                    "instance_id": self.instance_id,
-                    "updated_at": time.time(),
-                    "active_streams": self.active_streams,
-                    "opendisplay_usb": self.opendisp_connected,
-                    "opendisplay_status": self.opendisp_status,
-                    "display_mode": self.display_mode,
-                    "source_connector": self.source_connector,
-                    "video_encoder": self.video_encoder,
-                    "frame_pacing": "damage-driven",
-                    "capture_fps": self.capture_fps(),
-                    "last_video_at": self.last_video_at,
-                    "sender": self.opendisp.performance_stats() if self.opendisp is not None else {},
-                    "receiver": self.receiver_stats,
-                    "pipeline": self.pipeline_health,
-                }
-            )
-            + "\n",
-            encoding="utf-8",
-        )
-        temporary.chmod(0o600)
-        temporary.replace(path)
+        payload = json.dumps(
+            {
+                "pid": os.getpid(),
+                "instance_id": self.instance_id,
+                "updated_at": time.time(),
+                "active_streams": self.active_streams,
+                "opendisplay_usb": self.opendisp_connected,
+                "opendisplay_status": self.opendisp_status,
+                "vnc_usb": self.vnc_streams > 0,
+                "vnc_status": (
+                    f"AVNC connected through Android USB on 127.0.0.1:{self.vnc_port}"
+                    if self.vnc_streams > 0
+                    else self.vnc_reverse_status
+                ),
+                "vnc_port": self.vnc_port,
+                "display_mode": self.display_mode,
+                "source_connector": self.source_connector,
+                "video_encoder": self.video_encoder,
+                "frame_pacing": "damage-driven",
+                "pipewire_fps": self.pipewire_fps(),
+                "capture_fps": self.capture_fps(),
+                "encoded_fps": self.encoded_fps(),
+                "last_video_at": self.last_video_at,
+                "sender": self.opendisp.performance_stats() if self.opendisp is not None else {},
+                "cursor": {
+                    "mode": (
+                        "video-embedded"
+                        if self.cursor_mode == "embedded"
+                        else "xwayland-poll" if self.cursor_tracker is not None else "pipewire-metadata"
+                    ),
+                    "updates": self.cursor_poll_updates + self.cursor_input_updates + self.cursor_metadata_updates,
+                    "polled_updates": self.cursor_poll_updates,
+                    "input_updates": self.cursor_input_updates,
+                    "metadata_updates": self.cursor_metadata_updates,
+                    "video_frames_avoided": self.cursor_only_updates,
+                },
+                "receiver": self.receiver_stats,
+                "pipeline": self.pipeline_health,
+            }
+        ) + "\n"
+        with self.state_write_lock:
+            directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+            path = directory / "clients.json"
+            temporary = path.with_suffix(".tmp")
+            temporary.write_text(payload, encoding="utf-8")
+            temporary.chmod(0o600)
+            temporary.replace(path)
 
     def client_opened(self) -> None:
         with self.client_lock:
@@ -1168,12 +1389,12 @@ class WaylandDisplay:
             self.browser_streams = max(0, self.browser_streams - 1)
             self.active_streams = max(0, self.active_streams - 1)
             self.write_client_state()
-            browser_active = self.browser_streams > 0
-        if not browser_active and self.pipeline is not None:
+            jpeg_active = self.browser_streams + self.vnc_streams > 0
+        if not jpeg_active and self.pipeline is not None:
             jpeg_valve = self.pipeline.get_by_name("jpeg_valve")
             if jpeg_valve is not None:
                 jpeg_valve.set_property("drop", True)
-        if not browser_active:
+        if not jpeg_active:
             GLib.idle_add(self.release_browser_input, priority=GLib.PRIORITY_HIGH_IDLE)
 
     def write_mode(self) -> None:
@@ -1202,6 +1423,15 @@ class WaylandDisplay:
         if self.pipeline_watchdog_source:
             GLib.source_remove(self.pipeline_watchdog_source)
             self.pipeline_watchdog_source = 0
+        if self.telemetry_source:
+            GLib.source_remove(self.telemetry_source)
+            self.telemetry_source = 0
+        if self.cursor_poll_source:
+            GLib.source_remove(self.cursor_poll_source)
+            self.cursor_poll_source = 0
+        if self.cursor_tracker is not None:
+            self.cursor_tracker.close()
+            self.cursor_tracker = None
         if self.display_signal_subscription:
             self.bus.signal_unsubscribe(self.display_signal_subscription)
             self.display_signal_subscription = 0
@@ -1209,6 +1439,12 @@ class WaylandDisplay:
         # shutdown while its writer is still inside a cable send.
         if self.opendisp is not None:
             self.opendisp.stop()
+        if self.vnc_reverse is not None:
+            self.vnc_reverse.stop()
+            self.vnc_reverse = None
+        if self.vnc_server is not None:
+            self.vnc_server.stop()
+            self.vnc_server = None
         pipeline_stop_thread: threading.Thread | None = None
         if self.pipeline is not None:
             pipeline = self.pipeline
@@ -1253,18 +1489,27 @@ class WaylandDisplay:
             self.prepare_opendisplay()
             self.start_pipeline()
             self.pipeline_watchdog_source = GLib.timeout_add_seconds(2, self.check_video_pipeline_liveness)
+            self.start_vnc()
             self.start_opendisplay()
+            self.start_cursor_tracking()
             self.start_http()
+            self.telemetry_source = GLib.timeout_add_seconds(1, self.refresh_telemetry_state)
             self.write_mode()
             display_description = (
                 f"mirror of {self.source_connector}"
                 if self.display_mode == "mirror"
                 else f"native monitor {self.width}x{self.height}"
             )
+            avnc_description = (
+                f"AVNC on Android 127.0.0.1:{self.vnc_port} enabled"
+                if self.vnc_server is not None
+                else self.vnc_reverse_status
+            )
             print(
                 f"TuxDisplay {display_description}; encoded at {self.width}x{self.height} "
                 f"with {self.video_encoder} H.264; "
-                f"OpenDisplay USB enabled; browser fallback at http://0.0.0.0:{self.port}/",
+                f"OpenDisplay USB enabled; {avnc_description}; "
+                f"browser fallback at http://0.0.0.0:{self.port}/",
                 flush=True,
             )
 

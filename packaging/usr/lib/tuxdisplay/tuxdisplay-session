@@ -94,13 +94,14 @@ td_xvfb_log="$td_state_dir/xvfb.log"
 td_desktop_log="$td_state_dir/desktop.log"
 td_vnc_log="$td_state_dir/x11vnc.log"
 td_web_log="$td_state_dir/websockify.log"
+td_avnc_log="$td_state_dir/avnc-adb.log"
 
 Xvfb "$DISPLAY" -screen 0 "${td_resolution}x24" -nolisten tcp -noreset -auth "$td_xauthority" >"$td_xvfb_log" 2>&1 &
 td_xvfb_pid=$!
 
 td_cleanup() {
     trap - EXIT INT TERM HUP
-    for td_pid in ${td_web_pid:-} ${td_vnc_pid:-} ${td_tint_pid:-} ${td_openbox_pid:-} ${td_xvfb_pid:-}; do
+    for td_pid in ${td_avnc_pid:-} ${td_web_pid:-} ${td_vnc_pid:-} ${td_tint_pid:-} ${td_openbox_pid:-} ${td_xvfb_pid:-}; do
         if [ -n "$td_pid" ]; then
             kill "$td_pid" >/dev/null 2>&1 || true
         fi
@@ -146,6 +147,9 @@ x11vnc \
     -noxrecord >"$td_vnc_log" 2>&1 &
 td_vnc_pid=$!
 
+/usr/bin/python3 /usr/lib/tuxdisplay/tightvnc_usb.py --reverse-only "$td_vnc_port" >"$td_avnc_log" 2>&1 &
+td_avnc_pid=$!
+
 td_count=0
 while [ "$td_count" -lt 100 ]; do
     if python3 - "$td_vnc_port" <<'PY'
@@ -154,7 +158,8 @@ import sys
 
 with socket.socket() as sock:
     sock.settimeout(0.05)
-    raise SystemExit(0 if sock.connect_ex(("127.0.0.1", int(sys.argv[1]))) == 0 else 1)
+    target = ("127.0.0.1", int(sys.argv[1]))
+    raise SystemExit(0 if sock.connect_ex(target) == 0 else 1)
 PY
     then
         break
@@ -171,7 +176,7 @@ websockify --web /usr/share/tuxdisplay/web "0.0.0.0:$td_web_port" "127.0.0.1:$td
 td_web_pid=$!
 
 while :; do
-    for td_process in "$td_xvfb_pid:Xvfb" "$td_vnc_pid:x11vnc" "$td_openbox_pid:Openbox" "$td_web_pid:websockify"; do
+    for td_process in "$td_xvfb_pid:Xvfb" "$td_vnc_pid:x11vnc" "$td_avnc_pid:AVNC-ADB" "$td_openbox_pid:Openbox" "$td_web_pid:websockify"; do
         td_pid=${td_process%%:*}
         td_name=${td_process#*:}
         if ! kill -0 "$td_pid" >/dev/null 2>&1; then

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import base64
 import json
 from pathlib import Path
 import struct
@@ -19,6 +20,34 @@ SPEC.loader.exec_module(MODULE)
 
 
 class OpenDisplayProtocolTests(unittest.TestCase):
+    def test_cursor_sprite_is_a_small_rgba_png(self) -> None:
+        message = MODULE.cursor_image_message(2048, 1536)
+        image = base64.b64decode(message["png"])
+
+        self.assertEqual(message["type"], "cursorImg")
+        self.assertEqual(image[:8], b"\x89PNG\r\n\x1a\n")
+        self.assertLess(len(image), 24_000)
+        self.assertAlmostEqual(message["nw"], MODULE.CURSOR_WIDTH / 2048)
+        self.assertAlmostEqual(message["nh"], MODULE.CURSOR_HEIGHT / 1536)
+
+    def test_cursor_updates_are_clamped_deduplicated_and_coalesced(self) -> None:
+        sender = MODULE.OpenDisplayUSB(
+            1920,
+            1080,
+            30,
+            lambda _message: None,
+            lambda _connected, _status: None,
+            lambda: None,
+        )
+
+        sender.submit_cursor(-1, 2, True)
+        sender.submit_cursor(-1, 2, True)
+
+        self.assertEqual(sender.pending_cursor, {"type": "cursor", "v": 1, "x": 0.0, "y": 1.0})
+        self.assertTrue(sender.outbound_event.is_set())
+        sender.submit_cursor(visible=False)
+        self.assertEqual(sender.pending_cursor, {"type": "cursor", "v": 0})
+
     def test_adb_device_parser_preserves_state_and_model(self) -> None:
         output = (
             "List of devices attached\n"

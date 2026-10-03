@@ -1,10 +1,11 @@
 [Unit]
-Description=TuxDisplay OpenDisplay USB and browser virtual display
+Description=TuxDisplay OpenDisplay, AVNC USB, and browser virtual display
 Documentation=file:///usr/share/doc/tuxdisplay/README.md
 After=graphical-session.target
 
 [Service]
 Type=simple
+Environment=TUXDISPLAY_MANAGED_SERVICE=1
 ExecStart=/usr/lib/tuxdisplay/tuxdisplay-session
 Restart=no
 KillSignal=SIGINT

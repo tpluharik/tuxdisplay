@@ -40,7 +40,8 @@ class VideoPipelineTests(unittest.TestCase):
         graph = MODULE.pipeline_description(42, 2048, 1536, 60, "hardware")
         self.assertIn("path=42", graph)
         self.assertIn("keepalive-time=1000", graph)
-        self.assertIn("identity name=capture_probe signal-handoffs=true", graph)
+        self.assertIn("identity name=source_probe silent=true", graph)
+        self.assertIn("identity name=capture_probe silent=true", graph)
         self.assertNotIn("imagefreeze", graph)
         self.assertNotIn("video/x-raw,framerate=", graph)
         self.assertIn("vapostproc add-borders=true", graph)
@@ -63,7 +64,9 @@ class VideoPipelineTests(unittest.TestCase):
         self.assertIn("key-int-max=1024", graph)
         self.assertIn("appsink name=h264_sink emit-signals=true max-buffers=1 drop=false", graph)
         self.assertIn("queue max-size-buffers=1", graph)
-        self.assertIn("valve name=jpeg_valve drop=false", graph)
+        self.assertIn("displaytee. ! valve name=jpeg_valve drop=true drop-mode=transform-to-gap", graph)
+        self.assertLess(graph.index("valve name=jpeg_valve"), graph.index("drop-mode=transform-to-gap ! queue"))
+        self.assertIn("appsink name=jpeg_sink emit-signals=true max-buffers=1 drop=true sync=false async=false", graph)
         self.assertNotIn("videorate", graph)
 
     def test_unknown_encoder_is_rejected(self) -> None:

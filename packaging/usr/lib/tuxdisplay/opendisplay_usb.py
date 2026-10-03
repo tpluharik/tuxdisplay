@@ -7,6 +7,7 @@ https://github.com/peetzweg/opendisplay/blob/main/PROTOCOL.md
 
 from __future__ import annotations
 
+import base64
 import json
 import plistlib
 import queue
@@ -17,6 +18,7 @@ import sys
 import threading
 import time
 from typing import Any, Callable
+import zlib
 
 
 OPENDISPLAY_PORT = 9000
@@ -29,6 +31,75 @@ MAX_USBMUX_MESSAGE_SIZE = 1 << 20
 ADB_TIMEOUT = 8
 RECEIVER_STATS_RECOVERY_SECONDS = 8.0
 RECEIVER_STATS_RECONNECT_SECONDS = 15.0
+CURSOR_WIDTH = 24
+CURSOR_HEIGHT = 32
+
+
+def _png_chunk(kind: bytes, payload: bytes) -> bytes:
+    checksum = zlib.crc32(kind)
+    checksum = zlib.crc32(payload, checksum)
+    return struct.pack("!I", len(payload)) + kind + payload + struct.pack("!I", checksum & 0xFFFFFFFF)
+
+
+def cursor_png() -> bytes:
+    """Return a small, dependency-free white arrow with a dark outline."""
+    polygon = ((2, 1), (2, 24), (8, 18), (13, 30), (18, 28), (13, 17), (22, 17))
+
+    def inside(x: float, y: float) -> bool:
+        result = False
+        previous = polygon[-1]
+        for current in polygon:
+            x1, y1 = previous
+            x2, y2 = current
+            if (y1 > y) != (y2 > y):
+                boundary = (x2 - x1) * (y - y1) / (y2 - y1) + x1
+                if x < boundary:
+                    result = not result
+            previous = current
+        return result
+
+    mask = {
+        (x, y)
+        for y in range(CURSOR_HEIGHT)
+        for x in range(CURSOR_WIDTH)
+        if inside(x + 0.5, y + 0.5)
+    }
+    outline = {
+        (x + dx, y + dy)
+        for x, y in mask
+        for dx in (-1, 0, 1)
+        for dy in (-1, 0, 1)
+        if 0 <= x + dx < CURSOR_WIDTH and 0 <= y + dy < CURSOR_HEIGHT
+    }
+    rows = bytearray()
+    for y in range(CURSOR_HEIGHT):
+        rows.append(0)  # no PNG row filter
+        for x in range(CURSOR_WIDTH):
+            if (x, y) in mask:
+                rows.extend((255, 255, 255, 255))
+            elif (x, y) in outline:
+                rows.extend((18, 18, 18, 255))
+            else:
+                rows.extend((0, 0, 0, 0))
+    header = struct.pack("!IIBBBBB", CURSOR_WIDTH, CURSOR_HEIGHT, 8, 6, 0, 0, 0)
+    return (
+        b"\x89PNG\r\n\x1a\n"
+        + _png_chunk(b"IHDR", header)
+        + _png_chunk(b"IDAT", zlib.compress(bytes(rows), 9))
+        + _png_chunk(b"IEND", b"")
+    )
+
+
+def cursor_image_message(display_width: int, display_height: int) -> dict[str, Any]:
+    """Build the OpenDisplay cursor sprite control message."""
+    return {
+        "type": "cursorImg",
+        "nw": CURSOR_WIDTH / max(1, display_width),
+        "nh": CURSOR_HEIGHT / max(1, display_height),
+        "ax": 2 / CURSOR_WIDTH,
+        "ay": 1 / CURSOR_HEIGHT,
+        "png": base64.b64encode(cursor_png()).decode("ascii"),
+    }
 
 
 class USBMuxError(RuntimeError):
@@ -267,7 +338,7 @@ def list_usb_devices() -> list[dict[str, Any]]:
             connection,
             {
                 "MessageType": "ListDevices",
-                "ClientVersionString": "tuxdisplay-0.4.17",
+                "ClientVersionString": "tuxdisplay-0.4.21",
                 "ProgName": "tuxdisplay",
                 "kLibUSBMuxVersion": 3,
             },
@@ -295,7 +366,7 @@ def connect_usb_device(device_id: int, port: int = OPENDISPLAY_PORT) -> socket.s
             connection,
             {
                 "MessageType": "Connect",
-                "ClientVersionString": "tuxdisplay-0.4.17",
+                "ClientVersionString": "tuxdisplay-0.4.21",
                 "ProgName": "tuxdisplay",
                 "DeviceID": int(device_id),
                 # usbmuxd's plist protocol carries the TCP port in network order.
@@ -396,6 +467,10 @@ class OpenDisplayUSB:
         self.stop_event = threading.Event()
         self.session_failed = threading.Event()
         self.video_queue: queue.Queue[tuple[int, bytes, int]] = queue.Queue(maxsize=2)
+        self.outbound_event = threading.Event()
+        self.cursor_lock = threading.Lock()
+        self.pending_cursor: dict[str, Any] | None = None
+        self.current_cursor: dict[str, Any] = {"type": "cursor", "v": 0}
         self.connection: socket.socket | None = None
         self.connection_lock = threading.Lock()
         self.send_lock = threading.Lock()
@@ -493,9 +568,23 @@ class OpenDisplayUSB:
         if request_recovery:
             self.request_keyframe()
 
+    def submit_cursor(self, x: float = 0.0, y: float = 0.0, visible: bool = True) -> None:
+        """Coalesce cursor positions so capture never waits for the socket."""
+        message: dict[str, Any] = {"type": "cursor", "v": 1 if visible else 0}
+        if visible:
+            message["x"] = round(min(1.0, max(0.0, float(x))), 6)
+            message["y"] = round(min(1.0, max(0.0, float(y))), 6)
+        with self.cursor_lock:
+            if message == self.current_cursor:
+                return
+            self.current_cursor = message
+            self.pending_cursor = message
+        self.outbound_event.set()
+
     def _queue_video_locked(self, item: tuple[int, bytes, int]) -> bool:
         try:
             self.video_queue.put_nowait(item)
+            self.outbound_event.set()
             return True
         except queue.Full:
             return False
@@ -608,8 +697,18 @@ class OpenDisplayUSB:
 
     def _writer(self) -> None:
         while not self.stop_event.is_set() and not self.session_failed.is_set():
+            self.outbound_event.wait(0.5)
+            self.outbound_event.clear()
+            with self.cursor_lock:
+                cursor = self.pending_cursor
+                self.pending_cursor = None
+            if cursor is not None:
+                try:
+                    self._send_control(cursor)
+                except (ConnectionError, OSError):
+                    return
             try:
-                generation, access_unit, captured_ms = self.video_queue.get(timeout=0.5)
+                generation, access_unit, captured_ms = self.video_queue.get_nowait()
             except queue.Empty:
                 continue
             with self.video_state_lock:
@@ -624,6 +723,8 @@ class OpenDisplayUSB:
                     self.sent_video_since_stats += 1
             except (ConnectionError, OSError):
                 return
+            if not self.video_queue.empty():
+                self.outbound_event.set()
 
     def _handle_stats(self, message: dict[str, Any]) -> bool:
         """Use receiver health as a staged IDR-then-reconnect watchdog."""
@@ -728,6 +829,11 @@ class OpenDisplayUSB:
                     "framesPerSecond": self.frames_per_second,
                 }
             )
+        self._send_control(cursor_image_message(self.width, self.height))
+        with self.cursor_lock:
+            self.pending_cursor = None
+            cursor = dict(self.current_cursor)
+        self._send_control(cursor)
         self.request_keyframe()
         writer = threading.Thread(target=self._writer, name="tuxdisplay-opendisplay-writer", daemon=True)
         writer.start()
