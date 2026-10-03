@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.21. The project has two display backends and five receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
+This document describes TuxDisplay 0.4.22. The project has two display backends and five receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
 
 ## GNOME Wayland data flow
 

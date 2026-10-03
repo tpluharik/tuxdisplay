@@ -50,8 +50,8 @@ For a package candidate:
 
 ~~~sh
 ./build-deb.sh
-dpkg-deb --info dist/tuxdisplay_0.4.21_all.deb
-dpkg-deb --contents dist/tuxdisplay_0.4.21_all.deb
+dpkg-deb --info dist/tuxdisplay_0.4.22_all.deb
+dpkg-deb --contents dist/tuxdisplay_0.4.22_all.deb
 ~~~
 
 The build replaces the package for the current version and regenerates `dist/SHA256SUMS`. Keep `SOURCE_DATE_EPOCH` in `build-deb.sh` equal to the Unix timestamp of the newest Debian changelog entry so repeated builds remain byte-for-byte reproducible. Do not commit a rebuilt binary unless the change is intended for a release asset.

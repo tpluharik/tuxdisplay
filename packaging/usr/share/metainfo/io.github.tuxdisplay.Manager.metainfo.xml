@@ -21,6 +21,14 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.22" date="2026-10-03">
+      <description>
+        <ul>
+          <li>Publish the validated OpenDisplay and AVNC Android USB implementation as version 0.4.22.</li>
+          <li>Align application, protocol, package, documentation, checksum, and reproducible-build metadata.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.21" date="2026-10-03">
       <description>
         <ul>

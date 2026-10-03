@@ -1,3 +1,12 @@
+tuxdisplay (0.4.22) unstable; urgency=medium
+
+  * Advance the validated OpenDisplay and AVNC Android USB implementation to
+    the next package version.
+  * Align application, protocol, documentation, AppStream, package, checksum,
+    and reproducible-build metadata with 0.4.22.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Sat, 03 Oct 2026 11:20:00 +0200
+
 tuxdisplay (0.4.21) unstable; urgency=medium
 
   * Add a loopback-only Tight/JPEG VNC receiver path for the open-source AVNC

@@ -13,7 +13,7 @@ The Debian package also includes:
 - an optional USB Ethernet gadget helper for hardware with a device-capable USB controller.
 
 > [!IMPORTANT]
-> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, 0.4.4 can unnecessarily reconnect a healthy low-FPS session, 0.4.9 can stall capture while displays are rearranged, 0.4.11 can enter a virtual-monitor restart loop after a capture failure, 0.4.15 can leave stale receiver health, and 0.4.16 does not recover when the host encoder and receiver telemetry stop together. Install 0.4.21 or newer for the current stability, cursor, rendering-performance, and AVNC compatibility fixes.
+> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, 0.4.4 can unnecessarily reconnect a healthy low-FPS session, 0.4.9 can stall capture while displays are rearranged, 0.4.11 can enter a virtual-monitor restart loop after a capture failure, 0.4.15 can leave stale receiver health, and 0.4.16 does not recover when the host encoder and receiver telemetry stop together. Install 0.4.22 or newer for the current stability, cursor, rendering-performance, and AVNC compatibility fixes.
 
 ## Documentation
 
@@ -61,7 +61,7 @@ Download the current `.deb` and `SHA256SUMS` from [GitHub Releases](https://gith
 
 ~~~sh
 sha256sum --ignore-missing --check SHA256SUMS
-sudo apt install ./tuxdisplay_0.4.21_all.deb
+sudo apt install ./tuxdisplay_0.4.22_all.deb
 ~~~
 
 The checksum file can include packages from several releases. The checksum for the package being installed must report `OK`.
@@ -246,7 +246,7 @@ python3 -m unittest discover -s tests -v
 ./build-deb.sh
 ~~~
 
-The package is written to `dist/tuxdisplay_0.4.21_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
+The package is written to `dist/tuxdisplay_0.4.22_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
 
 Development and release conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
