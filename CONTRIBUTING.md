@@ -50,8 +50,8 @@ For a package candidate:
 
 ~~~sh
 ./build-deb.sh
-dpkg-deb --info dist/tuxdisplay_0.4.22_all.deb
-dpkg-deb --contents dist/tuxdisplay_0.4.22_all.deb
+dpkg-deb --info dist/tuxdisplay_0.4.23_all.deb
+dpkg-deb --contents dist/tuxdisplay_0.4.23_all.deb
 ~~~
 
 The build replaces the package for the current version and regenerates `dist/SHA256SUMS`. Keep `SOURCE_DATE_EPOCH` in `build-deb.sh` equal to the Unix timestamp of the newest Debian changelog entry so repeated builds remain byte-for-byte reproducible. Do not commit a rebuilt binary unless the change is intended for a release asset.
@@ -78,6 +78,7 @@ For GNOME Wayland changes:
 16. Exercise both automatic and software encoding. If VA-API is available, confirm Automatic selects it; if initialization fails, confirm the service falls back once to x264 without a restart loop.
 17. Move the pointer across the tablet without changing desktop content. Confirm `Cursor transport` reports `xwayland-poll`, its update count rises smoothly, and capture/source rates remain near the quiet-screen cadence.
 18. Install AVNC from F-Droid, connect it to Android `127.0.0.1:5900`, and confirm Tight/JPEG video plus pointer, buttons, wheel, and keyboard. Verify `adb reverse --list` while running and confirm the mapping disappears after stop.
+19. With **Keep awake with lid closed** disabled, close the lid on a safe test machine and confirm the receiver disconnects, the user service stops, and `Meta-0` is removed before sleep. Reopen the lid and confirm TuxDisplay remains stopped. Enable the option and confirm the service instead remains active while lid sleep is inhibited.
 
 For fallback changes:
 

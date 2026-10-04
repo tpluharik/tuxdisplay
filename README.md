@@ -13,7 +13,7 @@ The Debian package also includes:
 - an optional USB Ethernet gadget helper for hardware with a device-capable USB controller.
 
 > [!IMPORTANT]
-> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, 0.4.4 can unnecessarily reconnect a healthy low-FPS session, 0.4.9 can stall capture while displays are rearranged, 0.4.11 can enter a virtual-monitor restart loop after a capture failure, 0.4.15 can leave stale receiver health, and 0.4.16 does not recover when the host encoder and receiver telemetry stop together. Install 0.4.22 or newer for the current stability, cursor, rendering-performance, and AVNC compatibility fixes.
+> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, 0.4.4 can unnecessarily reconnect a healthy low-FPS session, 0.4.9 can stall capture while displays are rearranged, 0.4.11 can enter a virtual-monitor restart loop after a capture failure, 0.4.15 can leave stale receiver health, and 0.4.16 does not recover when the host encoder and receiver telemetry stop together. Install 0.4.23 or newer for the current stability, cursor, rendering-performance, AVNC compatibility, and safe lid-close handling.
 
 ## Documentation
 
@@ -49,7 +49,7 @@ The packaged and tested target is Debian/Ubuntu. Direct OpenDisplay uses usbmuxd
 - Gray stopped, amber waiting, and green connected tray states.
 - Start, connect, disconnect, and manager actions from the tray.
 - Authenticated browser access using a generated six-digit PIN.
-- Optional closed-lid operation using a service-scoped system sleep inhibitor.
+- Automatic tablet disconnection and virtual-monitor cleanup before lid-triggered sleep, with optional inhibited closed-lid operation.
 
 OpenDisplay protocol v3 does not identify individual touch slots. TuxDisplay therefore treats touch and Pencil events as a single guarded pointer stream. Native multi-touch gestures and Pencil pressure or tilt are not forwarded.
 
@@ -61,7 +61,7 @@ Download the current `.deb` and `SHA256SUMS` from [GitHub Releases](https://gith
 
 ~~~sh
 sha256sum --ignore-missing --check SHA256SUMS
-sudo apt install ./tuxdisplay_0.4.22_all.deb
+sudo apt install ./tuxdisplay_0.4.23_all.deb
 ~~~
 
 The checksum file can include packages from several releases. The checksum for the package being installed must report `OK`.
@@ -148,7 +148,9 @@ Changing resolution restarts the display service and OpenDisplay reconnects. In 
 
 ## Closed-lid operation
 
-Enable **Keep awake with lid closed** in the TuxDisplay manager when the tablet should remain usable after closing the laptop. TuxDisplay then blocks system sleep and lid-switch handling for exactly as long as its user service runs. Stopping TuxDisplay releases the inhibitor and restores normal sleep behavior.
+By default, closing the laptop lid disconnects the tablet, removes the virtual monitor when present, and stops TuxDisplay before the computer sleeps. TuxDisplay uses a short logind delay inhibitor only while that cleanup runs. Opening the lid does not reconnect automatically; choose **Start display** when you want to use the tablet again.
+
+Enable **Keep awake with lid closed** only when the tablet should remain usable after closing the laptop. TuxDisplay then blocks system sleep and lid-switch handling for exactly as long as its user service runs. Stopping TuxDisplay releases the inhibitor and restores the default sleep behavior.
 
 This option also blocks manual and idle suspend while TuxDisplay is running. A closed laptop can retain more heat, so keep it connected to power when appropriate and make sure its vents are not obstructed. Firmware-level thermal shutdown and critical-battery actions can still override the inhibitor.
 
@@ -221,7 +223,7 @@ WEB_PORT=6080
 VNC_PORT=5900
 ~~~
 
-`DISPLAY_MODE` accepts `extend` or `mirror`. `FPS` accepts `15`, `30`, or `60`; it is a ceiling for the virtual monitor and stream rather than a promise that GNOME will redraw unchanged content. `30` is the balanced default and `60` is intended for systems whose encoder and tablet can sustain it. `ENCODER=auto` prefers the VA-API H.264 encoder and GPU color conversion when available, then falls back to tuned multi-threaded x264; choose `software` only for compatibility troubleshooting. `CURSOR_MODE=embedded` keeps the pointer visible on every receiver; `overlay` avoids full-frame work during pointer-only movement but requires an OpenDisplay receiver that renders `cursor` and `cursorImg` control messages. TuxDisplay encodes new damage-driven PipeWire frames immediately and emits one liveness frame per second while the desktop is unchanged. VA-API uses variable bitrate, so a static screen no longer consumes a constant full-rate encode and USB stream. Every queue remains bounded to prevent stale-frame buildup, and `tuxdisplay status` reports PipeWire capture, sender, and receiver rates separately. `KEEP_AWAKE_WITH_LID_CLOSED=1` enables the service-lifetime sleep inhibitor; the default `0` preserves normal sleep behavior. `DISPLAY_NUMBER` applies only to the X11 compatibility workspace. `VNC_PORT` is used by AVNC on both backends; `WEB_PORT` and the PIN apply to browser access. Restart TuxDisplay after changing a value.
+`DISPLAY_MODE` accepts `extend` or `mirror`. `FPS` accepts `15`, `30`, or `60`; it is a ceiling for the virtual monitor and stream rather than a promise that GNOME will redraw unchanged content. `30` is the balanced default and `60` is intended for systems whose encoder and tablet can sustain it. `ENCODER=auto` prefers the VA-API H.264 encoder and GPU color conversion when available, then falls back to tuned multi-threaded x264; choose `software` only for compatibility troubleshooting. `CURSOR_MODE=embedded` keeps the pointer visible on every receiver; `overlay` avoids full-frame work during pointer-only movement but requires an OpenDisplay receiver that renders `cursor` and `cursorImg` control messages. TuxDisplay encodes new damage-driven PipeWire frames immediately and emits one liveness frame per second while the desktop is unchanged. VA-API uses variable bitrate, so a static screen no longer consumes a constant full-rate encode and USB stream. Every queue remains bounded to prevent stale-frame buildup, and `tuxdisplay status` reports PipeWire capture, sender, and receiver rates separately. The default `KEEP_AWAKE_WITH_LID_CLOSED=0` disconnects TuxDisplay cleanly before lid-triggered sleep; `1` replaces that behavior with a service-lifetime sleep inhibitor. `DISPLAY_NUMBER` applies only to the X11 compatibility workspace. `VNC_PORT` is used by AVNC on both backends; `WEB_PORT` and the PIN apply to browser access. Restart TuxDisplay after changing a value.
 
 For a 4:3 iPad, `1536x1152` is the balanced preset: it still fills the panel but processes 44% fewer pixels than `2048x1536`. Use the manager or `tuxdisplay configure --resolution 1536x1152 --restart`. Keep `2048x1536` when text sharpness matters more than motion and power use.
 
@@ -246,7 +248,7 @@ python3 -m unittest discover -s tests -v
 ./build-deb.sh
 ~~~
 
-The package is written to `dist/tuxdisplay_0.4.22_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
+The package is written to `dist/tuxdisplay_0.4.23_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
 
 Development and release conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 

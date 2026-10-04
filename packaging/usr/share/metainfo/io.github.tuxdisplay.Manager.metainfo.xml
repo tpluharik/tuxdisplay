@@ -21,6 +21,15 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.23" date="2026-10-04">
+      <description>
+        <ul>
+          <li>Disconnect the tablet and remove the virtual monitor automatically before lid-triggered sleep.</li>
+          <li>Hold a short logind delay inhibitor while USB, capture, and monitor cleanup completes.</li>
+          <li>Keep closed-lid operation available as an explicit sleep-blocking override.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.22" date="2026-10-03">
       <description>
         <ul>

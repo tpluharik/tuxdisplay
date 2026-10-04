@@ -262,17 +262,25 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertIn("systemctl --user daemon-reload", postinst_text)
         self.assertIn('DBUS_SESSION_BUS_ADDRESS="unix:path=$td_runtime/bus"', postinst_text)
 
-    def test_lid_close_sleep_inhibitor_is_opt_in_and_scoped_to_service(self) -> None:
+    def test_lid_close_disconnect_is_default_and_keep_awake_is_opt_in(self) -> None:
         session = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-session"
         text = session.read_text(encoding="utf-8")
         self.assertIn("KEEP_AWAKE_WITH_LID_CLOSED 0", text)
+        self.assertIn("${TUXDISPLAY_LID_MONITORED:-0}", text)
+        self.assertIn("sleep_monitor.py", text)
         self.assertIn("${TUXDISPLAY_INHIBITED:-0}", text)
         self.assertIn("--what=handle-lid-switch:sleep", text)
         self.assertIn("--mode=block", text)
         self.assertIn('exec systemd-inhibit', text)
+        monitor = session.parent / "sleep_monitor.py"
+        monitor_text = monitor.read_text(encoding="utf-8")
+        self.assertIn('"PrepareForSleep"', monitor_text)
+        self.assertIn('"LidIsClosed"', monitor_text)
+        self.assertIn('"delay"', monitor_text)
         manager = SCRIPT.read_text(encoding="utf-8")
         self.assertIn('Gtk.Label(label="Keep awake with lid closed")', manager)
         self.assertIn('configuration["KEEP_AWAKE_WITH_LID_CLOSED"] = selected', manager)
+        self.assertIn("disconnects the tablet cleanly before sleep", manager)
 
     def test_browser_recovers_or_reauthenticates_after_service_restart(self) -> None:
         viewer = SCRIPT.parents[1] / "share" / "tuxdisplay" / "wayland-viewer.html"

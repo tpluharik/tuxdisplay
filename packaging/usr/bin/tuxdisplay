@@ -24,7 +24,7 @@ import urllib.request
 
 
 APP_NAME = "TuxDisplay"
-VERSION = "0.4.22"
+VERSION = "0.4.23"
 SERVICE = "tuxdisplay.service"
 USB_GADGET_ADDRESS = "10.55.0.1"
 UPDATE_API = "https://api.github.com/repos/tpluharik/tuxdisplay/releases/latest"
@@ -703,8 +703,12 @@ def doctor() -> int:
     print(f"Frame rate: {ensure_config()['FPS']} FPS")
     print(f"Video acceleration: {ensure_config()['ENCODER']}")
     print(
-        "Lid-close sleep: "
-        + ("blocked while TuxDisplay runs" if ensure_config()["KEEP_AWAKE_WITH_LID_CLOSED"] == "1" else "normal")
+        "Lid close: "
+        + (
+            "connection stays active and system sleep is blocked"
+            if ensure_config()["KEEP_AWAKE_WITH_LID_CLOSED"] == "1"
+            else "disconnects TuxDisplay automatically"
+        )
     )
     print(f"Browser fallback URL: {preferred_url()}")
     receiver_name = opendisplay_receiver()
@@ -907,8 +911,8 @@ def run_gui(background: bool = False) -> int:
 
             lid_note = Gtk.Label(
                 label=(
-                    "Lid-close protection also blocks manual and idle suspend while TuxDisplay is running. "
-                    "Keep the closed laptop connected to power and well ventilated."
+                    "By default, closing the lid disconnects the tablet cleanly before sleep. Enabling this "
+                    "switch keeps the connection active and also blocks manual and idle suspend."
                 )
             )
             lid_note.set_line_wrap(True)
@@ -1148,7 +1152,7 @@ def run_gui(background: bool = False) -> int:
             elif selected == "1":
                 self.show_message("Lid-close protection will activate when the display starts.")
             else:
-                self.show_message("Normal system sleep behavior restored.")
+                self.show_message("TuxDisplay will disconnect automatically when the lid closes or sleep begins.")
 
         def on_cursor_mode_changed(self, dropdown: Gtk.ComboBoxText) -> None:
             selected = dropdown.get_active()
@@ -1437,8 +1441,12 @@ def print_status() -> int:
     active_encoder = client_state.get("video_encoder") if running else None
     print(f"Video encoder: {active_encoder or ensure_config()['ENCODER']}")
     print(
-        "Lid-close sleep: "
-        + ("blocked while TuxDisplay runs" if ensure_config()["KEEP_AWAKE_WITH_LID_CLOSED"] == "1" else "normal")
+        "Lid close: "
+        + (
+            "connection stays active and system sleep is blocked"
+            if ensure_config()["KEEP_AWAKE_WITH_LID_CLOSED"] == "1"
+            else "disconnects TuxDisplay automatically"
+        )
     )
     receiver_name = opendisplay_receiver()
     print(f"OpenDisplay USB: {'connected to ' + receiver_name if opendisplay_connected() and receiver_name else 'connected' if opendisplay_connected() else 'waiting'}")

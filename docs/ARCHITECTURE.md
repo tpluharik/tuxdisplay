@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.22. The project has two display backends and five receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
+This document describes TuxDisplay 0.4.23. The project has two display backends and five receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
 
 ## GNOME Wayland data flow
 
@@ -124,9 +124,11 @@ The isolated desktop is not part of the user's current monitor layout. `tuxdispl
 
 Set `TUXDISPLAY_FORCE_X11=1` in the user service environment to select this backend deliberately.
 
-## Closed-lid inhibitor
+## Lid-close and sleep lifecycle
 
-When `KEEP_AWAKE_WITH_LID_CLOSED=1`, `tuxdisplay-session` re-executes itself below `systemd-inhibit` before selecting a display backend. The inhibitor blocks `sleep` and `handle-lid-switch` through logind and is owned by the TuxDisplay service process tree. Stopping or failing the service closes the inhibitor automatically, so no permanent system configuration is changed.
+With the default `KEEP_AWAKE_WITH_LID_CLOSED=0`, `tuxdisplay-session` runs the selected backend below `sleep_monitor.py`. The monitor acquires a logind `sleep` delay inhibitor, listens for `PrepareForSleep(true)` and UPower's `LidIsClosed` property, and polls the kernel ACPI lid state as an independent fallback. A lid-close or sleep request sends `SIGINT` to the backend so it can close USB transports, remove ADB mappings, stop capture, and remove the virtual monitor before the delay inhibitor is released. Shutdown has bounded TERM/KILL fallbacks so a wedged backend cannot delay sleep indefinitely.
+
+When `KEEP_AWAKE_WITH_LID_CLOSED=1`, `tuxdisplay-session` instead re-executes itself below `systemd-inhibit` before selecting a display backend. That explicit override blocks `sleep` and `handle-lid-switch` through logind and is owned by the TuxDisplay service process tree. Stopping or failing the service closes either inhibitor automatically, so no permanent system configuration is changed.
 
 ## Desktop application and updates
 
@@ -157,6 +159,7 @@ The helper is privileged and launched through PolicyKit or its disabled-by-defau
 | --- | --- |
 | `/usr/bin/tuxdisplay` | CLI, single-instance GTK manager/tray, verified updater, configuration, status, and service control |
 | `tuxdisplay.service` | Per-user lifecycle for the selected display backend |
+| `sleep_monitor.py` | Default lid-close/sleep detection, delayed cleanup, and bounded backend shutdown |
 | `tuxdisplay-wayland` | Virtual-monitor or primary-monitor capture, encoding, browser server, and input |
 | `display_source.py` | Primary physical-monitor selection and aspect-aware mirrored input mapping |
 | `opendisplay_usb.py` | usbmuxd and ADB transports, OpenDisplay framing, reconnect, keyframe cache, and input translation |

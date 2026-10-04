@@ -14,7 +14,7 @@ Use direct USB only with:
 - a cable and USB path you trust;
 - an iPad pairing relationship or Android USB-debugging authorization you recognize.
 
-Lock or disconnect the tablet, revoke its trust/USB-debugging authorization, or stop TuxDisplay when the display is unattended. Android's general USB-debugging authorization grants more than display access to the computer's ADB client, so enable it only for computers you trust and revoke it in Developer options when it is no longer needed.
+Lock or disconnect the tablet, revoke its trust/USB-debugging authorization, or stop TuxDisplay when the display is unattended. By default, TuxDisplay also disconnects the receiver and removes its virtual monitor before lid-triggered sleep; the explicit **Keep awake with lid closed** setting overrides that safeguard. Android's general USB-debugging authorization grants more than display access to the computer's ADB client, so enable it only for computers you trust and revoke it in Developer options when it is no longer needed.
 
 TuxDisplay passes the selected Android serial as a direct process argument, allocates a host port through ADB, binds the forwarding side to loopback, and removes that forward on disconnect. It does not invoke an Android shell command or install the receiver APK.
 
