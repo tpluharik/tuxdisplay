@@ -50,8 +50,8 @@ For a package candidate:
 
 ~~~sh
 ./build-deb.sh
-dpkg-deb --info dist/tuxdisplay_0.4.23_all.deb
-dpkg-deb --contents dist/tuxdisplay_0.4.23_all.deb
+dpkg-deb --info dist/tuxdisplay_0.4.24_all.deb
+dpkg-deb --contents dist/tuxdisplay_0.4.24_all.deb
 ~~~
 
 The build replaces the package for the current version and regenerates `dist/SHA256SUMS`. Keep `SOURCE_DATE_EPOCH` in `build-deb.sh` equal to the Unix timestamp of the newest Debian changelog entry so repeated builds remain byte-for-byte reproducible. Do not commit a rebuilt binary unless the change is intended for a release asset.
@@ -64,7 +64,7 @@ For GNOME Wayland changes:
 2. Open OpenDisplay before and after connecting the cable.
 3. Confirm the first image appears when the virtual desktop is completely static.
 4. Test disconnect and reconnect without restarting the service.
-5. Test tap, drag, scroll, duplicate begin/end events, and disconnect during a drag.
+5. Test native finger taps and one-finger content scrolling, duplicate and orphaned touch phases, and disconnect during an active contact. Confirm Pencil still behaves as a pointer and explicit two-finger scroll remains an axis event.
 6. Change between a 16:9 and 4:3 preset and verify recovery.
 7. Stop TuxDisplay and confirm the virtual output is removed without affecting GNOME.
 8. Test browser PIN entry, MJPEG video, input, and session invalidation.

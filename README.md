@@ -13,7 +13,7 @@ The Debian package also includes:
 - an optional USB Ethernet gadget helper for hardware with a device-capable USB controller.
 
 > [!IMPORTANT]
-> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its direct touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, 0.4.4 can unnecessarily reconnect a healthy low-FPS session, 0.4.9 can stall capture while displays are rearranged, 0.4.11 can enter a virtual-monitor restart loop after a capture failure, 0.4.15 can leave stale receiver health, and 0.4.16 does not recover when the host encoder and receiver telemetry stop together. Install 0.4.23 or newer for the current stability, cursor, rendering-performance, AVNC compatibility, and safe lid-close handling.
+> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its unguarded touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, 0.4.4 can unnecessarily reconnect a healthy low-FPS session, 0.4.9 can stall capture while displays are rearranged, 0.4.11 can enter a virtual-monitor restart loop after a capture failure, 0.4.15 can leave stale receiver health, and 0.4.16 does not recover when the host encoder and receiver telemetry stop together. Install 0.4.24 or newer for the current stability, native single-finger touch, cursor, rendering-performance, AVNC compatibility, and safe lid-close handling.
 
 ## Documentation
 
@@ -44,14 +44,14 @@ The packaged and tested target is Debian/Ubuntu. Direct OpenDisplay uses usbmuxd
 - Damage-driven low-latency H.264 with automatic VA-API acceleration, software fallback, adaptive bitrate, and keyframe-safe recovery.
 - A compatible pointer embedded in the video by default, plus an optional low-power OpenDisplay cursor overlay.
 - Remembered tablet placement and in-place video refresh after GNOME display rearrangement.
-- Tap, drag, and scroll input from OpenDisplay, plus Apple Pencil-as-pointer on iPadOS.
+- Native single-finger tap, direct manipulation, and one-finger scrolling from OpenDisplay, plus Apple Pencil-as-pointer on iPadOS.
 - Pointer, scroll, touch, and keyboard input in the browser fallback.
 - Gray stopped, amber waiting, and green connected tray states.
 - Start, connect, disconnect, and manager actions from the tray.
 - Authenticated browser access using a generated six-digit PIN.
 - Automatic tablet disconnection and virtual-monitor cleanup before lid-triggered sleep, with optional inhibited closed-lid operation.
 
-OpenDisplay protocol v3 does not identify individual touch slots. TuxDisplay therefore treats touch and Pencil events as a single guarded pointer stream. Native multi-touch gestures and Pencil pressure or tilt are not forwarded.
+OpenDisplay protocol v3 models one finger stream but does not identify multiple touch contacts. TuxDisplay maps that finger stream to one guarded native GNOME touch slot, giving touch-capable applications direct touchscreen behavior while keeping Pencil and mouse paths unchanged. The receiver's explicit two-finger scroll message remains a bounded scroll-axis event. True pinch zoom, simultaneous touches, and Pencil pressure or tilt cannot be forwarded because the protocol supplies neither contact IDs nor magnification data.
 
 The 0.4.15 transport was validated on a real iPad USB session at 2048×1536 and 30 FPS with no reported frame drops or prediction-chain recoveries. Those counters included repeated unchanged frames and did not prove 30 distinct desktop updates per second. Version 0.4.17 reports the recent PipeWire capture rate separately and stops re-encoding the same static frame continuously. Version 0.4.18 introduced separate OpenDisplay cursor control messages; version 0.4.19 adds independent XWayland tracking and direct tablet-input echo, so normal pointer motion is not tied to the damage-driven video cadence.
 
@@ -61,7 +61,7 @@ Download the current `.deb` and `SHA256SUMS` from [GitHub Releases](https://gith
 
 ~~~sh
 sha256sum --ignore-missing --check SHA256SUMS
-sudo apt install ./tuxdisplay_0.4.23_all.deb
+sudo apt install ./tuxdisplay_0.4.24_all.deb
 ~~~
 
 The checksum file can include packages from several releases. The checksum for the package being installed must report `OK`.
@@ -124,7 +124,7 @@ Change the monitor arrangement in **Settings → Displays** if the virtual outpu
 Choose a mode in the manager before starting the display:
 
 - **Extend desktop** creates a separate `Meta-0` monitor. Windows can be moved between the computer and tablet, and TuxDisplay remembers the arrangement.
-- **Mirror main screen** captures the physical monitor currently marked primary in GNOME. The tablet shows the same desktop and its tap, drag, scroll, and Pencil events control that monitor.
+- **Mirror main screen** captures the physical monitor currently marked primary in GNOME. The tablet shows the same desktop; finger input uses direct touchscreen semantics while Pencil remains a pointer.
 
 Changing the mode while TuxDisplay is running performs one controlled service restart, then OpenDisplay reconnects automatically. Mirror mode scales the primary monitor into the selected stream resolution without cropping. If the monitor and tablet use different aspect ratios, the video is letterboxed and input coordinates are mapped only to the visible desktop area.
 
@@ -248,7 +248,7 @@ python3 -m unittest discover -s tests -v
 ./build-deb.sh
 ~~~
 
-The package is written to `dist/tuxdisplay_0.4.23_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
+The package is written to `dist/tuxdisplay_0.4.24_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
 
 Development and release conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 

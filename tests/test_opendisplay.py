@@ -438,7 +438,7 @@ class OpenDisplayPointerTranslatorTests(unittest.TestCase):
     def setUp(self) -> None:
         self.translator = MODULE.OpenDisplayPointerTranslator()
 
-    def test_duplicate_touch_phases_produce_one_button_pair(self) -> None:
+    def test_finger_input_uses_one_guarded_native_touch_slot(self) -> None:
         events = []
         events += self.translator.translate({"type": "touch", "phase": "began", "x": 0.25, "y": 0.5}, 1000, 800)
         events += self.translator.translate({"type": "touch", "phase": "began", "x": 0.3, "y": 0.6}, 1000, 800)
@@ -446,18 +446,39 @@ class OpenDisplayPointerTranslatorTests(unittest.TestCase):
         events += self.translator.translate({"type": "touch", "phase": "ended", "x": 0.4, "y": 0.7}, 1000, 800)
         events += self.translator.translate({"type": "touch", "phase": "ended", "x": 0.4, "y": 0.7}, 1000, 800)
 
-        self.assertEqual([event["type"] for event in events], ["button", "motion", "motion", "button"])
-        self.assertEqual([event["down"] for event in events if event["type"] == "button"], [True, False])
-        self.assertFalse(any(event["type"].startswith("touch_") for event in events))
+        self.assertEqual(
+            [event["type"] for event in events],
+            ["touch_down", "touch_move", "touch_move", "touch_up"],
+        )
+        self.assertEqual([event["slot"] for event in events], [0, 0, 0, 0])
+        self.assertFalse(any(event["type"] in {"button", "motion"} for event in events))
 
-    def test_release_clears_a_stuck_pointer_once(self) -> None:
+    def test_release_clears_a_stuck_touch_slot_once(self) -> None:
         self.translator.translate({"type": "touch", "phase": "began", "x": 0.1, "y": 0.2}, 1000, 500)
 
         self.assertEqual(
             self.translator.release(),
-            [{"type": "button", "button": 0, "down": False, "x": 100.0, "y": 100.0}],
+            [{"type": "touch_up", "slot": 0, "x": 100.0, "y": 100.0}],
         )
         self.assertEqual(self.translator.release(), [])
+
+    def test_orphaned_touch_motion_and_end_are_ignored(self) -> None:
+        self.assertEqual(
+            self.translator.translate(
+                {"type": "touch", "phase": "moved", "x": 0.4, "y": 0.7},
+                1000,
+                800,
+            ),
+            [],
+        )
+        self.assertEqual(
+            self.translator.translate(
+                {"type": "touch", "phase": "cancelled", "x": 0.4, "y": 0.7},
+                1000,
+                800,
+            ),
+            [],
+        )
 
     def test_coordinates_are_clamped_and_scaled(self) -> None:
         events = self.translator.translate(
@@ -480,6 +501,18 @@ class OpenDisplayPointerTranslatorTests(unittest.TestCase):
 
         self.assertEqual([event["type"] for event in events], ["button", "motion", "button"])
         self.assertEqual([event["down"] for event in events if event["type"] == "button"], [True, False])
+
+    def test_pencil_and_touch_cleanup_are_independent(self) -> None:
+        self.translator.translate({"type": "touch", "phase": "began", "x": 0.2, "y": 0.3}, 1000, 500)
+        self.translator.translate({"type": "pencil", "phase": "down", "x": 0.4, "y": 0.5}, 1000, 500)
+
+        events = self.translator.release()
+
+        self.assertEqual([event["type"] for event in events], ["touch_up", "button"])
+        self.assertEqual(events[0]["slot"], 0)
+        self.assertEqual((events[0]["x"], events[0]["y"]), (200.0, 150.0))
+        self.assertEqual((events[1]["x"], events[1]["y"]), (400.0, 250.0))
+        self.assertFalse(events[1]["down"])
 
 
 if __name__ == "__main__":

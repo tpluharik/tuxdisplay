@@ -1,3 +1,14 @@
+tuxdisplay (0.4.24) unstable; urgency=medium
+
+  * Map OpenDisplay finger input to one guarded native GNOME touch contact so
+    touch-aware applications get direct manipulation and one-finger scrolling.
+  * Keep Apple Pencil on its independent pointer path and retain the receiver's
+    explicit two-finger scroll events as bounded pointer-axis input.
+  * Suppress duplicate and orphaned touch phases and release the active contact
+    on disconnect without inventing unsafe multi-touch identities.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Sun, 04 Oct 2026 09:00:00 +0200
+
 tuxdisplay (0.4.23) unstable; urgency=medium
 
   * Disconnect the tablet and stop the display automatically when the laptop

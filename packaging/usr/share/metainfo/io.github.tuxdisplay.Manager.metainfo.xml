@@ -21,6 +21,15 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.24" date="2026-10-04">
+      <description>
+        <ul>
+          <li>Give OpenDisplay finger input guarded native touchscreen semantics.</li>
+          <li>Keep Pencil, mouse, AVNC, and explicit scroll input behavior unchanged.</li>
+          <li>Balance duplicate, orphaned, and disconnect touch phases before they reach Mutter.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.23" date="2026-10-04">
       <description>
         <ul>

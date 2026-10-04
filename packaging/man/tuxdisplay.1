@@ -1,4 +1,4 @@
-.TH TUXDISPLAY 1 "October 2026" "TuxDisplay 0.4.23" "User Commands"
+.TH TUXDISPLAY 1 "October 2026" "TuxDisplay 0.4.24" "User Commands"
 .SH NAME
 tuxdisplay \- use an iPad or Android tablet as a secondary Linux display
 .SH SYNOPSIS
@@ -31,8 +31,9 @@ that workspace is not an extension of the current desktop.
 Version 0.4.0 must not be used on GNOME Wayland because its touch path could
 abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions, 0.4.9 can
 stall capture while rearranging displays, and 0.4.11 can restart-loop a virtual
-monitor after capture failure. Use 0.4.23 or newer for all documented stability,
-frame-pacing, cursor-performance, and safe lid-close fixes.
+monitor after capture failure. Use 0.4.24 or newer for all documented stability,
+native single-finger touch, frame-pacing, cursor-performance, and safe lid-close
+fixes.
 .PP
 The GTK manager and three-state indicator are one single-instance application.
 The manager can check GitHub Releases and install a verified update after an
@@ -161,9 +162,14 @@ a physical monitor. TuxDisplay restores the saved relative placement when
 Meta-0 returns. In Mirror mode the physical monitor remains active and only the
 encoded stream resolution changes. Reopen OpenDisplay if it does not reconnect.
 .SH INPUT
-OpenDisplay touch and Apple Pencil events are translated into a guarded
-single-pointer stream. Tap, drag, pointer movement, and scrolling are
-supported. Native multi-touch, Pencil pressure, and tilt are not forwarded.
+OpenDisplay finger events are translated into one guarded native GNOME touch
+contact. Touch-aware applications can therefore handle taps, direct
+manipulation, and one-finger content scrolling. Duplicate phases are balanced
+and an active contact is released on disconnect. Apple Pencil remains an
+independent pointer/button stream, and explicit receiver scroll messages remain
+bounded pointer-axis events. Native pinch zoom and simultaneous contacts cannot
+be forwarded because OpenDisplay protocol version 3 supplies neither contact
+identities nor magnification data. Pencil pressure and tilt are not forwarded.
 .PP
 The AVNC and browser paths also accept pointer, clicking, scrolling, and
 keyboard events. AVNC gestures are translated by the client into standard VNC

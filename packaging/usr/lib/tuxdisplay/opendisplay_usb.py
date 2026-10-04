@@ -208,26 +208,35 @@ def android_device_label(device: dict[str, str]) -> str:
 
 
 class OpenDisplayPointerTranslator:
-    """Turn OpenDisplay's slot-less touch stream into safe pointer events.
+    """Turn OpenDisplay input into guarded native-touch and pointer events.
 
     Mutter's RemoteDesktop touch API requires perfectly paired, unique touch
-    slots. OpenDisplay protocol v3 carries no slot identifier and may repeat a
-    began phase after reconnects or gesture changes. Pointer/button injection
-    preserves tap, drag, hover, Pencil, and scroll without risking a duplicate
-    touch-slot assertion inside the compositor.
+    slots. OpenDisplay protocol v3 models one finger stream without a slot
+    identifier and may repeat a began phase after gesture changes. Keep exactly
+    one native slot, convert duplicate begins to motion, ignore orphaned phases,
+    and release the slot on disconnect. Finger input therefore has direct
+    touchscreen semantics without recreating the duplicate-slot assertion that
+    older TuxDisplay versions could trigger inside the compositor.
+
+    Pencil remains a pointer/button stream and OpenDisplay's explicit two-finger
+    scroll message remains a wheel event. Those paths must not inherit the
+    direct-touch behavior requested for fingers only.
     """
 
     def __init__(self) -> None:
+        self.touch_down = False
         self.button_down = False
-        self.last_x = 0.0
-        self.last_y = 0.0
+        self.last_touch_x = 0.0
+        self.last_touch_y = 0.0
+        self.last_pointer_x = 0.0
+        self.last_pointer_y = 0.0
 
     def translate(self, message: dict[str, Any], width: int, height: int) -> list[dict[str, Any]]:
         kind = str(message.get("type", ""))
         normalized_x = min(1.0, max(0.0, float(message.get("x", 0.0))))
         normalized_y = min(1.0, max(0.0, float(message.get("y", 0.0))))
-        self.last_x = normalized_x * width
-        self.last_y = normalized_y * height
+        event_x = normalized_x * width
+        event_y = normalized_y * height
 
         if kind == "scroll":
             return [
@@ -235,28 +244,32 @@ class OpenDisplayPointerTranslator:
                     "type": "wheel",
                     "dx": float(message.get("dx", 0.0)),
                     "dy": float(message.get("dy", 0.0)),
-                    "x": self.last_x,
-                    "y": self.last_y,
+                    "x": event_x,
+                    "y": event_y,
                 }
             ]
 
         if kind == "touch":
+            self.last_touch_x = event_x
+            self.last_touch_y = event_y
             phase = str(message.get("phase", ""))
             if phase == "began":
-                if self.button_down:
-                    return [self._motion()]
-                self.button_down = True
-                return [self._button(True)]
+                if self.touch_down:
+                    return [self._touch_motion()]
+                self.touch_down = True
+                return [self._touch_down()]
             if phase == "moved":
-                return [self._motion()]
+                return [self._touch_motion()] if self.touch_down else []
             if phase in {"ended", "cancelled"}:
-                if not self.button_down:
+                if not self.touch_down:
                     return []
-                self.button_down = False
-                return [self._button(False)]
+                self.touch_down = False
+                return [self._touch_up()]
             return []
 
         if kind == "pencil":
+            self.last_pointer_x = event_x
+            self.last_pointer_y = event_y
             phase = str(message.get("phase", ""))
             if phase == "down":
                 if self.button_down:
@@ -273,16 +286,35 @@ class OpenDisplayPointerTranslator:
         return []
 
     def release(self) -> list[dict[str, Any]]:
-        if not self.button_down:
-            return []
-        self.button_down = False
-        return [self._button(False)]
+        events: list[dict[str, Any]] = []
+        if self.touch_down:
+            self.touch_down = False
+            events.append(self._touch_up())
+        if self.button_down:
+            self.button_down = False
+            events.append(self._button(False))
+        return events
 
     def _motion(self) -> dict[str, Any]:
-        return {"type": "motion", "x": self.last_x, "y": self.last_y}
+        return {"type": "motion", "x": self.last_pointer_x, "y": self.last_pointer_y}
 
     def _button(self, down: bool) -> dict[str, Any]:
-        return {"type": "button", "button": 0, "down": down, "x": self.last_x, "y": self.last_y}
+        return {
+            "type": "button",
+            "button": 0,
+            "down": down,
+            "x": self.last_pointer_x,
+            "y": self.last_pointer_y,
+        }
+
+    def _touch_down(self) -> dict[str, Any]:
+        return {"type": "touch_down", "slot": 0, "x": self.last_touch_x, "y": self.last_touch_y}
+
+    def _touch_motion(self) -> dict[str, Any]:
+        return {"type": "touch_move", "slot": 0, "x": self.last_touch_x, "y": self.last_touch_y}
+
+    def _touch_up(self) -> dict[str, Any]:
+        return {"type": "touch_up", "slot": 0, "x": self.last_touch_x, "y": self.last_touch_y}
 
 
 def _recv_exact(connection: socket.socket, size: int) -> bytes:
@@ -338,7 +370,7 @@ def list_usb_devices() -> list[dict[str, Any]]:
             connection,
             {
                 "MessageType": "ListDevices",
-                "ClientVersionString": "tuxdisplay-0.4.23",
+                "ClientVersionString": "tuxdisplay-0.4.24",
                 "ProgName": "tuxdisplay",
                 "kLibUSBMuxVersion": 3,
             },
@@ -366,7 +398,7 @@ def connect_usb_device(device_id: int, port: int = OPENDISPLAY_PORT) -> socket.s
             connection,
             {
                 "MessageType": "Connect",
-                "ClientVersionString": "tuxdisplay-0.4.23",
+                "ClientVersionString": "tuxdisplay-0.4.24",
                 "ProgName": "tuxdisplay",
                 "DeviceID": int(device_id),
                 # usbmuxd's plist protocol carries the TCP port in network order.

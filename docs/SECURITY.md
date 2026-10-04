@@ -73,7 +73,7 @@ The Debian package installs system files as root-owned, while the display servic
 
 An attached receiver can move the pointer, click, scroll, and—in the AVNC or browser path—send keyboard input. In Mirror mode those events target the primary physical monitor; in Extend mode they target `Meta-0`. This can interact with applications under the desktop user's authority. GNOME's own permission and session boundaries still apply, but TuxDisplay should not be left connected to an untrusted receiver.
 
-OpenDisplay input is reduced to a guarded single-pointer stream. This protects compositor stability; it is not an authorization mechanism.
+OpenDisplay finger input is reduced to one guarded native touch contact, while Pencil stays on an independent guarded pointer path. Duplicate, orphaned, and disconnect phases are balanced before reaching Mutter. This protects compositor stability; it is not an authorization mechanism.
 
 ## Release integrity
 

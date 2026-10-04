@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.23. The project has two display backends and five receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
+This document describes TuxDisplay 0.4.24. The project has two display backends and five receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
 
 ## GNOME Wayland data flow
 
@@ -92,18 +92,19 @@ RFB security type `None` is deliberately limited to the loopback socket behind A
 
 ### Input safety
 
-OpenDisplay v3 touch messages do not include a touch-slot identifier. Mutter's native touch API requires balanced, uniquely identified slots. Sending the slot-less stream directly as native touch could create invalid compositor state; TuxDisplay 0.4.0 did so and could abort GNOME Shell. AVNC instead sends standard VNC pointer/button events and never enters Mutter's native multi-touch path.
+OpenDisplay v3 models one finger stream but does not include a touch-slot identifier for multiple simultaneous contacts. Mutter's native touch API requires balanced, uniquely identified slots. Sending phases directly without tracking slot state can create invalid compositor state; TuxDisplay 0.4.0 did so and could abort GNOME Shell. AVNC instead sends standard VNC pointer/button events and never enters Mutter's native touch path.
 
-Since 0.4.1, `OpenDisplayPointerTranslator` converts touch and Pencil phases into one guarded pointer/button stream:
+Version 0.4.24 gives finger input direct touchscreen semantics through exactly one guarded native slot:
 
-- begin/down becomes pointer positioning plus one primary-button press;
-- move becomes pointer motion;
-- end/up becomes one primary-button release;
-- scroll remains a bounded scroll event;
-- duplicate begins and ends are suppressed;
-- disconnect releases a possibly stuck button.
+- the first `began` becomes `NotifyTouchDown` on slot 0;
+- a duplicate `began` becomes motion on the existing slot instead of a second down;
+- `moved` is forwarded only while that slot is active;
+- `ended` or `cancelled` releases the slot exactly once;
+- disconnect also releases an active slot;
+- OpenDisplay's explicit two-finger `scroll` remains a bounded pointer-axis event;
+- Pencil remains an independent guarded pointer/button stream.
 
-This supports tap, drag, scroll, and Pencil-as-pointer. It intentionally does not expose native multi-touch, Pencil pressure, or tilt.
+This lets touch-aware Linux applications handle a finger as direct contact, including one-finger content scrolling and kinetic behavior, without changing mouse, AVNC, or Pencil input. Native pinch zoom and simultaneous touches remain unavailable because the receiver sends neither contact identities nor a magnification value. Pencil pressure and tilt are also not forwarded.
 
 ## Browser receiver
 

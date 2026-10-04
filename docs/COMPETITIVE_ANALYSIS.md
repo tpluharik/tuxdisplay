@@ -1,6 +1,6 @@
 # Competitive analysis
 
-**Snapshot date:** 2026-10-03. The linked first-party sources were rechecked on that date; product support and commercial terms can change independently of this repository.
+**Snapshot date:** 2026-10-04. The linked first-party sources were rechecked on that date; product support and commercial terms can change independently of this repository.
 
 TuxDisplay serves a narrow combination that many second-display products do not: a Debian/Ubuntu GNOME Wayland host, an iPadOS or Android receiver, a real extended desktop or touch-controlled primary-screen mirror, and operation through an ordinary USB data cable without Internet access or IP networking.
 
@@ -24,7 +24,7 @@ The comparison emphasizes:
 
 | Product | Linux host | Real extra desktop | Tablet receiver | Offline cable path | Input | Main trade-off |
 | --- | --- | --- | --- | --- | --- | --- |
-| **TuxDisplay** | Yes; Debian/Ubuntu, GNOME Wayland focus | Yes on GNOME Wayland, plus primary-screen mirroring; isolated workspace elsewhere | OpenDisplay on iPadOS/Android, AVNC on Android, or a browser | Yes; usbmuxd or Android ADB, no IP | Tap, drag, scroll; keyboard through AVNC/browser; Pencil as pointer on iPadOS | GNOME-specific native path; AVNC uses a less efficient JPEG compatibility stream; no native multi-touch |
+| **TuxDisplay** | Yes; Debian/Ubuntu, GNOME Wayland focus | Yes on GNOME Wayland, plus primary-screen mirroring; isolated workspace elsewhere | OpenDisplay on iPadOS/Android, AVNC on Android, or a browser | Yes; usbmuxd or Android ADB, no IP | Native single-finger touch and direct scrolling; keyboard through AVNC/browser; Pencil as pointer on iPadOS | GNOME-specific native path; AVNC uses a less efficient JPEG compatibility stream; no pinch or native multi-touch |
 | **OpenDisplay Linux sender** | Yes; KDE Plasma Wayland and Hyprland documented | Yes on documented compositors | OpenDisplay | Yes; usbmuxd, plus Wi-Fi | Project-dependent | Closest open-source alternative, but explicitly experimental and not GNOME-focused |
 | **Weylus** | Yes, plus macOS and Windows | Conditional; needs a host-created output/region | Any modern browser | Network transport; can use an existing tethered network | Strong stylus, pressure, tilt, and multi-touch support | Broad input support, but not a turnkey native GNOME extra monitor |
 | **Deskreen CE** | Yes, plus macOS and Windows | Conditional; a virtual output or dummy plug supplies a second screen | Any modern browser | Network/WebRTC | Browser interaction model | Very broad receiver compatibility; second-monitor setup is separate |
@@ -38,7 +38,7 @@ The comparison emphasizes:
 
 ### OpenDisplay and the Linux sender
 
-The official [OpenDisplay repository](https://github.com/peetzweg/opendisplay) describes an open protocol and a macOS-to-iPhone/iPad product with extension and mirroring, USB and Wi-Fi connections, touch/scroll input, and support for multiple receivers. Its current iOS receiver requires iOS/iPadOS 15 or newer. The [protocol specification](https://github.com/peetzweg/opendisplay/blob/main/PROTOCOL.md) defines H.264 video, control/input messages, and a transport-independent TCP receiver on port 9000. The project lists [OpenDisplay Android](https://github.com/josepacelli/opendisplay-android) as a compatible third-party receiver; that receiver publishes Android 8+ APK releases and documents ADB forwarding for USB use.
+The official [OpenDisplay repository](https://github.com/peetzweg/opendisplay) describes an open protocol and a macOS-to-iPhone/iPad product with extension and mirroring, USB and Wi-Fi connections, touch/scroll input, and support for multiple receivers. Its current iOS receiver requires iOS/iPadOS 15 or newer. The [protocol specification](https://github.com/peetzweg/opendisplay/blob/main/PROTOCOL.md) defines H.264 video, control/input messages, and a transport-independent TCP receiver on port 9000. Its `touch` message carries one phase and coordinate pair without a contact ID, while its separate `scroll` message carries two-finger deltas; it defines no pinch or magnification message. The project lists [OpenDisplay Android](https://github.com/josepacelli/opendisplay-android) as a compatible third-party receiver; that receiver publishes Android 8+ APK releases and documents ADB forwarding for USB use.
 
 TuxDisplay is an independent Linux sender for that public protocol. The separate [opendisplay-linux project](https://github.com/tixwho/opendisplay-linux) documents KDE Plasma Wayland and Hyprland support, USB and Wi-Fi transport, PipeWire/FFmpeg capture, hardware-encoder options, and an experimental Qt interface. Its own README calls the project highly experimental and does not list GNOME as a supported compositor. It is the closest technical alternative and also a useful adjacent implementation, not merely a generic competitor.
 
@@ -103,7 +103,7 @@ TuxDisplay reports the selected encoder, measured PipeWire source rate, post-que
 ## Where alternatives are stronger
 
 - **Desktop breadth:** Weylus and Deskreen support more host operating systems; the experimental OpenDisplay Linux sender covers KDE Plasma and Hyprland.
-- **Input richness:** Weylus documents pressure, tilt, and multi-touch. TuxDisplay deliberately exposes only safe single-pointer semantics.
+- **Input richness:** Weylus documents pressure, tilt, and multi-touch. TuxDisplay exposes safe native single-contact finger semantics but cannot forward pinch, pressure, tilt, or simultaneous contacts from the current OpenDisplay wire format.
 - **Encoding breadth:** TuxDisplay prefers VA-API H.264 and falls back to x264; Weylus and the OpenDisplay Linux sender document additional hardware-encoder families on supported systems.
 - **Commercial polish and support:** Sidecar, Duet, Luna Display, and spacedesk have mature product experiences and broader end-user support on their chosen platforms.
 - **Remote use:** Sunshine/Moonlight is designed for high-performance network streaming beyond a physically attached second screen.
@@ -116,7 +116,7 @@ TuxDisplay reports the selected encoder, measured PipeWire source rate, post-que
 | Mutter-private integration changes | A GNOME update can break native monitor creation | Test supported GNOME releases; isolate compositor calls; retain fallback |
 | Hardware-encoder availability varies | Software fallback can use more power at high resolution | Detect VA-API at runtime, expose the active path, retain tuned x264 fallback |
 | Fixed configured mode | Borders and disruptive restarts on resolution changes | Use receiver hello dimensions and support safe dynamic reconfiguration |
-| Single-pointer input | No multi-touch or Pencil pressure/tilt | Extend the protocol or add an input path with stable slot identity |
+| Single-contact touch input | No pinch, simultaneous touch contacts, or Pencil pressure/tilt | Extend the receiver protocol with stable contact identity and magnification data |
 | USB-only OpenDisplay sender | Cable required even on a trusted LAN | Add optional authenticated Wi-Fi OpenDisplay discovery/transport |
 | HTTP browser fallback | Unsafe on untrusted networks | Bind to selected interfaces; add TLS or a secure local tunnel option |
 | AVNC compatibility authentication | Loopback RFB relies on Android USB-debugging trust and is reachable by local processes | Keep it loopback-only; add VeNCrypt or VNC authentication without exposing a LAN listener |
