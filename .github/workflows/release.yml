@@ -4,6 +4,12 @@ on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing release tag to rebuild and verify
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -13,9 +19,13 @@ permissions:
 jobs:
   publish:
     runs-on: ubuntu-24.04
+    env:
+      TARGET_TAG: ${{ inputs.tag || github.ref_name }}
     steps:
       - name: Check out tagged source
-        uses: actions/checkout@11bd71901bbe5b1634ceea73d27597364c9af683
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ inputs.tag || github.ref }}
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install --yes python3-cryptography
       - name: Test and build
@@ -25,7 +35,7 @@ jobs:
       - name: Match package to signed manifest
         shell: bash
         run: |
-          version=${GITHUB_REF_NAME#v}
+          version=${TARGET_TAG#v}
           package="dist/tuxdisplay_${version}_all.deb"
           test -f "$package"
           expected=$(python3 -c 'import json; print(json.load(open("update/latest.json"))["sha256"])')
@@ -33,7 +43,7 @@ jobs:
           test "$expected" = "$actual"
           test "$(python3 -c 'import json; print(json.load(open("update/latest.json"))["version"])')" = "$version"
       - name: Attest package provenance
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8
         with:
           subject-path: 'dist/tuxdisplay_*_all.deb'
       - name: Publish release assets
@@ -41,8 +51,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         shell: bash
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
-            gh release upload "$GITHUB_REF_NAME" dist/tuxdisplay_*_all.deb dist/SHA256SUMS --clobber
+          if gh release view "$TARGET_TAG" >/dev/null 2>&1; then
+            gh release upload "$TARGET_TAG" dist/tuxdisplay_*_all.deb dist/SHA256SUMS --clobber
           else
-            gh release create "$GITHUB_REF_NAME" dist/tuxdisplay_*_all.deb dist/SHA256SUMS --verify-tag --title "TuxDisplay ${GITHUB_REF_NAME#v}" --generate-notes
+            gh release create "$TARGET_TAG" dist/tuxdisplay_*_all.deb dist/SHA256SUMS --verify-tag --title "TuxDisplay ${TARGET_TAG#v}" --generate-notes
           fi
