@@ -9,8 +9,18 @@
     <defaults>
       <allow_any>no</allow_any>
       <allow_inactive>auth_admin</allow_inactive>
-      <allow_active>auth_admin_keep</allow_active>
+      <allow_active>auth_admin</allow_active>
     </defaults>
     <annotate key="org.freedesktop.policykit.exec.path">/usr/sbin/tuxdisplay-usb</annotate>
+  </action>
+  <action id="io.github.tuxdisplay.update.install">
+    <description>Install a signed TuxDisplay update</description>
+    <message>Authentication is required to install the signed TuxDisplay update.</message>
+    <defaults>
+      <allow_any>no</allow_any>
+      <allow_inactive>auth_admin</allow_inactive>
+      <allow_active>auth_admin</allow_active>
+    </defaults>
+    <annotate key="org.freedesktop.policykit.exec.path">/usr/lib/tuxdisplay/update-helper</annotate>
   </action>
 </policyconfig>

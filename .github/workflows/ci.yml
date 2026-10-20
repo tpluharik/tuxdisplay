@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-reproduce:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out source
+        uses: actions/checkout@11bd71901bbe5b1634ceea73d27597364c9af683
+      - name: Install test dependencies
+        run: sudo apt-get update && sudo apt-get install --yes python3-cryptography
+      - name: Run tests
+        run: python3 -m unittest discover -s tests -v
+      - name: Build twice and compare
+        shell: bash
+        run: |
+          ./build-deb.sh
+          first=$(sha256sum dist/tuxdisplay_*_all.deb | cut -d' ' -f1)
+          rm -rf build
+          ./build-deb.sh
+          second=$(sha256sum dist/tuxdisplay_*_all.deb | cut -d' ' -f1)
+          test "$first" = "$second"
+          dpkg-deb --info dist/tuxdisplay_*_all.deb

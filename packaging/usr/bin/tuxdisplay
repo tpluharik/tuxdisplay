@@ -4,33 +4,32 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import secrets
 import shlex
-import socket
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 from typing import Sequence
 import urllib.error
-import urllib.parse
-import urllib.request
+
+
+LIB_DIRECTORY = Path("/usr/lib/tuxdisplay")
+if not (LIB_DIRECTORY / "update_security.py").exists():
+    LIB_DIRECTORY = Path(__file__).resolve().parents[1] / "lib" / "tuxdisplay"
+sys.path.insert(0, str(LIB_DIRECTORY))
+from update_security import UpdateSecurityError, fetch_manifest  # noqa: E402
 
 
 APP_NAME = "TuxDisplay"
-VERSION = "0.4.24"
+VERSION = "0.4.25"
 SERVICE = "tuxdisplay.service"
 USB_GADGET_ADDRESS = "10.55.0.1"
-UPDATE_API = "https://api.github.com/repos/tpluharik/tuxdisplay/releases/latest"
-UPDATE_HOSTS = {"api.github.com", "github.com", "objects.githubusercontent.com", "release-assets.githubusercontent.com"}
-MAX_UPDATE_METADATA = 1 << 20
-MAX_UPDATE_PACKAGE = 100 << 20
+UPDATE_HELPER = "/usr/lib/tuxdisplay/update-helper"
 DEFAULTS = {
     "DISPLAY_MODE": "extend",
     "ENCODER": "auto",
@@ -38,6 +37,8 @@ DEFAULTS = {
     "RESOLUTION": "1920x1080",
     "FPS": "30",
     "KEEP_AWAKE_WITH_LID_CLOSED": "0",
+    "BROWSER_ENABLED": "0",
+    "AVNC_DEVICE": "",
     "DISPLAY_NUMBER": "48",
     "WEB_PORT": "6080",
     "VNC_PORT": "5900",
@@ -73,130 +74,20 @@ def version_tuple(version: str) -> tuple[int, int, int]:
     return tuple(int(part) for part in match.groups())  # type: ignore[return-value]
 
 
-def download_url(url: str, maximum_size: int, timeout: int = 20) -> bytes:
-    parsed = urllib.parse.urlparse(url)
-    if parsed.scheme != "https" or parsed.hostname not in UPDATE_HOSTS:
-        raise RuntimeError("The update server returned an unsafe download address.")
-    request = urllib.request.Request(
-        url,
-        headers={
-            "Accept": "application/vnd.github+json",
-            "User-Agent": f"TuxDisplay/{VERSION}",
-            "X-GitHub-Api-Version": "2022-11-28",
-        },
-    )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
-        final = urllib.parse.urlparse(response.geturl())
-        if final.scheme != "https" or final.hostname not in UPDATE_HOSTS:
-            raise RuntimeError("The update download was redirected to an unsafe server.")
-        length = response.headers.get("Content-Length")
-        try:
-            declared_size = int(length) if length is not None else None
-        except ValueError as error:
-            raise RuntimeError("The update server returned an invalid download size.") from error
-        if declared_size is not None and declared_size > maximum_size:
-            raise RuntimeError("The update download is unexpectedly large.")
-        payload = response.read(maximum_size + 1)
-    if len(payload) > maximum_size:
-        raise RuntimeError("The update download is unexpectedly large.")
-    return payload
-
-
-def release_update_from_payload(payload: object) -> dict[str, str] | None:
-    if not isinstance(payload, dict) or payload.get("draft") or payload.get("prerelease"):
-        raise RuntimeError("GitHub returned invalid release metadata.")
-    version = str(payload.get("tag_name", "")).removeprefix("v")
-    if version_tuple(version) <= version_tuple(VERSION):
-        return None
-    package_name = f"tuxdisplay_{version}_all.deb"
-    assets = payload.get("assets")
-    if not isinstance(assets, list):
-        raise RuntimeError("The release does not contain downloadable assets.")
-    by_name = {str(asset.get("name", "")): asset for asset in assets if isinstance(asset, dict)}
-    package = by_name.get(package_name)
-    checksums = by_name.get("SHA256SUMS")
-    if not isinstance(package, dict) or not isinstance(checksums, dict):
-        raise RuntimeError("The release is missing its Debian package or checksum file.")
-    result = {
-        "version": version,
-        "package_name": package_name,
-        "package_url": str(package.get("browser_download_url", "")),
-        "checksum_url": str(checksums.get("browser_download_url", "")),
-        "package_digest": str(package.get("digest", "")),
-        "release_url": str(payload.get("html_url", "")),
-        "notes": str(payload.get("body", ""))[:4000],
-    }
-    for key in ("package_url", "checksum_url"):
-        parsed = urllib.parse.urlparse(result[key])
-        if parsed.scheme != "https" or parsed.hostname != "github.com":
-            raise RuntimeError("The release contains an unsafe asset address.")
-    return result
-
-
 def check_for_update() -> dict[str, str] | None:
-    raw = download_url(UPDATE_API, MAX_UPDATE_METADATA)
-    try:
-        payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as error:
-        raise RuntimeError("GitHub returned unreadable release metadata.") from error
-    return release_update_from_payload(payload)
-
-
-def verify_update_assets(update: dict[str, str], package_data: bytes, checksum_data: bytes) -> str:
-    package_name = update["package_name"]
-    try:
-        lines = checksum_data.decode("utf-8").splitlines()
-    except UnicodeDecodeError as error:
-        raise RuntimeError("The release checksum file is unreadable.") from error
-    expected = ""
-    for line in lines:
-        fields = line.split()
-        if len(fields) >= 2 and fields[1].lstrip("*").removeprefix("./") == package_name:
-            expected = fields[0].lower()
-            break
-    if not re.fullmatch(r"[0-9a-f]{64}", expected):
-        raise RuntimeError("The package checksum is missing from SHA256SUMS.")
-    actual = hashlib.sha256(package_data).hexdigest()
-    if not secrets.compare_digest(actual, expected):
-        raise RuntimeError("The downloaded package failed checksum verification.")
-    api_digest = update.get("package_digest", "")
-    if api_digest.startswith("sha256:") and not secrets.compare_digest(actual, api_digest[7:].lower()):
-        raise RuntimeError("The package does not match GitHub's release digest.")
-    return actual
+    return fetch_manifest(current_version=VERSION)
 
 
 def install_update(update: dict[str, str]) -> tuple[bool, str]:
     try:
-        package_data = download_url(update["package_url"], MAX_UPDATE_PACKAGE, timeout=60)
-        checksum_data = download_url(update["checksum_url"], MAX_UPDATE_METADATA)
-        verify_update_assets(update, package_data, checksum_data)
-        with tempfile.TemporaryDirectory(prefix="tuxdisplay-update-") as temporary:
-            package_path = Path(temporary) / update["package_name"]
-            package_path.write_bytes(package_data)
-            metadata = subprocess.run(
-                [
-                    "dpkg-deb",
-                    "--show",
-                    "--showformat=${Package}\\n${Version}\\n${Architecture}\\n",
-                    str(package_path),
-                ],
-                check=False,
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=20,
-            )
-            fields = metadata.stdout.splitlines()
-            if metadata.returncode or fields != ["tuxdisplay", update["version"], "all"]:
-                raise RuntimeError("The downloaded Debian package has unexpected metadata.")
-            installed = subprocess.run(
-                ["pkexec", "/usr/bin/apt-get", "install", "--yes", str(package_path)],
-                check=False,
-                timeout=300,
-            )
-            if installed.returncode:
-                return False, "The update was cancelled or could not be installed."
-    except (OSError, KeyError, RuntimeError, subprocess.TimeoutExpired, urllib.error.URLError) as error:
+        installed = subprocess.run(
+            ["pkexec", UPDATE_HELPER, update["version"]],
+            check=False,
+            timeout=360,
+        )
+        if installed.returncode:
+            return False, "The update was cancelled or the independently verified installer rejected it."
+    except (OSError, KeyError, UpdateSecurityError, subprocess.TimeoutExpired, urllib.error.URLError) as error:
         return False, str(error)
     return True, f"TuxDisplay {update['version']} was installed successfully."
 
@@ -247,6 +138,11 @@ def validate_config(values: dict[str, str]) -> dict[str, str]:
         result["FPS"] = values["FPS"]
     if values.get("KEEP_AWAKE_WITH_LID_CLOSED") in {"0", "1"}:
         result["KEEP_AWAKE_WITH_LID_CLOSED"] = values["KEEP_AWAKE_WITH_LID_CLOSED"]
+    if values.get("BROWSER_ENABLED") in {"0", "1"}:
+        result["BROWSER_ENABLED"] = values["BROWSER_ENABLED"]
+    avnc_device = values.get("AVNC_DEVICE", "")
+    if not avnc_device or re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", avnc_device):
+        result["AVNC_DEVICE"] = avnc_device
     for key, low, high in (
         ("DISPLAY_NUMBER", 1, 99),
         ("WEB_PORT", 1024, 65535),
@@ -458,11 +354,14 @@ def usb_status() -> tuple[str, str, str | None]:
     authorized_android = [device for device in android_devices if device.get("state") == "device"]
     if authorized_android:
         model = authorized_android[0].get("model", "Android device").replace("_", " ")
-        port = ensure_config()["VNC_PORT"]
+        configuration = ensure_config()
+        port = configuration["VNC_PORT"]
         compatibility = vnc_status()
         if compatibility.startswith("AVNC USB unavailable:"):
             return "android", f"{model} cable ready; open OpenDisplay Android. {compatibility}", None
-        return "android", f"{model} cable ready; open OpenDisplay Android or connect AVNC to 127.0.0.1:{port}", None
+        if configuration["AVNC_DEVICE"]:
+            return "android", f"{model} cable ready; open OpenDisplay Android or authenticated AVNC on 127.0.0.1:{port}", None
+        return "android", f"{model} cable ready; open OpenDisplay Android (AVNC compatibility is off)", None
     if any(device.get("state") == "unauthorized" for device in android_devices):
         return "android-authorization", "Unlock Android and allow USB debugging for this computer", None
     if apple_devices:
@@ -471,7 +370,9 @@ def usb_status() -> tuple[str, str, str | None]:
     if addresses:
         interface, address = addresses[0]
         kind = "USB gadget" if address == USB_GADGET_ADDRESS else "iPad USB tethering"
-        return "ready", f"{kind} ready on {interface}", f"http://{address}:{ensure_config()['WEB_PORT']}/"
+        configuration = ensure_config()
+        url = f"http://{address}:{configuration['WEB_PORT']}/" if configuration["BROWSER_ENABLED"] == "1" else None
+        return "ready", f"{kind} ready on {interface}", url
     udc_path = Path("/sys/class/udc")
     if udc_path.is_dir() and any(udc_path.iterdir()):
         return "gadget", "Device-capable USB port available", None
@@ -566,11 +467,6 @@ def urls() -> list[tuple[str, str]]:
     for interface, address in addresses:
         if is_usb_network(interface, address):
             add("USB cable" if address != USB_GADGET_ADDRESS else "USB gadget", address)
-    hostname = socket.gethostname().split(".", 1)[0]
-    if hostname:
-        add("Bonjour", f"{hostname}.local")
-    for interface, address in addresses:
-        add(interface, address)
     add("This computer", "127.0.0.1")
     return items
 
@@ -605,8 +501,9 @@ def reset_password() -> int:
     rfb = directory / "password.rfb"
     try:
         subprocess.run(
-            ["x11vnc", "-storepasswd", pin, str(rfb)],
+            ["x11vnc", "-storepasswd", str(rfb)],
             check=True,
+            input=f"{pin}\n{pin}\ny\n",
             stdout=subprocess.DEVNULL,
             stderr=subprocess.PIPE,
             text=True,
@@ -731,7 +628,7 @@ def doctor() -> int:
     if controllers:
         print("USB gadget capability: available (" + ", ".join(item.name for item in controllers) + ")")
     else:
-        print("USB gadget capability: not detected; use tethering, Wi-Fi, or Ethernet")
+        print("USB gadget capability: not detected; direct OpenDisplay/AVNC USB is unaffected")
     if missing:
         print("Missing required commands: " + ", ".join(missing))
         return 1
@@ -909,6 +806,44 @@ def run_gui(background: bool = False) -> int:
             self.usb_status_label.set_line_wrap(True)
             grid.attach(self.usb_status_label, 1, 8, 1, 1)
 
+            browser_label = Gtk.Label(label="Browser fallback")
+            browser_label.set_halign(Gtk.Align.END)
+            grid.attach(browser_label, 0, 9, 1, 1)
+            self.browser_enabled = Gtk.Switch()
+            self.browser_enabled.set_halign(Gtk.Align.START)
+            self.browser_enabled.set_active(ensure_config()["BROWSER_ENABLED"] == "1")
+            self.browser_enabled.connect("notify::active", self.on_browser_enabled_changed)
+            grid.attach(self.browser_enabled, 1, 9, 1, 1)
+
+            avnc_label = Gtk.Label(label="AVNC compatibility")
+            avnc_label.set_halign(Gtk.Align.END)
+            grid.attach(avnc_label, 0, 10, 1, 1)
+            self.avnc_device = Gtk.ComboBoxText()
+            self.avnc_serials = [""]
+            self.avnc_device.append_text("Disabled (OpenDisplay only)")
+            configured_avnc = ensure_config()["AVNC_DEVICE"]
+            for device in android_device_states():
+                serial = device.get("serial", "")
+                if device.get("state") != "device" or not serial:
+                    continue
+                model = device.get("model", "Android device").replace("_", " ")
+                self.avnc_serials.append(serial)
+                self.avnc_device.append_text(f"{model} — {serial}")
+            if configured_avnc and configured_avnc not in self.avnc_serials:
+                self.avnc_serials.append(configured_avnc)
+                self.avnc_device.append_text(f"Configured device — {configured_avnc}")
+            self.avnc_device.set_active(self.avnc_serials.index(configured_avnc) if configured_avnc in self.avnc_serials else 0)
+            self.avnc_device.connect("changed", self.on_avnc_device_changed)
+            grid.attach(self.avnc_device, 1, 10, 1, 1)
+
+            avnc_password_label = Gtk.Label(label="AVNC session password")
+            avnc_password_label.set_halign(Gtk.Align.END)
+            grid.attach(avnc_password_label, 0, 11, 1, 1)
+            self.avnc_password_entry = Gtk.Entry()
+            self.avnc_password_entry.set_editable(False)
+            self.avnc_password_entry.set_visibility(True)
+            grid.attach(self.avnc_password_entry, 1, 11, 1, 1)
+
             lid_note = Gtk.Label(
                 label=(
                     "By default, closing the lid disconnects the tablet cleanly before sleep. Enabling this "
@@ -932,12 +867,12 @@ def run_gui(background: bool = False) -> int:
             self.stop_button = Gtk.Button(label="Close connection")
             self.stop_button.connect("clicked", self.on_stop)
             controls.pack_start(self.stop_button, False, False, 0)
-            copy_button = Gtk.Button(label="Copy URL")
-            copy_button.connect("clicked", self.on_copy)
-            controls.pack_start(copy_button, False, False, 0)
-            preview_button = Gtk.Button(label="Open preview")
-            preview_button.connect("clicked", self.on_preview)
-            controls.pack_start(preview_button, False, False, 0)
+            self.copy_button = Gtk.Button(label="Copy URL")
+            self.copy_button.connect("clicked", self.on_copy)
+            controls.pack_start(self.copy_button, False, False, 0)
+            self.preview_button = Gtk.Button(label="Open preview")
+            self.preview_button.connect("clicked", self.on_preview)
+            controls.pack_start(self.preview_button, False, False, 0)
 
             outer.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 0)
             app_title = Gtk.Label(label="Launch an app in the current desktop")
@@ -958,8 +893,8 @@ def run_gui(background: bool = False) -> int:
             usb_note = Gtk.Label(
                 label=(
                     "Use OpenDisplay on iPadOS or Android for the fastest direct stream. On Android, AVNC from "
-                    "F-Droid is also supported: enable USB debugging, approve this computer, and connect AVNC "
-                    f"to 127.0.0.1:{ensure_config()['VNC_PORT']}. Both paths work without Wi-Fi or Internet."
+                    "F-Droid is opt-in: select one authorized Android device above, restart, then connect AVNC "
+                    f"to 127.0.0.1:{ensure_config()['VNC_PORT']} using the one-session password. Both paths work offline."
                 )
             )
             usb_note.set_line_wrap(True)
@@ -1008,10 +943,17 @@ def run_gui(background: bool = False) -> int:
             elif state == "running":
                 context.add_class("warning")
             usb_kind, usb_message, usb_url = usb_status()
+            configuration = ensure_config()
             self.usb_status_label.set_label(usb_message)
             self.usb_button.set_label("Tablet connected" if usb_kind == "ready" and not usb_url else "Connect tablet")
-            self.url_entry.set_text(usb_url or preferred_url())
-            self.pin_entry.set_text(read_password())
+            browser_enabled = configuration["BROWSER_ENABLED"] == "1"
+            self.url_entry.set_text((usb_url or preferred_url()) if browser_enabled else "Disabled")
+            self.pin_entry.set_text(read_password() if browser_enabled else "Created fresh when enabled")
+            client_state = read_client_state()
+            avnc_password = client_state.get("vnc_password", "") if isinstance(client_state, dict) else ""
+            self.avnc_password_entry.set_text(str(avnc_password) if avnc_password else "Disabled or waiting for restart")
+            self.copy_button.set_sensitive(browser_enabled)
+            self.preview_button.set_sensitive(browser_enabled)
             self.start_button.set_sensitive(state == "disconnected")
             self.stop_button.set_sensitive(state != "disconnected")
             return GLib.SOURCE_CONTINUE
@@ -1153,6 +1095,37 @@ def run_gui(background: bool = False) -> int:
                 self.show_message("Lid-close protection will activate when the display starts.")
             else:
                 self.show_message("TuxDisplay will disconnect automatically when the lid closes or sleep begins.")
+
+        def on_browser_enabled_changed(self, switch: Gtk.Switch, _parameter: object) -> None:
+            configuration = ensure_config()
+            selected = "1" if switch.get_active() else "0"
+            if configuration["BROWSER_ENABLED"] == selected:
+                return
+            configuration["BROWSER_ENABLED"] = selected
+            save_config(configuration)
+            if is_active():
+                self.schedule_display_restart("Browser fallback")
+            elif selected == "1":
+                self.show_message("Browser fallback will listen only on this computer and active USB network interfaces.")
+            else:
+                self.show_message("Browser fallback is disabled; OpenDisplay performance is unchanged.")
+
+        def on_avnc_device_changed(self, dropdown: Gtk.ComboBoxText) -> None:
+            selected = dropdown.get_active()
+            if not 0 <= selected < len(self.avnc_serials):
+                return
+            configuration = ensure_config()
+            serial = self.avnc_serials[selected]
+            if configuration["AVNC_DEVICE"] == serial:
+                return
+            configuration["AVNC_DEVICE"] = serial
+            save_config(configuration)
+            if is_active():
+                self.schedule_display_restart("AVNC compatibility")
+            elif serial:
+                self.show_message("AVNC will be exposed only to the selected device with a fresh session password.")
+            else:
+                self.show_message("AVNC compatibility is disabled; OpenDisplay remains available.")
 
         def on_cursor_mode_changed(self, dropdown: Gtk.ComboBoxText) -> None:
             selected = dropdown.get_active()
@@ -1481,8 +1454,18 @@ def print_status() -> int:
     pipeline = client_state.get("pipeline", {})
     if isinstance(pipeline, dict) and pipeline:
         print("Pipeline health: " + ", ".join(f"{key}={value}" for key, value in pipeline.items()))
-    print(f"Browser fallback URL: {preferred_url()}")
-    print(f"Browser fallback PIN: {read_password()}")
+    configuration = ensure_config()
+    if configuration["BROWSER_ENABLED"] == "1":
+        print(f"Browser fallback URL: {preferred_url()} (loopback and USB interfaces only)")
+        print(f"Browser fallback PIN: {read_password()}")
+    else:
+        print("Browser fallback: disabled")
+    if configuration["AVNC_DEVICE"]:
+        print(f"AVNC selected device: {configuration['AVNC_DEVICE']}")
+        password = client_state.get("vnc_password", "") if isinstance(client_state, dict) else ""
+        print(f"AVNC session password: {password or 'available after the display starts'}")
+    else:
+        print("AVNC compatibility: disabled")
     if not running:
         try:
             result = systemctl("status", SERVICE)
@@ -1506,6 +1489,19 @@ def configure_settings(arguments: argparse.Namespace) -> int:
         value = getattr(arguments, option, None)
         if value is not None and values[key] != value:
             values[key] = value
+            changed = True
+    if arguments.browser is not None:
+        browser = "1" if arguments.browser == "enabled" else "0"
+        if values["BROWSER_ENABLED"] != browser:
+            values["BROWSER_ENABLED"] = browser
+            changed = True
+    if arguments.avnc_device is not None:
+        avnc_device = "" if arguments.avnc_device == "off" else arguments.avnc_device
+        if avnc_device and re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", avnc_device) is None:
+            print("Invalid Android device serial.", file=sys.stderr)
+            return 2
+        if values["AVNC_DEVICE"] != avnc_device:
+            values["AVNC_DEVICE"] = avnc_device
             changed = True
     if changed:
         save_config(values)
@@ -1541,6 +1537,8 @@ def build_parser() -> argparse.ArgumentParser:
     configure_parser.add_argument("--display-mode", choices=tuple(value for value, _label in DISPLAY_MODES))
     configure_parser.add_argument("--encoder", choices=tuple(value for value, _label in ENCODER_MODES))
     configure_parser.add_argument("--cursor-mode", choices=tuple(value for value, _label in CURSOR_MODES))
+    configure_parser.add_argument("--browser", choices=("enabled", "disabled"))
+    configure_parser.add_argument("--avnc-device", metavar="SERIAL", help="selected adb serial, or 'off'")
     configure_parser.add_argument("--restart", action="store_true", help="restart a running display to apply changes")
     return parser
 

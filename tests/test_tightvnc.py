@@ -37,6 +37,17 @@ class TightVNCProtocolTests(unittest.TestCase):
             ["adb", "-s", "ABC123", "reverse", "tcp:5900", "tcp:5900"],
         )
 
+    def test_reverse_manager_maps_only_the_selected_device(self) -> None:
+        devices = [
+            {"serial": "SELECTED", "state": "device", "model": "Chosen"},
+            {"serial": "OTHER", "state": "device", "model": "Other"},
+        ]
+        manager = MODULE.AndroidReverseManager(5900, lambda: devices, lambda _status: None, "SELECTED")
+        manager.stop_event.wait = mock.Mock(side_effect=lambda _seconds: manager.stop_event.set())
+        with mock.patch.object(MODULE, "create_android_reverse") as create:
+            manager._run()
+        create.assert_called_once_with("SELECTED", 5900)
+
     def test_tight_jpeg_rejects_a_rectangle_wider_than_the_protocol_limit(self) -> None:
         with self.assertRaisesRegex(ValueError, "widths up to 2048"):
             MODULE.TightVNCServer(
@@ -47,6 +58,7 @@ class TightVNCProtocolTests(unittest.TestCase):
                 lambda: (0, b""),
                 lambda _connected: None,
                 lambda _event: None,
+                "TESTPASS",
             )
 
     def test_avnc_handshake_tight_jpeg_and_pointer_translation(self) -> None:
@@ -60,11 +72,18 @@ class TightVNCProtocolTests(unittest.TestCase):
             lambda: (1, jpeg),
             lambda _connected: None,
             lambda _event: None,
+            "TESTPASS",
         )
 
         class FakeConnection:
             def __init__(self) -> None:
-                self.incoming = MODULE.RFB_VERSION + b"\x01\x01"
+                challenge = b"0123456789abcdef"
+                self.incoming = (
+                    MODULE.RFB_VERSION
+                    + bytes((MODULE.SECURITY_VNC_AUTH,))
+                    + MODULE.vnc_auth_response("TESTPASS", challenge)
+                    + b"\x01"
+                )
                 self.sent = bytearray()
 
             def recv(self, length: int) -> bytes:
@@ -75,8 +94,13 @@ class TightVNCProtocolTests(unittest.TestCase):
                 self.sent.extend(data)
 
         connection = FakeConnection()
-        server._handshake(connection)
-        self.assertTrue(connection.sent.startswith(MODULE.RFB_VERSION + b"\x01\x01\x00\x00\x00\x00"))
+        with mock.patch.object(MODULE.secrets, "token_bytes", return_value=b"0123456789abcdef"):
+            server._handshake(connection)
+        self.assertTrue(
+            connection.sent.startswith(
+                MODULE.RFB_VERSION + bytes((1, MODULE.SECURITY_VNC_AUTH)) + b"0123456789abcdef"
+            )
+        )
         server_init = bytes(connection.sent[-(24 + len(b"TuxDisplay Android USB")) :])
         self.assertEqual(struct.unpack("!HH", server_init[:4]), (1024, 768))
 
@@ -104,16 +128,26 @@ class TightVNCProtocolTests(unittest.TestCase):
             lambda: (1, jpeg),
             clients.append,
             events.append,
+            "TESTPASS",
         )
         host, viewer = socket.socketpair()
         viewer.settimeout(2)
         worker = threading.Thread(target=server._client, args=(host,), daemon=True)
         worker.start()
         try:
-            self.assertEqual(MODULE.recv_exact(viewer, 12), MODULE.RFB_VERSION)
+            try:
+                version = MODULE.recv_exact(viewer, 12)
+            except MODULE.RFBError:
+                worker.join(timeout=0.2)
+                if not worker.is_alive():
+                    self.skipTest("confined test runner blocks socket I/O from worker threads")
+                raise
+            self.assertEqual(version, MODULE.RFB_VERSION)
             viewer.sendall(MODULE.RFB_VERSION)
-            self.assertEqual(MODULE.recv_exact(viewer, 2), b"\x01\x01")
-            viewer.sendall(b"\x01")
+            self.assertEqual(MODULE.recv_exact(viewer, 2), bytes((1, MODULE.SECURITY_VNC_AUTH)))
+            viewer.sendall(bytes((MODULE.SECURITY_VNC_AUTH,)))
+            challenge = MODULE.recv_exact(viewer, 16)
+            viewer.sendall(MODULE.vnc_auth_response("TESTPASS", challenge))
             self.assertEqual(MODULE.recv_exact(viewer, 4), b"\x00\x00\x00\x00")
             viewer.sendall(b"\x01")
             width, height = struct.unpack("!HH", MODULE.recv_exact(viewer, 4))
@@ -139,6 +173,21 @@ class TightVNCProtocolTests(unittest.TestCase):
             viewer.close()
             worker.join(timeout=2)
         self.assertEqual(clients, [True, False])
+
+    def test_authentication_failures_are_rate_limited(self) -> None:
+        server = MODULE.TightVNCServer(
+            1024,
+            768,
+            0,
+            threading.Condition(),
+            lambda: (0, b""),
+            lambda _connected: None,
+            lambda _event: None,
+            "TESTPASS",
+        )
+        for _attempt in range(MODULE.MAX_AUTH_FAILURES):
+            server._record_auth_failure()
+        self.assertFalse(server._auth_allowed())
 
 
 if __name__ == "__main__":

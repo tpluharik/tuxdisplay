@@ -1,3 +1,18 @@
+tuxdisplay (0.4.25) unstable; urgency=high
+
+  * Disable browser and AVNC compatibility by default without changing the
+    OpenDisplay capture, H.264, cursor, touch, or layout paths.
+  * Bind the optional browser only to loopback and active USB addresses, rotate
+    its PIN per session, throttle login attempts, and validate Host and Origin.
+  * Restrict AVNC to one selected Android serial and one authenticated client,
+    with a fresh password and bounded authentication failures.
+  * Replace user-owned updater staging with an Ed25519-signed manifest and a
+    fixed root helper that independently downloads and verifies the package.
+  * Require fresh PolicyKit authentication, normalize package mtimes, keep old
+    binaries out of source control, and add reproducibility/release CI.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Tue, 20 Oct 2026 18:00:00 +0200
+
 tuxdisplay (0.4.24) unstable; urgency=medium
 
   * Map OpenDisplay finger input to one guarded native GNOME touch contact so

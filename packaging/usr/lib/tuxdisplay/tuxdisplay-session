@@ -68,6 +68,8 @@ td_resolution=$(td_read_config RESOLUTION 1920x1080)
 td_display_number=$(td_read_config DISPLAY_NUMBER 48)
 td_web_port=$(td_read_config WEB_PORT 6080)
 td_vnc_port=$(td_read_config VNC_PORT 5900)
+td_browser_enabled=$(td_read_config BROWSER_ENABLED 0)
+td_avnc_device=$(td_read_config AVNC_DEVICE '')
 
 case "$td_resolution" in
     *[!0-9x]*|*x*x*|x*|*x) td_resolution=1920x1080 ;;
@@ -76,7 +78,7 @@ case "$td_display_number" in *[!0-9]*|'') td_display_number=48 ;; esac
 case "$td_web_port" in *[!0-9]*|'') td_web_port=6080 ;; esac
 case "$td_vnc_port" in *[!0-9]*|'') td_vnc_port=5900 ;; esac
 
-if [ ! -s "$td_password_file" ] || [ ! -s "$td_rfb_password_file" ]; then
+if [ "$td_browser_enabled" = "1" ] || [ -n "$td_avnc_device" ]; then
     TUXDISPLAY_SESSION=1 /usr/bin/tuxdisplay password --reset >/dev/null
 fi
 
@@ -140,22 +142,29 @@ td_tint_pid=$!
 
 /usr/bin/xterm -title "TuxDisplay" -geometry 86x25+90+90 -e /usr/lib/tuxdisplay/tuxdisplay-welcome >>"$td_desktop_log" 2>&1 &
 
-x11vnc \
-    -display "$DISPLAY" \
-    -rfbport "$td_vnc_port" \
-    -rfbauth "$td_rfb_password_file" \
-    -localhost \
-    -forever \
-    -shared \
-    -xkb \
-    -noxrecord >"$td_vnc_log" 2>&1 &
-td_vnc_pid=$!
+if [ "$td_browser_enabled" = "1" ] || [ -n "$td_avnc_device" ]; then
+    x11vnc \
+        -display "$DISPLAY" \
+        -rfbport "$td_vnc_port" \
+        -rfbauth "$td_rfb_password_file" \
+        -localhost \
+        -forever \
+        -nevershared \
+        -dontdisconnect \
+        -safer \
+        -no6 \
+        -xkb \
+        -noxrecord >"$td_vnc_log" 2>&1 &
+    td_vnc_pid=$!
+fi
 
-/usr/bin/python3 /usr/lib/tuxdisplay/tightvnc_usb.py --reverse-only "$td_vnc_port" >"$td_avnc_log" 2>&1 &
-td_avnc_pid=$!
+if [ -n "$td_avnc_device" ]; then
+    /usr/bin/python3 /usr/lib/tuxdisplay/tightvnc_usb.py --reverse-only "$td_vnc_port" "$td_avnc_device" >"$td_avnc_log" 2>&1 &
+    td_avnc_pid=$!
+fi
 
 td_count=0
-while [ "$td_count" -lt 100 ]; do
+while [ -n "${td_vnc_pid:-}" ] && [ "$td_count" -lt 100 ]; do
     if python3 - "$td_vnc_port" <<'PY'
 import socket
 import sys
@@ -176,13 +185,18 @@ PY
     sleep 0.05
 done
 
-websockify --web /usr/share/tuxdisplay/web "0.0.0.0:$td_web_port" "127.0.0.1:$td_vnc_port" >"$td_web_log" 2>&1 &
-td_web_pid=$!
+if [ "$td_browser_enabled" = "1" ]; then
+    # The X11 compatibility desktop is deliberately loopback-only. GNOME
+    # Wayland additionally binds active USB-network addresses one by one.
+    websockify --web /usr/share/tuxdisplay/web "127.0.0.1:$td_web_port" "127.0.0.1:$td_vnc_port" >"$td_web_log" 2>&1 &
+    td_web_pid=$!
+fi
 
 while :; do
-    for td_process in "$td_xvfb_pid:Xvfb" "$td_vnc_pid:x11vnc" "$td_avnc_pid:AVNC-ADB" "$td_openbox_pid:Openbox" "$td_web_pid:websockify"; do
+    for td_process in "$td_xvfb_pid:Xvfb" "${td_vnc_pid:-}:x11vnc" "${td_avnc_pid:-}:AVNC-ADB" "$td_openbox_pid:Openbox" "${td_web_pid:-}:websockify"; do
         td_pid=${td_process%%:*}
         td_name=${td_process#*:}
+        [ -n "$td_pid" ] || continue
         if ! kill -0 "$td_pid" >/dev/null 2>&1; then
             echo "TuxDisplay: $td_name stopped unexpectedly" >&2
             exit 1

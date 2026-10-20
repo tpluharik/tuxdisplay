@@ -7,13 +7,13 @@ No IP address, Internet connection, Wi-Fi, cellular service, Personal Hotspot, a
 The Debian package also includes:
 
 - one GTK application with a manager, three-state tray icon, and verified in-app updates;
-- an offline AVNC compatibility path for Android using Tight/JPEG VNC over an automatic ADB reverse tunnel;
-- an authenticated Safari/browser fallback for private networks;
+- an opt-in offline AVNC compatibility path for one selected Android device using authenticated Tight/JPEG VNC over ADB;
+- an opt-in authenticated Safari/browser fallback bound only to loopback and active USB-network addresses;
 - an isolated X11/noVNC workspace for desktops that cannot create a GNOME virtual monitor;
 - an optional USB Ethernet gadget helper for hardware with a device-capable USB controller.
 
 > [!IMPORTANT]
-> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its unguarded touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, 0.4.4 can unnecessarily reconnect a healthy low-FPS session, 0.4.9 can stall capture while displays are rearranged, 0.4.11 can enter a virtual-monitor restart loop after a capture failure, 0.4.15 can leave stale receiver health, and 0.4.16 does not recover when the host encoder and receiver telemetry stop together. Install 0.4.24 or newer for the current stability, native single-finger touch, cursor, rendering-performance, AVNC compatibility, and safe lid-close handling.
+> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its unguarded touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, 0.4.4 can unnecessarily reconnect a healthy low-FPS session, 0.4.9 can stall capture while displays are rearranged, and 0.4.11 can enter a virtual-monitor restart loop. Install 0.4.25 or newer for the current stability and the hardened opt-in browser, AVNC, updater, and PolicyKit boundaries.
 
 ## Documentation
 
@@ -29,8 +29,8 @@ The Debian package also includes:
 | Host/session | Result | Preferred receiver |
 | --- | --- | --- |
 | GNOME on Wayland | Real extended monitor or primary-screen mirror managed by Mutter | OpenDisplay on iPadOS/Android; AVNC on Android over direct USB |
-| GNOME on Wayland, private LAN | Extended monitor or primary-screen mirror | Safari/Chrome browser fallback |
-| Xorg or another Wayland compositor | Separate isolated X11 workspace; not an extension of the current desktop | Browser/noVNC or AVNC on Android |
+| GNOME on Wayland, USB network | Extended monitor or primary-screen mirror | Opt-in Safari/Chrome browser fallback |
+| Xorg or another Wayland compositor | Separate isolated X11 workspace; not an extension of the current desktop | Loopback browser preview or opt-in AVNC on one selected Android device |
 | Device-capable Linux hardware | Optional USB Ethernet for the browser fallback | Browser/noVNC |
 
 The packaged and tested target is Debian/Ubuntu. Direct OpenDisplay uses usbmuxd for iPadOS and a device-scoped ADB port forward for Android. AVNC uses a device-scoped ADB reverse tunnel to a loopback-only VNC endpoint. Wi-Fi OpenDisplay discovery and streaming are not implemented.
@@ -40,7 +40,7 @@ The packaged and tested target is Debian/Ubuntu. Direct OpenDisplay uses usbmuxd
 - A real `Meta-0` extended monitor on GNOME Wayland.
 - A touch-controlled mirror of the current primary physical monitor, without creating `Meta-0`.
 - Direct OpenDisplay USB through Apple usbmuxd or an Android ADB tunnel.
-- Open-source AVNC on Android through a loopback-only ADB reverse tunnel, including pointer, click, scroll, and keyboard input.
+- Opt-in Open-source AVNC on one selected Android device through a loopback-only ADB reverse tunnel, including VNC password authentication, pointer, click, scroll, and keyboard input.
 - Damage-driven low-latency H.264 with automatic VA-API acceleration, software fallback, adaptive bitrate, and keyframe-safe recovery.
 - A compatible pointer embedded in the video by default, plus an optional low-power OpenDisplay cursor overlay.
 - Remembered tablet placement and in-place video refresh after GNOME display rearrangement.
@@ -48,7 +48,7 @@ The packaged and tested target is Debian/Ubuntu. Direct OpenDisplay uses usbmuxd
 - Pointer, scroll, touch, and keyboard input in the browser fallback.
 - Gray stopped, amber waiting, and green connected tray states.
 - Start, connect, disconnect, and manager actions from the tray.
-- Authenticated browser access using a generated six-digit PIN.
+- Opt-in browser access with a fresh per-session PIN, throttled authentication, Host/Origin validation, and no LAN wildcard listener.
 - Automatic tablet disconnection and virtual-monitor cleanup before lid-triggered sleep, with optional inhibited closed-lid operation.
 
 OpenDisplay protocol v3 models one finger stream but does not identify multiple touch contacts. TuxDisplay maps that finger stream to one guarded native GNOME touch slot, giving touch-capable applications direct touchscreen behavior while keeping Pencil and mouse paths unchanged. The receiver's explicit two-finger scroll message remains a bounded scroll-axis event. True pinch zoom, simultaneous touches, and Pencil pressure or tilt cannot be forwarded because the protocol supplies neither contact IDs nor magnification data.
@@ -61,7 +61,7 @@ Download the current `.deb` and `SHA256SUMS` from [GitHub Releases](https://gith
 
 ~~~sh
 sha256sum --ignore-missing --check SHA256SUMS
-sudo apt install ./tuxdisplay_0.4.24_all.deb
+sudo apt install ./tuxdisplay_0.4.25_all.deb
 ~~~
 
 The checksum file can include packages from several releases. The checksum for the package being installed must report `OK`.
@@ -101,11 +101,11 @@ AVNC is the maintained, easy-to-install open-source alternative. It uses the com
 1. Install [AVNC from F-Droid](https://f-droid.org/packages/com.gaurav.avnc/).
 2. Enable **Developer options → USB debugging** on Android.
 3. Connect a data-capable USB cable, unlock Android, and approve this computer.
-4. Start TuxDisplay and choose **Connect tablet**. TuxDisplay automatically creates the ADB reverse tunnel.
-5. In AVNC, add a connection with host `127.0.0.1` and port `5900`. Leave username and password empty for the GNOME Wayland backend.
+4. Open TuxDisplay, select the authorized tablet under **AVNC compatibility**, then start or restart the display. TuxDisplay creates a reverse tunnel only for that serial number.
+5. Copy the fresh **AVNC session password** shown by TuxDisplay. In AVNC, add host `127.0.0.1`, port `5900`, leave username empty, and enter that password.
 6. Connect and select AVNC's scaling mode that fits the whole desktop. Use its touchpad or touchscreen gesture mode for pointer control.
 
-No Android IP address is involved: AVNC's localhost connection crosses the USB cable through ADB. In the isolated X11 fallback backend, enter the six-digit TuxDisplay PIN as AVNC's VNC password.
+No Android IP address is involved: AVNC's localhost connection crosses the USB cable through ADB. The mapping, password, and single-client slot are removed when the display stops.
 
 AVNC's Tight/JPEG transport supports TuxDisplay widths up to 2048 pixels. Use `2048x1536` or a smaller preset; the `2160x1620` preset remains available for OpenDisplay but TuxDisplay reports AVNC as unavailable at that width instead of sending a non-standard frame.
 
@@ -115,7 +115,7 @@ TuxDisplay is a single application: the manager window and tray controls share o
 
 The manager checks GitHub Releases after it starts and shows **Install update** when a newer stable version is available. You can also choose **Check for updates** from the tray. Downloading an update requires Internet access, but using a configured tablet display does not.
 
-Before requesting system authentication, TuxDisplay requires the exact versioned Debian package and `SHA256SUMS` from the official release, restricts downloads to HTTPS GitHub hosts, verifies the SHA-256 checksum and any GitHub asset digest, and checks the package name, version, and architecture. Installation uses the normal system package manager so dependencies and upgrades remain tracked by Debian/Ubuntu. Restart TuxDisplay from the offered button after installation.
+TuxDisplay trusts an Ed25519-signed, expiring manifest whose public key is embedded in the package. After PolicyKit authentication, a fixed root-owned helper independently downloads that manifest and package, verifies the signature and SHA-256 digest again, stages the package in a root-owned private directory, checks Debian name/version/architecture metadata, and only then invokes APT. No user-owned temporary package path crosses the privilege boundary. Restart TuxDisplay from the offered button after installation.
 
 Change the monitor arrangement in **Settings → Displays** if the virtual output is not on the expected edge. TuxDisplay remembers the complete logical layout using stable physical-monitor identities and reapplies it when Mutter creates a new `Meta-0` identity. Rearranging screens reopens capture on the same PipeWire node without recreating the virtual monitor or disconnecting the tablet.
 
@@ -193,7 +193,7 @@ This compatibility mode deliberately favors simplicity and client availability. 
 
 ### Browser fallback
 
-The manager shows a **Browser fallback URL** and PIN. Open that URL in Safari only when the iPad and computer already share a trusted private network. GNOME Wayland sends an authenticated MJPEG view; the X11 compatibility mode uses authenticated noVNC/websockify.
+Enable **Browser fallback** explicitly, restart the display, then use the URL and fresh PIN shown by the manager. GNOME Wayland listens only on loopback and active USB-network addresses; it does not expose the viewer on Wi-Fi or Ethernet. The isolated X11 compatibility browser is loopback-only.
 
 Browser fullscreen depends on Safari/iPadOS. Use TuxDisplay's in-page fullscreen control, **Add to Home Screen**, or hide Safari's toolbar where supported. Browser fullscreen does not change the selected stream resolution.
 
@@ -218,12 +218,14 @@ FPS=30
 ENCODER=auto
 CURSOR_MODE=embedded
 KEEP_AWAKE_WITH_LID_CLOSED=0
+BROWSER_ENABLED=0
+AVNC_DEVICE=
 DISPLAY_NUMBER=48
 WEB_PORT=6080
 VNC_PORT=5900
 ~~~
 
-`DISPLAY_MODE` accepts `extend` or `mirror`. `FPS` accepts `15`, `30`, or `60`; it is a ceiling for the virtual monitor and stream rather than a promise that GNOME will redraw unchanged content. `30` is the balanced default and `60` is intended for systems whose encoder and tablet can sustain it. `ENCODER=auto` prefers the VA-API H.264 encoder and GPU color conversion when available, then falls back to tuned multi-threaded x264; choose `software` only for compatibility troubleshooting. `CURSOR_MODE=embedded` keeps the pointer visible on every receiver; `overlay` avoids full-frame work during pointer-only movement but requires an OpenDisplay receiver that renders `cursor` and `cursorImg` control messages. TuxDisplay encodes new damage-driven PipeWire frames immediately and emits one liveness frame per second while the desktop is unchanged. VA-API uses variable bitrate, so a static screen no longer consumes a constant full-rate encode and USB stream. Every queue remains bounded to prevent stale-frame buildup, and `tuxdisplay status` reports PipeWire capture, sender, and receiver rates separately. The default `KEEP_AWAKE_WITH_LID_CLOSED=0` disconnects TuxDisplay cleanly before lid-triggered sleep; `1` replaces that behavior with a service-lifetime sleep inhibitor. `DISPLAY_NUMBER` applies only to the X11 compatibility workspace. `VNC_PORT` is used by AVNC on both backends; `WEB_PORT` and the PIN apply to browser access. Restart TuxDisplay after changing a value.
+`DISPLAY_MODE` accepts `extend` or `mirror`. `FPS` accepts `15`, `30`, or `60`; it is a ceiling for the virtual monitor and stream rather than a promise that GNOME will redraw unchanged content. `30` is the balanced default and `60` is intended for systems whose encoder and tablet can sustain it. `ENCODER=auto` prefers VA-API and falls back to tuned x264. `CURSOR_MODE=embedded` is the compatible default. `BROWSER_ENABLED=1` explicitly enables the loopback/USB-only browser listener; it is off by default. `AVNC_DEVICE` must be one authorized ADB serial and is empty by default. The GUI is the recommended way to set both compatibility options. The default `KEEP_AWAKE_WITH_LID_CLOSED=0` disconnects cleanly before lid-triggered sleep. Restart TuxDisplay after changing a value.
 
 For a 4:3 iPad, `1536x1152` is the balanced preset: it still fills the panel but processes 44% fewer pixels than `2048x1536`. Use the manager or `tuxdisplay configure --resolution 1536x1152 --restart`. Keep `2048x1536` when text sharpness matters more than motion and power use.
 
@@ -248,13 +250,13 @@ python3 -m unittest discover -s tests -v
 ./build-deb.sh
 ~~~
 
-The package is written to `dist/tuxdisplay_0.4.24_all.deb`. The build script also regenerates `dist/SHA256SUMS`.
+The package is written to `dist/tuxdisplay_0.4.25_all.deb`. The build script normalizes staged mtimes and regenerates `dist/SHA256SUMS` for only that package.
 
 Development and release conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## Security
 
-Direct OpenDisplay traffic stays on a trusted usbmuxd channel or a loopback-only ADB forward, but protocol v3 does not add encryption or authentication. AVNC is reachable only through a host-loopback ADB reverse mapping and uses Android USB-debugging authorization as its trust boundary. Browser access uses a PIN over ordinary HTTP and must not be exposed to the public Internet. Read the [security model and recommendations](docs/SECURITY.md).
+Direct OpenDisplay traffic stays on a paired usbmuxd channel or a device-scoped ADB forward, but protocol v3 does not add application-layer encryption or authentication. Browser and AVNC compatibility are disabled by default. When enabled, the browser binds only loopback and active USB interfaces; AVNC is limited to one selected ADB serial, one client, and a fresh password. Read the [security model and recommendations](docs/SECURITY.md).
 
 ## Remove
 
@@ -262,7 +264,7 @@ Direct OpenDisplay traffic stays on a trusted usbmuxd channel or a loopback-only
 sudo apt remove tuxdisplay
 ~~~
 
-Per-user configuration remains in `~/.config/tuxdisplay/` so that reinstalling preserves the selected resolution and PIN.
+Per-user configuration remains in `~/.config/tuxdisplay/`. Browser and AVNC credentials are rotated when a new display session starts.
 
 ## License and attribution
 

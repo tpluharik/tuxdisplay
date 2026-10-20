@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import importlib.machinery
 import importlib.util
-import hashlib
 import os
 from pathlib import Path
 import tempfile
@@ -44,6 +43,8 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertEqual(config["RESOLUTION"], "1920x1080")
         self.assertEqual(config["FPS"], "30")
         self.assertEqual(config["KEEP_AWAKE_WITH_LID_CLOSED"], "0")
+        self.assertEqual(config["BROWSER_ENABLED"], "0")
+        self.assertEqual(config["AVNC_DEVICE"], "")
         path = MODULE.config_file()
         self.assertTrue(path.exists())
         self.assertEqual(path.stat().st_mode & 0o777, 0o600)
@@ -56,6 +57,8 @@ class TuxDisplayTests(unittest.TestCase):
             "RESOLUTION": "bad;command",
             "FPS": "144",
             "KEEP_AWAKE_WITH_LID_CLOSED": "yes",
+            "BROWSER_ENABLED": "yes",
+            "AVNC_DEVICE": "bad serial; command",
             "DISPLAY_NUMBER": "9999",
             "WEB_PORT": "80",
             "VNC_PORT": "5900",
@@ -67,6 +70,8 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertEqual(validated["RESOLUTION"], "1920x1080")
         self.assertEqual(validated["FPS"], "30")
         self.assertEqual(validated["KEEP_AWAKE_WITH_LID_CLOSED"], "0")
+        self.assertEqual(validated["BROWSER_ENABLED"], "0")
+        self.assertEqual(validated["AVNC_DEVICE"], "")
         self.assertEqual(validated["DISPLAY_NUMBER"], "48")
         self.assertEqual(validated["WEB_PORT"], "6080")
         self.assertEqual(validated["VNC_PORT"], "5900")
@@ -108,6 +113,18 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertIn("self.start_vnc()", text)
         self.assertIn('"vnc_usb": self.vnc_streams > 0', text)
         self.assertIn("AndroidReverseManager", text)
+
+    def test_compatibility_receivers_are_opt_in_and_not_lan_wildcards(self) -> None:
+        daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"
+        text = daemon.read_text(encoding="utf-8")
+        self.assertIn('"BROWSER_ENABLED": "0"', text)
+        self.assertIn('"AVNC_DEVICE": ""', text)
+        self.assertNotIn('TuxDisplayServer(("0.0.0.0"', text)
+        self.assertIn("browser_bind_addresses()", text)
+        self.assertIn("browser_auth_blocked_until", text)
+        self.assertIn("same_origin", text)
+        session = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-session"
+        self.assertNotIn('"0.0.0.0:$td_web_port"', session.read_text(encoding="utf-8"))
 
     def test_ipad_login_has_touch_keypad_and_does_not_capture_pin_keys(self) -> None:
         viewer = SCRIPT.parents[1] / 'share' / 'tuxdisplay' / 'wayland-viewer.html'
@@ -419,79 +436,23 @@ class TuxDisplayTests(unittest.TestCase):
         desktop = package_root / "usr" / "share" / "applications" / "io.github.tuxdisplay.Manager.desktop"
         self.assertIn("Android;tablet", desktop.read_text(encoding="utf-8"))
 
-    def test_release_update_requires_exact_assets_and_safe_urls(self) -> None:
-        payload = {
-            "tag_name": "v9.9.9",
-            "draft": False,
-            "prerelease": False,
-            "html_url": "https://github.com/tpluharik/tuxdisplay/releases/tag/v9.9.9",
-            "assets": [
-                {
-                    "name": "tuxdisplay_9.9.9_all.deb",
-                    "browser_download_url": (
-                        "https://github.com/tpluharik/tuxdisplay/releases/download/v9.9.9/"
-                        "tuxdisplay_9.9.9_all.deb"
-                    ),
-                    "digest": "sha256:" + "0" * 64,
-                },
-                {
-                    "name": "SHA256SUMS",
-                    "browser_download_url": (
-                        "https://github.com/tpluharik/tuxdisplay/releases/download/v9.9.9/SHA256SUMS"
-                    ),
-                },
-            ],
-        }
-        update = MODULE.release_update_from_payload(payload)
-        self.assertIsNotNone(update)
-        assert update is not None
-        self.assertEqual(update["version"], "9.9.9")
-        payload["assets"][0]["browser_download_url"] = "https://example.invalid/tuxdisplay.deb"
-        with self.assertRaises(RuntimeError):
-            MODULE.release_update_from_payload(payload)
+    def test_update_check_uses_the_independently_signed_manifest(self) -> None:
+        update = {"version": "9.9.9", "package_name": "tuxdisplay_9.9.9_all.deb"}
+        with mock.patch.object(MODULE, "fetch_manifest", return_value=update) as fetch:
+            self.assertEqual(MODULE.check_for_update(), update)
+        fetch.assert_called_once_with(current_version=MODULE.VERSION)
 
-    def test_update_checksum_and_github_digest_are_verified(self) -> None:
-        package_data = b"test Debian package bytes"
-        digest = hashlib.sha256(package_data).hexdigest()
-        update = {
-            "package_name": "tuxdisplay_9.9.9_all.deb",
-            "package_digest": f"sha256:{digest}",
-        }
-        checksums = f"{digest}  tuxdisplay_9.9.9_all.deb\n".encode()
-        self.assertEqual(MODULE.verify_update_assets(update, package_data, checksums), digest)
-        with self.assertRaises(RuntimeError):
-            MODULE.verify_update_assets(update, package_data + b"tampered", checksums)
-
-    def test_update_installer_validates_package_metadata_before_authentication(self) -> None:
-        package_data = b"test Debian package bytes"
-        digest = hashlib.sha256(package_data).hexdigest()
-        update = {
-            "version": "9.9.9",
-            "package_name": "tuxdisplay_9.9.9_all.deb",
-            "package_url": "https://github.com/example/package",
-            "checksum_url": "https://github.com/example/checksums",
-            "package_digest": f"sha256:{digest}",
-        }
-        checksums = f"{digest}  tuxdisplay_9.9.9_all.deb\n".encode()
-        metadata = mock.Mock(returncode=0, stdout="tuxdisplay\n9.9.9\nall\n", stderr="")
-        installed = mock.Mock(returncode=0)
-        with mock.patch.object(MODULE, "download_url", side_effect=[package_data, checksums]), mock.patch.object(
-            MODULE.subprocess, "run", side_effect=[metadata, installed]
-        ) as run:
+    def test_update_installer_crosses_privilege_boundary_only_through_fixed_helper(self) -> None:
+        update = {"version": "9.9.9"}
+        with mock.patch.object(MODULE.subprocess, "run", return_value=mock.Mock(returncode=0)) as run:
             success, _message = MODULE.install_update(update)
         self.assertTrue(success)
-        install_command = run.call_args_list[1].args[0]
-        self.assertEqual(install_command[:4], ["pkexec", "/usr/bin/apt-get", "install", "--yes"])
-        self.assertTrue(install_command[4].endswith("tuxdisplay_9.9.9_all.deb"))
-
-        unexpected = mock.Mock(returncode=0, stdout="not-tuxdisplay\n9.9.9\nall\n", stderr="")
-        with mock.patch.object(MODULE, "download_url", side_effect=[package_data, checksums]), mock.patch.object(
-            MODULE.subprocess, "run", return_value=unexpected
-        ) as run:
-            success, message = MODULE.install_update(update)
-        self.assertFalse(success)
-        self.assertIn("unexpected metadata", message)
-        self.assertEqual(run.call_count, 1)
+        self.assertEqual(run.call_args.args[0], ["pkexec", MODULE.UPDATE_HELPER, "9.9.9"])
+        helper = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "update-helper"
+        helper_text = helper.read_text(encoding="utf-8")
+        self.assertIn("fetch_manifest(expected_version=expected_version)", helper_text)
+        self.assertIn("O_NOFOLLOW", helper_text)
+        self.assertNotIn("sys.argv[2]", helper_text)
 
     def test_launch_rejects_empty_command(self) -> None:
         self.assertEqual(MODULE.launch([]), 2)

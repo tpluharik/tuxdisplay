@@ -2,10 +2,10 @@
 set -eu
 
 td_project_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-td_version=0.4.24
+td_version=0.4.25
 # Keep archive metadata stable across repeated builds. Update this epoch from
 # the newest Debian changelog entry whenever the package version changes.
-SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-1791097200}
+SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-1792512000}
 export SOURCE_DATE_EPOCH
 td_build_dir="$td_project_dir/build"
 td_package_root="$td_build_dir/tuxdisplay_${td_version}_all"
@@ -41,7 +41,8 @@ chmod 0755 \
     "$td_package_root/usr/sbin/tuxdisplay-usb" \
     "$td_package_root/usr/lib/tuxdisplay/tuxdisplay-session" \
     "$td_package_root/usr/lib/tuxdisplay/tuxdisplay-wayland" \
-    "$td_package_root/usr/lib/tuxdisplay/tuxdisplay-welcome"
+    "$td_package_root/usr/lib/tuxdisplay/tuxdisplay-welcome" \
+    "$td_package_root/usr/lib/tuxdisplay/update-helper"
 
 ln -s ../../novnc/vnc.html "$td_package_root/usr/share/tuxdisplay/web/vnc.html"
 ln -s ../../novnc/vnc_lite.html "$td_package_root/usr/share/tuxdisplay/web/vnc_lite.html"
@@ -52,6 +53,10 @@ ln -s ../../novnc/vendor "$td_package_root/usr/share/tuxdisplay/web/vendor"
 (cd "$td_package_root" && find usr etc -type f -print0 | sort -z | xargs -0 md5sum) > "$td_package_root/DEBIAN/md5sums"
 chmod 0644 "$td_package_root/DEBIAN/control" "$td_package_root/DEBIAN/md5sums"
 
+# dpkg archives source mtimes by default. Normalize the complete staged tree so
+# a fresh clone and a long-lived checkout produce byte-identical packages.
+find "$td_package_root" -print0 | xargs -0 touch --no-dereference --date="@$SOURCE_DATE_EPOCH"
+
 dpkg-deb --build --root-owner-group "$td_package_root" "$td_output"
-(cd "$td_output_dir" && sha256sum ./*.deb > SHA256SUMS)
+(cd "$td_output_dir" && sha256sum "$(basename "$td_output")" > SHA256SUMS)
 echo "$td_output"

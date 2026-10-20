@@ -11,7 +11,7 @@
   <project_license>MIT</project_license>
   <description>
     <p>TuxDisplay creates a native GNOME Wayland extended monitor or mirrors the primary screen and streams it to OpenDisplay on iPadOS or Android, or to the open-source AVNC Android client over USB without requiring an IP network.</p>
-    <p>An authenticated browser receiver remains available for private networks and compatibility use.</p>
+    <p>Opt-in browser and AVNC receivers are limited to USB paths and use fresh authenticated sessions.</p>
     <p>Desktop sessions without the required GNOME compositor APIs use an isolated X11 workspace rather than extending or mirroring the current desktop.</p>
     <p>One graphical application provides the manager and tray indicator, including verified in-app updates from GitHub Releases.</p>
   </description>
@@ -21,6 +21,16 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.25" date="2026-10-20">
+      <description>
+        <ul>
+          <li>Make browser and AVNC compatibility explicit opt-in features without changing OpenDisplay performance.</li>
+          <li>Limit browser access to loopback and USB addresses with rotated, throttled authentication.</li>
+          <li>Limit AVNC to one selected Android device and one password-authenticated client.</li>
+          <li>Install only packages authorized by an expiring Ed25519-signed manifest and a fixed root helper.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.24" date="2026-10-04">
       <description>
         <ul>

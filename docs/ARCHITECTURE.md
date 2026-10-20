@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.24. The project has two display backends and five receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor.
+This document describes TuxDisplay 0.4.25. The project has two display backends and five receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor; compatibility receivers are opt-in.
 
 ## GNOME Wayland data flow
 
@@ -80,15 +80,15 @@ A GLib timer independently watches the encoded-frame callback. This covers a who
 
 ### AVNC compatibility transport
 
-The Wayland daemon also binds a minimal RFB 3.8 server to `127.0.0.1:VNC_PORT`. It advertises Tight encoding and reuses the JPEG frame already produced for the browser branch, so it does not add another screen capture. The branch remains closed until an AVNC connection completes. Each framebuffer update is request-paced by the VNC client, preventing an unbounded sender queue.
+When one Android serial is selected, the Wayland daemon binds a minimal RFB 3.8 server to `127.0.0.1:VNC_PORT`. It advertises VNC Authentication plus Tight encoding and reuses the JPEG frame already produced for the browser branch, so it does not add another screen capture. The branch remains closed until the single allowed AVNC client authenticates. Each framebuffer update is request-paced by the VNC client, preventing an unbounded sender queue.
 
 The server requires the viewer to advertise both Tight encoding and a JPEG quality pseudo-encoding. It accepts display widths up to Tight's 2048-pixel rectangle limit; wider TuxDisplay presets remain available to OpenDisplay and the browser path, while AVNC reports an explicit unavailable state.
 
-An `AndroidReverseManager` discovers ADB-authorized devices and applies `adb -s SERIAL reverse tcp:VNC_PORT tcp:VNC_PORT`. AVNC therefore connects to `127.0.0.1:5900` on Android even though the server runs on the laptop. The mapping is device-scoped and removed when TuxDisplay stops. It never binds VNC to a LAN interface.
+An `AndroidReverseManager` waits only for the configured ADB serial and applies `adb -s SERIAL reverse tcp:VNC_PORT tcp:VNC_PORT`. AVNC therefore connects to `127.0.0.1:5900` on that Android device even though the server runs on the laptop. The mapping is removed when TuxDisplay stops and is never created for every authorized device.
 
 The implemented RFB input subset covers absolute pointer motion, three buttons, vertical and horizontal wheel events, and keysyms. Disconnect releases tracked buttons and keys. The default embedded cursor remains part of each JPEG frame, so AVNC does not depend on OpenDisplay cursor extensions.
 
-RFB security type `None` is deliberately limited to the loopback socket behind Android's USB-debugging authorization. This is a compatibility boundary, not application-layer encryption or per-session authentication. OpenDisplay remains the preferred path for H.264 efficiency, richer telemetry, and automatic frozen-receiver recovery.
+The server generates a fresh eight-character VNC password per service session, allows one client, and blocks authentication for five minutes after five failures in one minute. VNC Authentication does not encrypt the stream; confidentiality still depends on the ADB cable. OpenDisplay remains the preferred path for H.264 efficiency, richer telemetry, and automatic frozen-receiver recovery.
 
 ### Input safety
 
@@ -108,9 +108,9 @@ This lets touch-aware Linux applications handle a finger as direct contact, incl
 
 ## Browser receiver
 
-On GNOME Wayland, the embedded HTTP service authenticates a six-digit PIN and serves the custom viewer plus an MJPEG stream. Pointer, touch, scroll, and keyboard events are returned to the remote-desktop session. A service-lifetime server-side token backs the authenticated browser cookie.
+On GNOME Wayland, the opt-in HTTP service binds individual loopback and active USB-network addresses, never `0.0.0.0`. It authenticates a fresh per-session six-digit PIN and serves the custom viewer plus an MJPEG stream. Login attempts are throttled, Host is allowlisted, POST requests are same-origin, and a service-lifetime token backs the authenticated browser cookie.
 
-This path uses ordinary HTTP. It is a convenience fallback for trusted private networks, not an Internet-facing remote desktop.
+This path uses ordinary HTTP. It is a convenience fallback for a directly attached USB network, not a LAN or Internet-facing remote desktop.
 
 ## X11 compatibility backend
 
@@ -121,7 +121,7 @@ Xvfb :48 → Openbox + tint2 → x11vnc ┬→ websockify/noVNC → browser
                                       └→ ADB reverse → AVNC on Android
 ~~~
 
-The isolated desktop is not part of the user's current monitor layout. `tuxdisplay launch` can start applications inside it. The display number is specific to this backend; the VNC port is shared with the Wayland AVNC compatibility path. X11's x11vnc requires the displayed TuxDisplay PIN as its VNC password.
+The isolated desktop is not part of the user's current monitor layout. `tuxdisplay launch` can start applications inside it. Browser and AVNC paths remain opt-in. x11vnc listens only on loopback, accepts one authenticated client, disables IPv6 and remote-control features, and receives fresh password material without placing it in process arguments.
 
 Set `TUXDISPLAY_FORCE_X11=1` in the user service environment to select this backend deliberately.
 
@@ -138,13 +138,13 @@ The manager and Ayatana application indicator are owned by one GTK 3 `Gtk.Applic
 Update checks are outside the display data path and fail silently during automatic offline checks. A stable update follows this flow:
 
 ~~~text
-GitHub latest-release API
-  └─ exact tuxdisplay_VERSION_all.deb + SHA256SUMS assets
-       └─ HTTPS host and size validation
-            └─ SHA-256 + optional GitHub asset-digest validation
-                 └─ dpkg package/name/version/architecture validation
-                      └─ explicit Install action → PolicyKit → apt-get
+unprivileged UI → fetch signed expiring manifest → verify embedded Ed25519 key
+                → PolicyKit fixed helper(version only)
+root helper     → refetch + reverify manifest → root-private O_NOFOLLOW staging
+                → verify digest + Debian metadata → apt install
 ~~~
+
+No user-owned package path crosses the privilege boundary.
 
 The display service does not require Internet access. Only checking for and downloading a release does.
 
@@ -174,7 +174,7 @@ The tray derives three user-facing states:
 | --- | --- |
 | Disconnected | The user service is stopped |
 | Running | The monitor exists and TuxDisplay is waiting for a receiver |
-| Connected | OpenDisplay or an authenticated browser is actively viewing |
+| Connected | OpenDisplay, authenticated AVNC, or an authenticated browser is actively viewing |
 
 ## Files and ownership
 

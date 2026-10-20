@@ -1,0 +1,48 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out tagged source
+        uses: actions/checkout@11bd71901bbe5b1634ceea73d27597364c9af683
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install --yes python3-cryptography
+      - name: Test and build
+        run: |
+          python3 -m unittest discover -s tests -v
+          ./build-deb.sh
+      - name: Match package to signed manifest
+        shell: bash
+        run: |
+          version=${GITHUB_REF_NAME#v}
+          package="dist/tuxdisplay_${version}_all.deb"
+          test -f "$package"
+          expected=$(python3 -c 'import json; print(json.load(open("update/latest.json"))["sha256"])')
+          actual=$(sha256sum "$package" | cut -d' ' -f1)
+          test "$expected" = "$actual"
+          test "$(python3 -c 'import json; print(json.load(open("update/latest.json"))["version"])')" = "$version"
+      - name: Attest package provenance
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        with:
+          subject-path: 'dist/tuxdisplay_*_all.deb'
+      - name: Publish release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+        shell: bash
+        run: |
+          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/tuxdisplay_*_all.deb dist/SHA256SUMS --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/tuxdisplay_*_all.deb dist/SHA256SUMS --verify-tag --title "TuxDisplay ${GITHUB_REF_NAME#v}" --generate-notes
+          fi

@@ -1,0 +1,78 @@
+#!/usr/bin/python3
+"""Root-side TuxDisplay updater with a fixed, independently verified input."""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import urllib.error
+
+from update_security import MAX_PACKAGE_SIZE, UpdateSecurityError, download_url, fetch_manifest, verify_package
+
+
+def fail(message: str) -> int:
+    print(f"TuxDisplay update failed: {message}", file=sys.stderr)
+    return 1
+
+
+def main(arguments: list[str]) -> int:
+    if os.geteuid() != 0:
+        return fail("the update helper must run through PolicyKit")
+    if len(arguments) != 1:
+        return fail("expected exactly one release version")
+    expected_version = arguments[0]
+    try:
+        manifest = fetch_manifest(expected_version=expected_version)
+        if manifest is None:
+            raise UpdateSecurityError("the requested update is not available")
+        package_data = download_url(manifest["package_url"], MAX_PACKAGE_SIZE, timeout=60)
+        verify_package(manifest, package_data)
+        with tempfile.TemporaryDirectory(prefix="tuxdisplay-update-", dir="/var/tmp") as temporary:
+            directory = Path(temporary)
+            directory.chmod(0o700)
+            package_path = directory / manifest["package_name"]
+            descriptor = os.open(
+                package_path,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            try:
+                with os.fdopen(descriptor, "wb", closefd=False) as output:
+                    output.write(package_data)
+                    output.flush()
+                    os.fsync(output.fileno())
+            finally:
+                os.close(descriptor)
+            metadata = subprocess.run(
+                [
+                    "/usr/bin/dpkg-deb",
+                    "--show",
+                    "--showformat=${Package}\\n${Version}\\n${Architecture}\\n",
+                    str(package_path),
+                ],
+                check=False,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=20,
+            )
+            expected_fields = ["tuxdisplay", expected_version, "all"]
+            if metadata.returncode or metadata.stdout.splitlines() != expected_fields:
+                raise UpdateSecurityError("the package has unexpected Debian metadata")
+            installed = subprocess.run(
+                ["/usr/bin/apt-get", "install", "--yes", str(package_path)],
+                check=False,
+                timeout=300,
+            )
+            if installed.returncode:
+                return fail("apt could not install the verified package")
+    except (OSError, KeyError, UpdateSecurityError, subprocess.TimeoutExpired, urllib.error.URLError) as error:
+        return fail(str(error))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

@@ -1,0 +1,10 @@
+{
+  "expires_at": "2027-10-21T18:32:12Z",
+  "notes": "Security hardening: opt-in USB-only browser, authenticated device-scoped AVNC, signed root-side updates, reproducible packaging.",
+  "package_name": "tuxdisplay_0.4.25_all.deb",
+  "package_url": "https://github.com/tpluharik/tuxdisplay/releases/download/v0.4.25/tuxdisplay_0.4.25_all.deb",
+  "release_url": "https://github.com/tpluharik/tuxdisplay/releases/tag/v0.4.25",
+  "sha256": "75e801ef83a5d0165b46a4825bfdec4827d2acdc838a0b4e347afebc9d583587",
+  "signature": "TEVGjy0oPaxmZMRXVBnHTDbGgZl70rdJsuKcVKoAUBA6bwui+Ai/8ESu/Kk8tA46oXwr9EPVT0puwENlo5vDAg==",
+  "version": "0.4.25"
+}

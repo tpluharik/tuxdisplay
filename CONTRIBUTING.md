@@ -23,6 +23,8 @@ The X11/noVNC backend should continue to start on sessions without the required 
 | `packaging/usr/lib/tuxdisplay/display_source.py` | Primary-monitor selection and mirrored touch mapping |
 | `packaging/usr/lib/tuxdisplay/opendisplay_usb.py` | OpenDisplay protocol plus usbmuxd and Android ADB transports |
 | `packaging/usr/lib/tuxdisplay/tightvnc_usb.py` | Loopback Tight/JPEG RFB server and Android ADB reverse lifecycle |
+| `packaging/usr/lib/tuxdisplay/update_security.py` | Ed25519 manifest, URL, expiry, and package-digest verification |
+| `packaging/usr/lib/tuxdisplay/update-helper` | Fixed PolicyKit root helper and root-owned update staging |
 | `packaging/usr/lib/tuxdisplay/video_pipeline.py` | Bounded GStreamer graphs, pacing, and encoder selection |
 | `packaging/usr/lib/tuxdisplay/tuxdisplay-session` | X11 fallback session |
 | `packaging/usr/sbin/tuxdisplay-usb` | Optional privileged gadget helper |
@@ -50,11 +52,11 @@ For a package candidate:
 
 ~~~sh
 ./build-deb.sh
-dpkg-deb --info dist/tuxdisplay_0.4.24_all.deb
-dpkg-deb --contents dist/tuxdisplay_0.4.24_all.deb
+dpkg-deb --info dist/tuxdisplay_0.4.25_all.deb
+dpkg-deb --contents dist/tuxdisplay_0.4.25_all.deb
 ~~~
 
-The build replaces the package for the current version and regenerates `dist/SHA256SUMS`. Keep `SOURCE_DATE_EPOCH` in `build-deb.sh` equal to the Unix timestamp of the newest Debian changelog entry so repeated builds remain byte-for-byte reproducible. Do not commit a rebuilt binary unless the change is intended for a release asset.
+The build replaces the package for the current version, normalizes the complete staging tree, and regenerates `dist/SHA256SUMS`. Keep `SOURCE_DATE_EPOCH` equal to the newest Debian changelog timestamp. Build products are ignored and belong in GitHub Releases, never source control.
 
 ## Manual test checklist
 
@@ -67,9 +69,9 @@ For GNOME Wayland changes:
 5. Test native finger taps and one-finger content scrolling, duplicate and orphaned touch phases, and disconnect during an active contact. Confirm Pencil still behaves as a pointer and explicit two-finger scroll remains an axis event.
 6. Change between a 16:9 and 4:3 preset and verify recovery.
 7. Stop TuxDisplay and confirm the virtual output is removed without affecting GNOME.
-8. Test browser PIN entry, MJPEG video, input, and session invalidation.
+8. Confirm the browser is off by default. Enable it, verify only loopback/USB listeners, test PIN throttling, MJPEG/input, then confirm restart rotates the PIN and cookie.
 9. Confirm app-grid activation reuses the background tray process and shows the TuxDisplay icon.
-10. Exercise update checking with current, newer, malformed, and checksum-mismatched release fixtures; never install an unverified package.
+10. Exercise update checking with valid, expired, malformed, wrong-key, and digest-mismatched manifests; verify the root helper independently re-downloads and rejects every mismatch.
 11. On Android, test unauthorized and authorized ADB states, receiver launch after service start, cable reconnect, and cleanup with `adb forward --list`.
 12. In Mirror mode, verify the current primary physical monitor is captured, no `Meta-0` is created, and tap/drag/scroll land correctly with both matching and mismatched aspect ratios.
 13. At 15, 30, and 60 FPS, compare measured capture rate, `source_fps`, `sent_fps`, and receiver FPS after at least ten seconds of sustained motion. Confirm 0.4.17+ falls toward the one-frame-per-second liveness cadence and low bitrate on static content, and confirm `drops` and `recoveries` remain zero in the supported baseline.
@@ -77,7 +79,7 @@ For GNOME Wayland changes:
 15. Stop the encoded-frame callback and receiver statistics together. Confirm 0.4.17+ requests one service recycle near eight seconds, records a 24-hour software fallback after a hardware stall, and suppresses a third automatic recycle within ten minutes.
 16. Exercise both automatic and software encoding. If VA-API is available, confirm Automatic selects it; if initialization fails, confirm the service falls back once to x264 without a restart loop.
 17. Move the pointer across the tablet without changing desktop content. Confirm `Cursor transport` reports `xwayland-poll`, its update count rises smoothly, and capture/source rates remain near the quiet-screen cadence.
-18. Install AVNC from F-Droid, connect it to Android `127.0.0.1:5900`, and confirm Tight/JPEG video plus pointer, buttons, wheel, and keyboard. Verify `adb reverse --list` while running and confirm the mapping disappears after stop.
+18. Confirm AVNC is off by default. Select exactly one authorized device, use the fresh session password at Android `127.0.0.1:5900`, reject a second client, test throttling, and confirm no mapping is created for another authorized tablet.
 19. With **Keep awake with lid closed** disabled, close the lid on a safe test machine and confirm the receiver disconnects, the user service stops, and `Meta-0` is removed before sleep. Reopen the lid and confirm TuxDisplay remains stopped. Enable the option and confirm the service instead remains active while lid sleep is inhibited.
 
 For fallback changes:
@@ -86,7 +88,7 @@ For fallback changes:
 2. Confirm noVNC loads after PIN authentication.
 3. Launch an application with `tuxdisplay launch`.
 4. Stop the service and confirm Xvfb, x11vnc, websockify, Openbox, and tint2 exit.
-5. Connect AVNC through the ADB reverse mapping with the browser PIN as its VNC password, then confirm the helper and mapping exit with the service.
+5. Select one AVNC device, connect with the fresh password, then confirm the helper and mapping exit with the service.
 
 Run `tuxdisplay doctor` in both modes.
 
@@ -123,9 +125,11 @@ Update documentation in the same change when behavior, commands, dependencies, c
 6. Build the `.deb` and inspect its contents and control scripts.
 7. Verify a clean install and upgrade from the previous release.
 8. Regenerate and verify `dist/SHA256SUMS` from inside `dist/`.
-9. Tag the exact commit used to build the release.
-10. Upload the package and checksum file to the matching GitHub release.
-11. Download the published assets again, verify the checksum, and confirm the updater can parse the release.
-12. Re-check the published warning, compatibility notes, asset list, and remote tag commit.
+9. Use `scripts/sign-update-manifest.py` with the offline Ed25519 private key and commit only `update/latest.json`; never copy the private key into the repository or package.
+10. Verify a second clean build matches the manifest digest byte-for-byte.
+11. Tag the exact commit used to build the release. The tag workflow verifies the manifest and requests artifact provenance.
+12. Upload the package and checksum file to the matching GitHub release.
+13. Download the published assets again, verify the checksum and signed manifest, and confirm the updater can parse the release.
+14. Re-check the published warning, compatibility notes, asset list, workflow result, and remote tag commit.
 
 Do not rewrite historical changelog entries or move an existing tag.

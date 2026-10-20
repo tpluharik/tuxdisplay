@@ -48,7 +48,7 @@ TuxDisplay is an independent Linux sender for that public protocol. The separate
 
 [MultiVNC](https://github.com/bk138/multivnc) is another open-source Android VNC viewer and remains a useful compatibility option. AVNC was selected as TuxDisplay's documented default because its current F-Droid package, focused Android interface, gesture controls, and explicit Tight support fit the embedded Tight/JPEG server directly. TuxDisplay implements standard RFB rather than an AVNC-private protocol, so other Tight-capable viewers may work, but only AVNC is documented and covered by protocol tests.
 
-The AVNC path is not expected to outperform OpenDisplay: it reuses the CPU JPEG compatibility branch rather than the VA-API H.264 stream, lacks receiver-specific health telemetry, and uses USB-debugging authorization plus an unauthenticated loopback RFB endpoint. Tight/JPEG also limits an individual encoded rectangle to 2048 pixels wide, so TuxDisplay rejects its 2160-wide preset on this receiver path instead of sending a non-standard frame. Its value is availability, conventional protocol support, and easy open-source installation—not maximum frame rate.
+The AVNC path is not expected to outperform OpenDisplay: it reuses the CPU JPEG compatibility branch rather than the VA-API H.264 stream and lacks receiver-specific health telemetry. TuxDisplay 0.4.25 makes it opt-in for one selected ADB serial and adds a fresh VNC-authenticated, rate-limited, single-client session on loopback. Tight/JPEG also limits an individual encoded rectangle to 2048 pixels wide. Its value is availability, conventional protocol support, and easy open-source installation—not maximum frame rate.
 
 ### Weylus
 
@@ -118,8 +118,8 @@ TuxDisplay reports the selected encoder, measured PipeWire source rate, post-que
 | Fixed configured mode | Borders and disruptive restarts on resolution changes | Use receiver hello dimensions and support safe dynamic reconfiguration |
 | Single-contact touch input | No pinch, simultaneous touch contacts, or Pencil pressure/tilt | Extend the receiver protocol with stable contact identity and magnification data |
 | USB-only OpenDisplay sender | Cable required even on a trusted LAN | Add optional authenticated Wi-Fi OpenDisplay discovery/transport |
-| HTTP browser fallback | Unsafe on untrusted networks | Bind to selected interfaces; add TLS or a secure local tunnel option |
-| AVNC compatibility authentication | Loopback RFB relies on Android USB-debugging trust and is reachable by local processes | Keep it loopback-only; add VeNCrypt or VNC authentication without exposing a LAN listener |
+| HTTP browser fallback | Plain HTTP remains unsuitable for routed/untrusted networks | Keep it opt-in and USB-interface-only; add TLS only with a usable device-pairing model |
+| AVNC compatibility encryption | VNC authentication protects access but not stream confidentiality | Keep the ADB cable boundary and evaluate VeNCrypt without exposing a LAN listener |
 | GNOME-only native extension | KDE/Hyprland users get fallback rather than native output | Add compositor backends or coordinate with the OpenDisplay Linux sender |
 | Debian-centric packaging | Installation friction on other distributions | Add reproducible Flatpak/RPM/Arch packaging where compositor permissions allow |
 
@@ -136,7 +136,7 @@ This statement is specific and supportable. TuxDisplay should not claim universa
 3. Add a secure optional Wi-Fi OpenDisplay transport.
 4. Provide native KDE Plasma and Hyprland backends, potentially sharing findings with the existing OpenDisplay Linux sender.
 5. Design crash-safe multi-touch and Pencil pressure/tilt around explicit contact identities.
-6. Add per-device authorization, authenticated AVNC transport, interface binding, and encrypted browser access.
+6. Evaluate encrypted browser and VeNCrypt transport without weakening the simple offline USB workflow; per-device AVNC authentication and browser interface binding shipped in 0.4.25.
 7. Publish signed, reproducible packages and a supported GNOME/distribution matrix.
 8. Benchmark the measured 0.4.15 frame-pacing baseline against open-source alternatives on several GPUs, tablet generations, and cables.
 

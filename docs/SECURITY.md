@@ -1,114 +1,82 @@
 # Security
 
-TuxDisplay controls a display capture and accepts remote input. Treat it like a local remote-desktop service even when the receiver is physically beside the computer.
+TuxDisplay captures a desktop and can inject input. Treat every receiver path as remote-desktop access even when the tablet is beside the computer.
+
+## Secure defaults in 0.4.25
+
+- Direct OpenDisplay remains the default and the H.264 capture/rendering path is unchanged.
+- Browser fallback is disabled until explicitly enabled.
+- AVNC compatibility is disabled until one authorized Android serial is explicitly selected.
+- No browser or VNC service listens on a LAN wildcard address.
+- Browser and AVNC credentials are generated for each display-service session.
+- In-app updates require an independent Ed25519 signature and are installed by a fixed root-owned helper.
+
+Existing configurations are migrated safely: missing `BROWSER_ENABLED` and `AVNC_DEVICE` values resolve to disabled.
 
 ## Trust boundaries
 
 ### Direct OpenDisplay USB
 
-The preferred connection travels through either usbmuxd to a paired iPad or a loopback-only ADB port forward to an Android device that has authorized the computer for USB debugging. This avoids LAN exposure and works offline, but OpenDisplay protocol version 3 does not add encryption, authentication, or per-session pairing of its own.
+The preferred path reaches a paired iPad through usbmuxd or one authorized Android device through an ADB port forward. Host sockets stay on loopback and mappings are removed when the connection closes. OpenDisplay protocol version 3 has no additional application-layer encryption or pairing, so the iPad trust record or Android USB-debugging authorization is the trust boundary.
 
-Use direct USB only with:
-
-- a computer and tablet you control;
-- a cable and USB path you trust;
-- an iPad pairing relationship or Android USB-debugging authorization you recognize.
-
-Lock or disconnect the tablet, revoke its trust/USB-debugging authorization, or stop TuxDisplay when the display is unattended. By default, TuxDisplay also disconnects the receiver and removes its virtual monitor before lid-triggered sleep; the explicit **Keep awake with lid closed** setting overrides that safeguard. Android's general USB-debugging authorization grants more than display access to the computer's ADB client, so enable it only for computers you trust and revoke it in Developer options when it is no longer needed.
-
-TuxDisplay passes the selected Android serial as a direct process argument, allocates a host port through ADB, binds the forwarding side to loopback, and removes that forward on disconnect. It does not invoke an Android shell command or install the receiver APK.
+Use only devices, cables, and USB paths you control. Revoke an iPad pairing or Android USB-debugging authorization when it is no longer needed. Android USB debugging permits more than display access, so do not approve an untrusted computer.
 
 ### AVNC over Android USB
 
-The AVNC compatibility path reverses Android `127.0.0.1:VNC_PORT` to a VNC server bound only to the laptop's `127.0.0.1:VNC_PORT`. It never exposes VNC on a LAN address. The mapping is scoped to the serial number returned by ADB and is removed when TuxDisplay stops.
+AVNC is an optional compatibility receiver. The user must select one currently authorized Android serial in the TuxDisplay manager. TuxDisplay then:
 
-The embedded GNOME Wayland VNC server negotiates RFB security type `None`; Android's USB-debugging authorization and physical cable are its trust boundary. This has two important consequences:
+1. binds Tight/JPEG VNC only to host `127.0.0.1`;
+2. creates `adb -s SERIAL reverse` only for the selected serial;
+3. advertises RFB VNC Authentication, never Security Type None;
+4. generates a fresh eight-character password for the service session;
+5. permits one VNC client at a time;
+6. blocks authentication for five minutes after five failures in one minute; and
+7. removes the ADB reverse mapping and password when the display stops.
 
-- connect AVNC only through the automatically created localhost mapping;
-- never proxy or forward the configured VNC port to another host;
-- remember that another process running locally on the laptop can reach the loopback VNC socket while TuxDisplay is active;
-- revoke Android USB-debugging authorization after using an untrusted computer.
+The manager and `tuxdisplay status` show the current AVNC password through per-user files with mode `0600`. VNC Authentication is challenge-response protection, not transport encryption. The ADB cable and authorization still protect confidentiality.
 
-The X11 compatibility backend continues to use x11vnc password authentication with the displayed TuxDisplay PIN. Neither VNC mode provides application-layer end-to-end encryption over the ADB cable.
+The X11 compatibility backend uses x11vnc with a fresh password file. Password material is supplied through the prompt input stream and is not placed in the process argument list. x11vnc is loopback-only, IPv6-disabled, single-client, and started with its safer remote-control restrictions.
 
-### Browser fallback
+### Browser receiver
 
-The browser service listens on local interfaces so it can be reached from a LAN or USB network. It uses a generated six-digit PIN and an HTTP-only, same-site session cookie. Video, credentials, and input still travel over ordinary HTTP.
+Browser fallback is opt-in. On GNOME Wayland, the HTTP server binds separately to `127.0.0.1` and active USB-network IPv4 addresses (`usb*`, ipheth, or the configured USB gadget). It never binds `0.0.0.0`, Wi-Fi, Ethernet, or a Bonjour/LAN wildcard.
 
-Consequences:
+Each service start rotates the six-digit PIN and cookie token. Authentication is limited to five failures per source per minute, followed by a five-minute block. Requests must use an expected Host value, and state-changing POST requests must have an exact same-origin `Origin` header. Authenticated cookies are `HttpOnly` and `SameSite=Strict`.
 
-- use only a trusted private LAN or private cable network;
-- do not port-forward or expose TCP 6080 to the Internet;
-- do not use an untrusted public Wi-Fi network;
-- reset the PIN if it was observed or shared;
-- stop TuxDisplay when browser access is no longer needed.
+The browser path uses HTTP because it is designed for a direct USB network with no public certificate infrastructure. Do not route that USB interface, proxy the service, or expose it to a LAN or the Internet. The isolated X11 browser listener is loopback-only.
 
-The PIN reduces accidental access; six digits are not a substitute for encrypted transport or a strong account credential.
+### Local user boundary
 
-### Display source
+Runtime state and credentials are stored under the user's configuration/state directories with directory mode `0700` and file mode `0600`. The AVNC VNC socket remains loopback-only but also requires its session password. Another process running as the same Unix user can generally read that user's desktop and credentials; TuxDisplay does not try to isolate mutually untrusted processes within one Unix account.
 
-Extend mode captures only the compositor-owned `Meta-0` output. Mirror mode captures the complete current primary monitor, which can expose notifications, documents, messages, and other visible content already present on that screen. Switching modes requires an explicit manager selection and service restart, and the active mode is included in status output.
+## Update trust and privilege boundary
 
-Before using Mirror mode, close or move sensitive windows, disable notification previews when appropriate, and keep the attached tablet under your control. TuxDisplay does not attempt to identify or redact sensitive pixels.
+The updater does not trust a checksum fetched from the same unsigned release page as the package. It downloads `update/latest.json`, verifies its Ed25519 signature against a public key embedded in TuxDisplay, checks expiry, exact package name, exact GitHub release URL, semantic version, and SHA-256 digest.
 
-### Privileged USB gadget helper
+After PolicyKit authentication, `/usr/lib/tuxdisplay/update-helper` independently repeats manifest verification and downloads the package itself. It stages the file with `O_EXCL` and `O_NOFOLLOW` in a root-owned mode-`0700` directory, verifies the signed digest, validates Debian package name/version/architecture, then invokes APT. A user-owned temporary path is never passed to a privileged package manager.
 
-The optional `tuxdisplay-usb` helper changes ConfigFS USB gadget state, creates a network interface, assigns `10.55.0.1/24`, and runs a private dnsmasq process. It requires root through a narrowly scoped PolicyKit action or system service.
+The private Ed25519 release key is not stored in the repository or Debian package. Compromise of that key requires a new package release with a rotated embedded public key. The manifest expires so a captured document cannot authorize updates indefinitely.
 
-Only enable the system service on hardware with an intended device/dual-role USB port. Direct OpenDisplay USB does not require this helper or root access.
+## System privilege
 
-## Local files
+The optional USB gadget helper and signed update helper are the only PolicyKit entry points. Both require a fresh administrator authentication (`auth_admin`); authorization is not retained with `auth_admin_keep`. The USB helper accepts only fixed `setup`, `teardown`, and `status` operations and uses the dedicated `10.55.0.1/24` link.
 
-Per-user configuration and authentication files are created with mode `0600`:
+## Build and release integrity
 
-- `~/.config/tuxdisplay/config`
-- `~/.config/tuxdisplay/password`
-- `~/.config/tuxdisplay/*.rfb` when the VNC fallback is used
+The build fixes `SOURCE_DATE_EPOCH`, normalizes every staged file and directory mtime, uses deterministic gzip, and writes `SHA256SUMS` for only the current package. Historical `.deb` files are release assets, not source-controlled build inputs. CI runs the test suite and builds twice to detect non-reproducible output. The tag workflow verifies the signed manifest/package digest before publishing and requests GitHub artifact provenance.
 
-Runtime state lives below `~/.local/state/tuxdisplay/`. Logs and `tuxdisplay status` can contain local addresses, receiver/device labels, frame-rate and recovery telemetry, application errors, and filenames. Review and redact them before sharing. Performance counters do not contain screen pixels, but a receiver label can still identify a personal device.
+Release signatures improve the update path but do not prove runtime behavior on every graphics stack. A release is not considered end-user validated until it has also been installed and exercised on the target GNOME/Wayland/receiver combination.
 
-The Debian package installs system files as root-owned, while the display service runs as the logged-in desktop user.
+## Input and compositor safety
 
-## Input implications
+OpenDisplay version 3 exposes one finger stream without stable multi-touch contact identifiers. TuxDisplay maps it to one guarded Mutter touch slot, suppresses duplicate/orphaned phases, and releases the slot on disconnect. Pencil remains an independent pointer stream. This prevents the invalid touch state that could abort Mutter in version 0.4.0.
 
-An attached receiver can move the pointer, click, scroll, and—in the AVNC or browser path—send keyboard input. In Mirror mode those events target the primary physical monitor; in Extend mode they target `Meta-0`. This can interact with applications under the desktop user's authority. GNOME's own permission and session boundaries still apply, but TuxDisplay should not be left connected to an untrusted receiver.
+AVNC emits standard VNC pointer, wheel, and keyboard events and does not enter Mutter's native touch path.
 
-OpenDisplay finger input is reduced to one guarded native touch contact, while Pencil stays on an independent guarded pointer path. Duplicate, orphaned, and disconnect phases are balanced before reaching Mutter. This protects compositor stability; it is not an authorization mechanism.
+## Lid close and shutdown
 
-## Release integrity
+By default, logind sleep and lid-close signals trigger a bounded clean shutdown: USB transports close, ADB mappings are removed, capture stops, and the virtual monitor is removed. **Keep awake with lid closed** is an explicit override and its inhibitor exists only while the service process is alive.
 
-Release assets include `SHA256SUMS`. Download the package and checksum file from the same tagged GitHub release and verify the package before installation:
+## Reporting a vulnerability
 
-~~~sh
-sha256sum --ignore-missing --check SHA256SUMS
-~~~
-
-SHA-256 detects a damaged or substituted file relative to the published checksum. Releases are not currently documented as reproducible or cryptographically signed, so verify the GitHub repository and release source as well.
-
-The in-app updater applies the same policy before it requests system authentication. It accepts only a newer stable semantic version from the repository's latest-release API, requires the exact versioned `.deb` and `SHA256SUMS` assets, restricts metadata and downloads to HTTPS GitHub hosts, enforces response-size limits, verifies the published SHA-256 and any asset digest returned by GitHub, and checks the package name, version, and `all` architecture with `dpkg-deb`. The user must explicitly choose installation and approve the PolicyKit prompt; installation is delegated to `apt-get`.
-
-These checks protect against accidental corruption, unsafe redirects, and asset mix-ups. They do not protect against compromise of the GitHub repository or release account because the package and checksum share that trust root. The updater does not send the display stream, configuration, PIN, or tablet identifier to GitHub.
-
-## Hardening recommendations
-
-- Prefer direct USB over the browser fallback.
-- Keep TuxDisplay, the selected OpenDisplay or AVNC receiver, the tablet OS, GNOME, GStreamer, usbmuxd/libimobiledevice, and ADB updated.
-- Install AVNC through F-Droid or verify it against its official source; do not install repackaged APKs from unrelated download sites.
-- Bind or firewall the browser port to trusted interfaces when using a persistent setup.
-- Use `tuxdisplay password --reset` after temporary browser sharing.
-- Do not run the display service as root.
-- Leave `tuxdisplay-usb-gadget.service` disabled unless gadget networking is explicitly required.
-- Review `journalctl --user -u tuxdisplay.service` after unexplained connections.
-- Redact receiver names, device identifiers, hostnames, local addresses, and the browser PIN from public issue reports.
-- Inspect the version and release notes shown by the updater before approving installation.
-
-## Known limitations
-
-- OpenDisplay v3 provides no application-layer encryption or authentication.
-- Wayland AVNC uses unauthenticated RFB only on the loopback endpoint behind ADB authorization.
-- Browser access is HTTP rather than HTTPS.
-- The six-digit browser PIN has a small brute-force space.
-- There is no persistent per-device allowlist above iPadOS pairing or Android ADB authorization.
-- The project does not yet publish signed or reproducible release attestations.
-
-Report security-sensitive issues privately to the repository owner rather than opening a public issue containing exploit details or secrets. The project does not currently publish a dedicated security-response SLA.
+Do not include passwords, pairing records, device identifiers, private update keys, or personal desktop captures in a public issue. Report the affected version, backend, receiver, reproduction steps, and sanitized logs. Use a private GitHub security advisory when the issue enables unauthorized viewing, input, privilege escalation, or update compromise.

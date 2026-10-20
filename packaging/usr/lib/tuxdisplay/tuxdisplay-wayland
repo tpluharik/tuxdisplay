@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import hmac
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -63,7 +64,7 @@ def unpack(value: Any) -> Any:
     return value
 
 
-def read_config() -> tuple[str, str, str, int, int, int, int, int]:
+def read_config() -> tuple[str, str, str, int, int, int, int, int, bool, str]:
     config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     values = {
         "DISPLAY_MODE": "extend",
@@ -73,6 +74,8 @@ def read_config() -> tuple[str, str, str, int, int, int, int, int]:
         "WEB_PORT": "6080",
         "VNC_PORT": "5900",
         "FPS": "30",
+        "BROWSER_ENABLED": "0",
+        "AVNC_DEVICE": "",
     }
     path = config_home / "tuxdisplay" / "config"
     if path.exists():
@@ -88,7 +91,7 @@ def read_config() -> tuple[str, str, str, int, int, int, int, int]:
         vnc_port = int(values["VNC_PORT"])
         frames_per_second = int(values["FPS"])
     except (ValueError, TypeError):
-        return "extend", "auto", "embedded", 1920, 1080, 6080, 5900, 30
+        return "extend", "auto", "embedded", 1920, 1080, 6080, 5900, 30, False, ""
     display_mode = values["DISPLAY_MODE"] if values["DISPLAY_MODE"] in {"extend", "mirror"} else "extend"
     encoder = values["ENCODER"] if values["ENCODER"] in {"auto", "software"} else "auto"
     cursor_mode = values["CURSOR_MODE"] if values["CURSOR_MODE"] in {"embedded", "overlay"} else "embedded"
@@ -100,10 +103,14 @@ def read_config() -> tuple[str, str, str, int, int, int, int, int]:
         vnc_port = 5900 if port != 5900 else 5901
     if frames_per_second not in (15, 30, 60):
         frames_per_second = 30
-    return display_mode, encoder, cursor_mode, width, height, port, vnc_port, frames_per_second
+    browser_enabled = values["BROWSER_ENABLED"] == "1"
+    avnc_device = values["AVNC_DEVICE"]
+    if not avnc_device or not all(character.isalnum() or character in "._:-" for character in avnc_device):
+        avnc_device = ""
+    return display_mode, encoder, cursor_mode, width, height, port, vnc_port, frames_per_second, browser_enabled, avnc_device
 
 
-def ensure_pin() -> str:
+def ensure_pin(*, new_session: bool = False) -> str:
     config_home = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
     directory = config_home / "tuxdisplay"
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -112,13 +119,52 @@ def ensure_pin() -> str:
         pin = path.read_text(encoding="utf-8").strip()
     except OSError:
         pin = ""
-    if len(pin) != 6 or not pin.isdigit():
+    if new_session or len(pin) != 6 or not pin.isdigit():
         pin = f"{secrets.randbelow(1_000_000):06d}"
         temporary = path.with_suffix(".tmp")
         temporary.write_text(pin + "\n", encoding="utf-8")
         temporary.chmod(0o600)
         temporary.replace(path)
     return pin
+
+
+def browser_bind_addresses() -> list[str]:
+    """Return loopback plus active USB-only IPv4 addresses, never LAN/Wi-Fi."""
+    addresses = ["127.0.0.1"]
+    try:
+        result = subprocess.run(
+            ["ip", "-j", "address", "show", "up"],
+            check=False,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        )
+        interfaces = json.loads(result.stdout) if result.returncode == 0 else []
+    except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        interfaces = []
+    for interface in interfaces if isinstance(interfaces, list) else []:
+        if not isinstance(interface, dict):
+            continue
+        name = str(interface.get("ifname", ""))
+        driver = ""
+        try:
+            driver = (Path("/sys/class/net") / name / "device" / "driver").resolve(strict=True).name
+        except OSError:
+            pass
+        if not (name.startswith("usb") or driver == "ipheth"):
+            continue
+        for address in interface.get("addr_info", []):
+            if not isinstance(address, dict) or address.get("family") != "inet":
+                continue
+            local = str(address.get("local", ""))
+            try:
+                parsed = ipaddress.ip_address(local)
+            except ValueError:
+                continue
+            if parsed.version == 4 and not parsed.is_loopback and local not in addresses:
+                addresses.append(local)
+    return addresses
 
 
 class TuxDisplayServer(ThreadingHTTPServer):
@@ -160,6 +206,19 @@ class RequestHandler(BaseHTTPRequestHandler):
         item = cookie.get("tuxdisplay")
         return bool(item and hmac.compare_digest(item.value, self.server.app.token))
 
+    def valid_host(self) -> bool:
+        host = self.headers.get("Host", "").strip().lower()
+        if not host or any(character in host for character in "/\\@"):
+            return False
+        expected = str(self.server.server_address[0]).lower()
+        port = self.server.server_address[1]
+        return host in {expected, f"{expected}:{port}", "localhost", f"localhost:{port}"}
+
+    def same_origin(self) -> bool:
+        origin = self.headers.get("Origin", "").strip().lower()
+        host = self.headers.get("Host", "").strip().lower()
+        return bool(origin and host and origin == f"http://{host}")
+
     def json_body(self) -> dict[str, Any] | None:
         try:
             length = int(self.headers.get("Content-Length", "0"))
@@ -174,6 +233,9 @@ class RequestHandler(BaseHTTPRequestHandler):
         return value if isinstance(value, dict) else None
 
     def do_GET(self) -> None:  # noqa: N802
+        if not self.valid_host():
+            self.send_bytes(HTTPStatus.BAD_REQUEST, "text/plain; charset=utf-8", b"Invalid Host\n")
+            return
         path = self.path.split("?", 1)[0]
         if path in ("/", "/index.html"):
             self.send_bytes(
@@ -214,16 +276,30 @@ class RequestHandler(BaseHTTPRequestHandler):
         self.send_bytes(HTTPStatus.NOT_FOUND, "text/plain; charset=utf-8", b"Not found\n")
 
     def do_POST(self) -> None:  # noqa: N802
+        if not self.valid_host() or not self.same_origin():
+            self.send_bytes(HTTPStatus.FORBIDDEN, "application/json", b'{"error":"Invalid origin"}')
+            return
         path = self.path.split("?", 1)[0]
         body = self.json_body()
         if body is None:
             self.send_bytes(HTTPStatus.BAD_REQUEST, "application/json", b'{"error":"Invalid request"}')
             return
         if path == "/auth":
+            allowed, retry_after = self.server.app.browser_auth_allowed(self.client_address[0])
+            if not allowed:
+                self.send_bytes(
+                    HTTPStatus.TOO_MANY_REQUESTS,
+                    "application/json",
+                    b'{"error":"Too many attempts"}',
+                    {"Retry-After": str(retry_after)},
+                )
+                return
             candidate = str(body.get("pin", ""))
             if not hmac.compare_digest(candidate, self.server.app.pin):
+                self.server.app.browser_auth_failed(self.client_address[0])
                 self.send_bytes(HTTPStatus.FORBIDDEN, "application/json", b'{"error":"Incorrect PIN"}')
                 return
+            self.server.app.browser_auth_succeeded(self.client_address[0])
             self.send_bytes(
                 HTTPStatus.OK,
                 "application/json",
@@ -289,12 +365,15 @@ class WaylandDisplay:
             self.port,
             self.vnc_port,
             self.frames_per_second,
+            self.browser_enabled,
+            self.avnc_device,
         ) = read_config()
         self.input_width = self.width
         self.input_height = self.height
         self.source_connector = ""
-        self.pin = ensure_pin()
+        self.pin = ensure_pin(new_session=self.browser_enabled)
         self.token = secrets.token_urlsafe(32)
+        self.vnc_password = "".join(secrets.choice("ABCDEFGHJKLMNPQRSTUVWXYZ23456789") for _ in range(8)) if self.avnc_device else ""
         self.instance_id = secrets.token_hex(8)
         self.frame = b""
         self.frame_generation = 0
@@ -306,6 +385,9 @@ class WaylandDisplay:
         self.client_lock = threading.Lock()
         self.state_write_lock = threading.Lock()
         self.browser_input_lock = threading.Lock()
+        self.browser_auth_lock = threading.Lock()
+        self.browser_auth_failures: dict[str, deque[float]] = {}
+        self.browser_auth_blocked_until: dict[str, float] = {}
         self.browser_buttons: set[int] = set()
         self.browser_touches: set[int] = set()
         self.browser_keys: set[int] = set()
@@ -354,6 +436,8 @@ class WaylandDisplay:
         self.vnc_server: TightVNCServer | None = None
         self.vnc_reverse: AndroidReverseManager | None = None
         self.vnc_reverse_status = "Waiting for an authorized Android device for AVNC"
+        self.http_servers: list[TuxDisplayServer] = []
+        self.http_threads: list[threading.Thread] = []
         self.fatal_error: str | None = None
         self.remote_session = ""
         self.stream_path = ""
@@ -1264,11 +1348,53 @@ class WaylandDisplay:
                 priority=GLib.PRIORITY_HIGH_IDLE,
             )
 
+    def browser_auth_allowed(self, address: str) -> tuple[bool, int]:
+        now = time.monotonic()
+        with self.browser_auth_lock:
+            blocked_until = self.browser_auth_blocked_until.get(address, 0.0)
+            if blocked_until > now:
+                return False, max(1, int(blocked_until - now))
+            failures = self.browser_auth_failures.setdefault(address, deque())
+            while failures and failures[0] < now - 60.0:
+                failures.popleft()
+            return True, 0
+
+    def browser_auth_failed(self, address: str) -> None:
+        now = time.monotonic()
+        with self.browser_auth_lock:
+            failures = self.browser_auth_failures.setdefault(address, deque())
+            while failures and failures[0] < now - 60.0:
+                failures.popleft()
+            failures.append(now)
+            if len(failures) >= 5:
+                self.browser_auth_blocked_until[address] = now + 300.0
+                failures.clear()
+
+    def browser_auth_succeeded(self, address: str) -> None:
+        with self.browser_auth_lock:
+            self.browser_auth_failures.pop(address, None)
+            self.browser_auth_blocked_until.pop(address, None)
+
     def start_http(self) -> None:
+        if not self.browser_enabled:
+            return
+        for address in browser_bind_addresses():
+            try:
+                server = TuxDisplayServer((address, self.port), self)
+            except OSError as error:
+                print(f"TuxDisplay browser fallback could not bind {address}:{self.port}: {error}", file=sys.stderr)
+                continue
+            thread = threading.Thread(
+                target=server.serve_forever,
+                name=f"tuxdisplay-http-{address}",
+                daemon=True,
+            )
+            self.http_servers.append(server)
+            self.http_threads.append(thread)
+            thread.start()
+        if not self.http_servers:
+            raise RuntimeError("browser fallback was enabled but no loopback or USB listener could start")
         self.write_client_state()
-        self.http = TuxDisplayServer(("0.0.0.0", self.port), self)
-        self.http_thread = threading.Thread(target=self.http.serve_forever, name="tuxdisplay-http", daemon=True)
-        self.http_thread.start()
 
     def frame_snapshot(self) -> tuple[int, bytes]:
         return self.frame_generation, self.frame
@@ -1294,6 +1420,10 @@ class WaylandDisplay:
                 jpeg_valve.set_property("drop", not jpeg_active)
 
     def start_vnc(self) -> None:
+        if not self.avnc_device:
+            self.vnc_reverse_status = "AVNC compatibility is disabled"
+            self.write_client_state()
+            return
         try:
             self.vnc_server = TightVNCServer(
                 width=self.width,
@@ -1303,6 +1433,7 @@ class WaylandDisplay:
                 frame_snapshot=self.frame_snapshot,
                 on_client=self.set_vnc_client_connected,
                 on_input=self.handle_input,
+                password=self.vnc_password,
             )
             self.vnc_server.start()
         except (OSError, ValueError) as error:
@@ -1315,6 +1446,7 @@ class WaylandDisplay:
             self.vnc_port,
             list_android_devices,
             self.set_vnc_reverse_status,
+            selected_serial=self.avnc_device,
         )
         self.vnc_reverse.start()
 
@@ -1341,6 +1473,9 @@ class WaylandDisplay:
                     else self.vnc_reverse_status
                 ),
                 "vnc_port": self.vnc_port,
+                "vnc_password": self.vnc_password if self.avnc_device else "",
+                "avnc_device": self.avnc_device,
+                "browser_enabled": self.browser_enabled,
                 "display_mode": self.display_mode,
                 "source_connector": self.source_connector,
                 "video_encoder": self.video_encoder,
@@ -1462,13 +1597,15 @@ class WaylandDisplay:
                 daemon=True,
             )
             pipeline_stop_thread.start()
-        if hasattr(self, "http"):
-            shutdown = threading.Thread(target=self.http.shutdown, name="tuxdisplay-http-stop", daemon=True)
+        for server in self.http_servers:
+            shutdown = threading.Thread(target=server.shutdown, name="tuxdisplay-http-stop", daemon=True)
             shutdown.start()
             shutdown.join(timeout=1)
-            self.http.server_close()
-            if hasattr(self, "http_thread"):
-                self.http_thread.join(timeout=1)
+            server.server_close()
+        for thread in self.http_threads:
+            thread.join(timeout=1)
+        self.http_servers.clear()
+        self.http_threads.clear()
         if self.remote_session:
             try:
                 self.call(REMOTE_DEST, self.remote_session, REMOTE_SESSION_IFACE, "Stop", timeout_ms=2_000)
@@ -1501,15 +1638,19 @@ class WaylandDisplay:
                 else f"native monitor {self.width}x{self.height}"
             )
             avnc_description = (
-                f"AVNC on Android 127.0.0.1:{self.vnc_port} enabled"
+                f"AVNC on selected Android device {self.avnc_device} at 127.0.0.1:{self.vnc_port} enabled"
                 if self.vnc_server is not None
                 else self.vnc_reverse_status
+            )
+            browser_description = (
+                "browser fallback on loopback and USB-only addresses"
+                if self.http_servers
+                else "browser fallback disabled"
             )
             print(
                 f"TuxDisplay {display_description}; encoded at {self.width}x{self.height} "
                 f"with {self.video_encoder} H.264; "
-                f"OpenDisplay USB enabled; {avnc_description}; "
-                f"browser fallback at http://0.0.0.0:{self.port}/",
+                f"OpenDisplay USB enabled; {avnc_description}; {browser_description}",
                 flush=True,
             )
 

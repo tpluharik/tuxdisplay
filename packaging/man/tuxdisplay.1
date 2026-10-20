@@ -1,4 +1,4 @@
-.TH TUXDISPLAY 1 "October 2026" "TuxDisplay 0.4.24" "User Commands"
+.TH TUXDISPLAY 1 "October 2026" "TuxDisplay 0.4.25" "User Commands"
 .SH NAME
 tuxdisplay \- use an iPad or Android tablet as a secondary Linux display
 .SH SYNOPSIS
@@ -24,16 +24,15 @@ address, Internet connection, Wi-Fi, cellular service, or tethering. Windows
 can be moved between the physical display and tablet in Extend mode. Mirror
 mode shows and controls the existing primary desktop.
 .PP
-An authenticated browser viewer is available on trusted private networks.
+An opt-in authenticated browser viewer is available on loopback and direct USB networks.
 Xorg and unsupported Wayland compositors use an isolated X11/noVNC workspace;
 that workspace is not an extension of the current desktop.
 .PP
 Version 0.4.0 must not be used on GNOME Wayland because its touch path could
 abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions, 0.4.9 can
 stall capture while rearranging displays, and 0.4.11 can restart-loop a virtual
-monitor after capture failure. Use 0.4.24 or newer for all documented stability,
-native single-finger touch, frame-pacing, cursor-performance, and safe lid-close
-fixes.
+monitor after capture failure. Use 0.4.25 or newer for all documented stability,
+input, rendering, compatibility-path security, and updater fixes.
 .PP
 The GTK manager and three-state indicator are one single-instance application.
 The manager can check GitHub Releases and install a verified update after an
@@ -60,8 +59,11 @@ Save a resolution preset. Add
 to apply it immediately. The command also accepts
 .BR --fps ,
 .BR --display-mode ,
+.BR --encoder ,
+.BR --cursor-mode ,
+.BR --browser ,
 and
-.BR --encoder .
+.BR --avnc-device .
 .TP
 .B status
 Show service state, display mode, active encoder, OpenDisplay and AVNC
@@ -133,17 +135,18 @@ approved computer fingerprint.
 .SS AVNC Android USB
 TuxDisplay serves Tight/JPEG VNC on the host loopback interface and creates an
 .B adb reverse
-mapping for each authorized Android device. Install AVNC from F-Droid, open a
-new connection to 127.0.0.1 on the configured VNC port, leave the username and
-password empty in GNOME Wayland mode, and enable view scaling. Pointer, click,
+mapping only for the explicitly selected Android device. Install AVNC from
+F-Droid, open a new connection to 127.0.0.1 on the configured VNC port, leave
+the username empty, enter the fresh session password shown by TuxDisplay, and enable view scaling. Pointer, click,
 scroll, and keyboard input are forwarded to Mutter. This compatibility path is
 open source and offline, but OpenDisplay H.264 normally provides better motion
 and power efficiency. Tight/JPEG supports TuxDisplay widths up to 2048 pixels;
 use 2048x1536 or a smaller preset with AVNC. The 2160x1620 preset remains
 available through OpenDisplay and the browser path.
 .SS Browser fallback
-GNOME Wayland serves an authenticated MJPEG viewer over HTTP. Use it only on
-a trusted private LAN or cable network.
+GNOME Wayland can serve an opt-in authenticated MJPEG viewer over HTTP. It
+binds only loopback and active USB-network addresses, rotates the PIN on each
+service start, and throttles failures. It never listens on LAN/Wi-Fi wildcard addresses.
 .SS X11 compatibility
 Xvfb, Openbox, tint2, x11vnc, websockify, and noVNC provide a separate desktop.
 Applications from the current desktop cannot be dragged into it.
@@ -185,6 +188,8 @@ FPS=30
 ENCODER=auto
 CURSOR_MODE=embedded
 KEEP_AWAKE_WITH_LID_CLOSED=0
+BROWSER_ENABLED=0
+AVNC_DEVICE=
 DISPLAY_NUMBER=48
 WEB_PORT=6080
 VNC_PORT=5900
@@ -227,6 +232,14 @@ Stopping TuxDisplay releases either inhibitor.
 .TP
 .B DISPLAY_NUMBER
 applies only to the X11 fallback.
+.TP
+.B BROWSER_ENABLED
+accepts 0 or 1 and defaults to 0. Enabling it starts listeners only on loopback
+and active USB-network addresses.
+.TP
+.B AVNC_DEVICE
+is empty by default. Set it to one authorized ADB serial to enable the AVNC
+reverse mapping and fresh per-session VNC password for only that device.
 .TP
 .B VNC_PORT
 is the Android-local AVNC port and the host loopback VNC port. GNOME Wayland

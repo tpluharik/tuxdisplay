@@ -10,18 +10,18 @@ systemctl --user status tuxdisplay.service
 journalctl --user -u tuxdisplay.service --since "10 minutes ago"
 ~~~
 
-The first three commands are safe to paste into a bug report. Review logs before sharing them and remove usernames, hostnames, IP addresses, tablet identifiers, and the browser PIN.
+The first three commands are safe to paste into a bug report only after review. Remove usernames, hostnames, IP addresses, tablet identifiers, and browser/AVNC session passwords.
 
 ## Do not run 0.4.0 on GNOME Wayland
 
-TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. TuxDisplay 0.4.3 could reject GNOME's negotiated PipeWire rate, 0.4.4 could periodically reconnect a healthy low-FPS stream, 0.4.9 could leave the GStreamer pipeline in a pending state after displays were rearranged, 0.4.11 could repeatedly recreate the virtual monitor after a capture failure, 0.4.15 could leave stale receiver health, and 0.4.16 could miss a simultaneous host-pipeline and receiver freeze. Upgrade to 0.4.24 or newer for the current stability, native single-finger touch, cursor, rendering-performance, AVNC compatibility, and safe lid-close handling:
+TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. Older releases also had display-refresh and restart-loop failures. Upgrade to 0.4.25 or newer for the current stability and hardened compatibility/update paths:
 
 ~~~sh
-sudo apt install ./tuxdisplay_0.4.24_all.deb
+sudo apt install ./tuxdisplay_0.4.25_all.deb
 tuxdisplay restart
 ~~~
 
-Version 0.4.1 introduced guarded pointer translation. Version 0.4.2 added cached-keyframe recovery for static first frames. Version 0.4.3 added fresh-IDR gating, receiver-health recovery, and bounded shutdown. Version 0.4.4 accepts GNOME's negotiated PipeWire rate. Version 0.4.5 prevents false watchdog reconnects on quiet or low-FPS desktops. Version 0.4.6 adds optional closed-lid operation. Version 0.4.7 unifies the desktop application and adds verified in-app updates. Version 0.4.8 adds Android OpenDisplay over an ADB USB tunnel. Version 0.4.9 introduced monitor-placement persistence. Version 0.4.10 keeps PipeWire running during layout refresh. Version 0.4.11 restores the complete validated layout instead of reconstructing the tablet from one anchor. Version 0.4.12 suppresses duplicate topology events, settles real changes before refreshing capture, and prevents service failures from creating a virtual-monitor restart loop. Version 0.4.13 adds touch-controlled primary-screen mirroring. Version 0.4.14 adds automatic hardware encoding and a bounded low-latency video path. Version 0.4.15 added fixed-rate latest-frame pacing. Version 0.4.16 detects a receiver whose video telemetry freezes while its control channel remains alive. Version 0.4.17 adds independent host-pipeline recovery, a bounded automatic software fallback, and damage-driven variable-bitrate encoding to reduce duplicate work. Version 0.4.18 separates the cursor from video. Version 0.4.19 independently tracks physical pointer movement, echoes tablet input through the cursor overlay, discards cursor-only capture buffers, and adds a balanced 1536×1152 iPad preset. Version 0.4.20 removes inactive browser-branch work, reports every rendering stage once per second, and prevents standalone diagnostics from launching a duplicate managed service. Version 0.4.21 adds the AVNC Android USB compatibility transport. Version 0.4.22 aligns all package, application, documentation, and update metadata with the validated AVNC release candidate. Version 0.4.23 disconnects the tablet and cleans up the virtual monitor automatically before lid-triggered sleep. Version 0.4.24 gives OpenDisplay finger input guarded native touchscreen semantics while leaving Pencil, mouse, AVNC, and explicit scroll events unchanged.
+Version 0.4.1 introduced guarded pointer translation. Versions 0.4.2–0.4.17 added cached-keyframe, receiver-health, layout-refresh, and bounded pipeline recovery. Versions 0.4.18–0.4.20 separated cursor work from video and added detailed performance telemetry. Version 0.4.21 added AVNC, 0.4.23 added safe lid-close cleanup, and 0.4.24 added guarded native single-finger touch. Version 0.4.25 disables browser/AVNC compatibility by default, scopes them to USB/one selected device, adds throttled authenticated sessions, and replaces the updater's user-owned staging path with an independently signed root-side download.
 
 ## Motion on the tablet is jumpy
 
@@ -159,7 +159,7 @@ After closing TuxDisplay, `adb forward --list` should not contain a TuxDisplay f
 
 ## AVNC does not connect over the Android cable
 
-Install [AVNC from F-Droid](https://f-droid.org/packages/com.gaurav.avnc/), start TuxDisplay, and configure AVNC with host `127.0.0.1` and port `5900`. Leave authentication empty in GNOME Wayland mode. The address is Android's own loopback interface; TuxDisplay carries it to the laptop through `adb reverse`, so no Wi-Fi address should be entered.
+Install [AVNC from F-Droid](https://f-droid.org/packages/com.gaurav.avnc/), connect and authorize the tablet, then select that exact device under **AVNC compatibility** in TuxDisplay and restart. Configure AVNC with host `127.0.0.1`, port `5900`, no username, and the fresh **AVNC session password** shown by TuxDisplay. No Wi-Fi address should be entered.
 
 Check:
 
@@ -170,13 +170,13 @@ tuxdisplay status
 journalctl --user -u tuxdisplay.service --since "5 minutes ago"
 ~~~
 
-The device state must be `device`, and the reverse list should contain `tcp:5900 tcp:5900` for its serial. If the entry is absent, unlock Android, approve USB debugging, choose **Connect tablet**, and restart TuxDisplay. If another application already owns Android port 5900, set a different `VNC_PORT` in `~/.config/tuxdisplay/config`, restart TuxDisplay, and use the same port in AVNC.
+The selected device state must be `device`, and the reverse list should contain `tcp:5900 tcp:5900` only for that serial. If absent, unlock Android, approve USB debugging, reselect the device, and restart TuxDisplay. If another application owns Android port 5900, set a different `VNC_PORT`, restart, and use the same port in AVNC.
 
 If AVNC connects but remains black, confirm `tuxdisplay status` reports `AVNC USB: connected` and move a window on the selected monitor. The JPEG branch starts only after the RFB handshake and is damage-driven. Disconnect and reconnect AVNC after a TuxDisplay resolution change.
 
 AVNC is a compatibility path. At high resolutions its JPEG conversion may use more CPU and run below OpenDisplay's hardware-H.264 frame rate. Tight/JPEG limits each encoded rectangle to 2048 pixels wide, so use `2048x1536` or a smaller preset; `2160x1620` is OpenDisplay-only. Start with 1280×800 for a 16:10 Android tablet or 1024×768 for diagnosis. Use OpenDisplay when smooth motion and power efficiency are more important than installing from F-Droid.
 
-In the isolated X11 fallback, AVNC connects to the same address and port but must use the six-digit TuxDisplay PIN as its VNC password.
+After five failed passwords in one minute, wait five minutes or restart the display to create a new AVNC session. Only one AVNC client can be connected at a time.
 
 ## “USB gadget unavailable” on a laptop
 
@@ -186,13 +186,11 @@ The gadget exists only to give Safari/noVNC a private `10.55.0.1` cable network.
 
 ## The browser page does not load
 
-1. Run `tuxdisplay url` and use the complete URL including `http://` and port `6080`.
-2. Confirm the iPad and computer share the same trusted LAN or supported USB network.
-3. Test that the Linux firewall permits TCP 6080 on that private interface.
-4. Confirm the service is listening and the URL uses a current host address.
+1. Enable **Browser fallback** in the manager and restart the display.
+2. Run `tuxdisplay url` and use the complete URL including `http://` and port `6080`.
+3. Confirm the URL is loopback for local preview or an address on an active USB network; LAN and Wi-Fi listeners are intentionally unsupported.
+4. Confirm the service is listening and the URL uses the current USB address.
 5. Do not use the direct OpenDisplay workflow's lack of IP address as a browser URL.
-
-The `.local` name depends on mDNS/Avahi. If it does not resolve, use the numeric private address printed by `tuxdisplay url`.
 
 ## The PIN field does not accept typing
 
@@ -204,7 +202,7 @@ Regenerate a forgotten PIN with:
 tuxdisplay password --reset
 ~~~
 
-Restarting the service invalidates the current authenticated browser session.
+Restarting the service invalidates the current authenticated browser session and rotates the PIN. The manager shows the new value.
 
 ## Browser fullscreen appears to do nothing
 
