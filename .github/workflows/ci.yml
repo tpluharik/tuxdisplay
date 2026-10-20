@@ -15,7 +15,9 @@ jobs:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
       - name: Install test dependencies
-        run: sudo apt-get update && sudo apt-get install --yes python3-cryptography
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes
+          gir1.2-gst-plugins-base-1.0 gir1.2-gstreamer-1.0 python3-cryptography
       - name: Run tests
         run: python3 -m unittest discover -s tests -v
       - name: Build twice and compare

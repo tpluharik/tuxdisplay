@@ -23,7 +23,12 @@ import time
 from typing import Any
 
 from cryptography.hazmat.primitives.ciphers import Cipher, modes
-from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
+
+try:
+    # Cryptography 43+ moved TripleDES into the explicit legacy namespace.
+    from cryptography.hazmat.decrepit.ciphers.algorithms import TripleDES
+except ImportError:  # Ubuntu 24.04 ships Cryptography 41.
+    from cryptography.hazmat.primitives.ciphers.algorithms import TripleDES
 
 
 RFB_VERSION = b"RFB 003.008\n"

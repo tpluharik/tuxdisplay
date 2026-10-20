@@ -27,7 +27,9 @@ jobs:
         with:
           ref: ${{ inputs.tag || github.ref }}
       - name: Install build dependencies
-        run: sudo apt-get update && sudo apt-get install --yes python3-cryptography
+        run: >-
+          sudo apt-get update && sudo apt-get install --yes
+          gir1.2-gst-plugins-base-1.0 gir1.2-gstreamer-1.0 python3-cryptography
       - name: Test and build
         run: |
           python3 -m unittest discover -s tests -v
