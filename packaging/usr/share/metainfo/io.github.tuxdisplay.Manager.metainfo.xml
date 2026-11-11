@@ -21,6 +21,15 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.27" date="2026-11-11">
+      <description>
+        <ul>
+          <li>Detect and recover an idle-to-active video wake that produces no encoded frame.</li>
+          <li>Refresh only capture while preserving the virtual monitor and USB session.</li>
+          <li>Rate-limit local recovery and expose its state in live diagnostics.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.26" date="2026-11-11">
       <description>
         <ul>

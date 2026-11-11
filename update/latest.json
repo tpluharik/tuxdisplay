@@ -1,10 +1,10 @@
 {
-  "expires_at": "2027-11-12T16:15:09Z",
-  "notes": "Adaptive active-motion pacing for smooth tablet rendering, true static-screen idle, independent cursor overlay, and idle-safe receiver health.",
-  "package_name": "tuxdisplay_0.4.26_all.deb",
-  "package_url": "https://github.com/tpluharik/tuxdisplay/releases/download/v0.4.26/tuxdisplay_0.4.26_all.deb",
-  "release_url": "https://github.com/tpluharik/tuxdisplay/releases/tag/v0.4.26",
-  "sha256": "21516efa6bfe708a4c1cc1a25606b8d2fe977425879b9b13daf33ab1cd615605",
-  "signature": "McNvgLb+K3xy6pOXPwY3o1i/FPbxs5a/+uJwo00Jk7By9hVO8T9KuXjrFQdU/oMM6v5pO0P/7CeWOEZzenfbDQ==",
-  "version": "0.4.26"
+  "expires_at": "2027-11-12T17:23:03Z",
+  "notes": "Reliable pad-gated idle wake plus bounded capture-only recovery for adaptive video.",
+  "package_name": "tuxdisplay_0.4.27_all.deb",
+  "package_url": "https://github.com/tpluharik/tuxdisplay/releases/download/v0.4.27/tuxdisplay_0.4.27_all.deb",
+  "release_url": "https://github.com/tpluharik/tuxdisplay/releases/tag/v0.4.27",
+  "sha256": "eee92d2e3733287019bf6e75606194ffb585e24e52beabad3f9e7459f2e7d203",
+  "signature": "po1bFdBDBIQADz7XcoSSTzm1ltZUJiMw7wFQWjqzQYz0vKnCir/FfdmjPfw1Xzo2Nc4LdCq8A7LKH5mfm2UKBw==",
+  "version": "0.4.27"
 }

@@ -1,3 +1,18 @@
+tuxdisplay (0.4.27) unstable; urgency=high
+
+  * Detect an idle-to-active wake that produces no encoded frame instead of
+    leaving the tablet on a permanently cached image.
+  * Keep the activity gate open, request one fresh keyframe, then refresh only
+    the capture pipeline while preserving the virtual monitor and USB session.
+  * Replace dynamic valve switching with a lightweight buffer gate so hardware
+    pipelines resume on the first real frame while the encoder stays idle.
+  * Rate-limit local refreshes and retain the bounded service watchdog as a
+    final fallback so recovery cannot create a monitor or restart loop.
+  * Report the wake stage, keyframe attempts, and local recovery count in live
+    diagnostics.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Wed, 11 Nov 2026 19:11:02 +0200
+
 tuxdisplay (0.4.26) unstable; urgency=high
 
   * Restore smooth configured-rate output while pixels or tablet input are

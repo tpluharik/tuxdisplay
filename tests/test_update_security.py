@@ -42,11 +42,11 @@ class UpdateSecurityTests(unittest.TestCase):
     def test_valid_signature_and_payload_are_required(self) -> None:
         payload, public_key = self.signed_manifest()
         with mock.patch.object(MODULE, "PUBLIC_KEY_B64", base64.b64encode(public_key).decode()):
-            verified = MODULE.verify_manifest(payload, current_version="0.4.26")
+            verified = MODULE.verify_manifest(payload, current_version="0.4.27")
             self.assertIsNotNone(verified)
             payload["package_url"] = "https://example.invalid/tuxdisplay.deb"
             with self.assertRaises(MODULE.UpdateSecurityError):
-                MODULE.verify_manifest(payload, current_version="0.4.26")
+                MODULE.verify_manifest(payload, current_version="0.4.27")
 
     def test_package_bytes_must_match_signed_digest(self) -> None:
         manifest = {"sha256": hashlib.sha256(b"package").hexdigest()}

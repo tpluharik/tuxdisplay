@@ -82,11 +82,11 @@ def pipeline_description(
         "! identity name=capture_probe silent=true "
         "! imagefreeze name=frame_pacer is-live=true allow-replace=true "
         f"! video/x-raw,framerate={frames_per_second}/1 "
-        "! valve name=activity_valve drop=true drop-mode=transform-to-gap "
+        "! identity name=activity_gate silent=true "
         "! tee name=displaytee "
         + browser_branch
         + h264_branch
         + "! h264parse config-interval=-1 "
         "! video/x-h264,profile=constrained-baseline,stream-format=byte-stream,alignment=au "
-        "! appsink name=h264_sink emit-signals=true max-buffers=1 drop=false sync=false"
+        "! appsink name=h264_sink emit-signals=true max-buffers=1 drop=false sync=false async=false"
     )

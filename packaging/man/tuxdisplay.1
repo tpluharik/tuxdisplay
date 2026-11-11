@@ -1,4 +1,4 @@
-.TH TUXDISPLAY 1 "November 2026" "TuxDisplay 0.4.26" "User Commands"
+.TH TUXDISPLAY 1 "November 2026" "TuxDisplay 0.4.27" "User Commands"
 .SH NAME
 tuxdisplay \- use an iPad or Android tablet as a secondary Linux display
 .SH SYNOPSIS
@@ -31,7 +31,7 @@ that workspace is not an extension of the current desktop.
 Version 0.4.0 must not be used on GNOME Wayland because its touch path could
 abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions, 0.4.9 can
 stall capture while rearranging displays, and 0.4.11 can restart-loop a virtual
-monitor after capture failure. Use 0.4.26 or newer for all documented stability,
+monitor after capture failure. Use 0.4.27 or newer for all documented stability,
 input, rendering, compatibility-path security, and updater fixes.
 .PP
 The GTK manager and three-state indicator are one single-instance application.
@@ -211,7 +211,9 @@ mode.
 accepts 15, 30, or 60 and controls the virtual-monitor and active receiver
 ceiling. The default is 30. Version 0.4.26 paces the newest changed frame at this
 rate while content or input remains active, then idles the video path after 500
-milliseconds of quiet. Use 60 only when encoded, sender, and receiver telemetry
+milliseconds of quiet. Version 0.4.27 detects a failed idle wake, requests a
+keyframe, and performs one rate-limited capture-only refresh if needed. Use 60
+only when encoded, sender, and receiver telemetry
 show that the host and tablet sustain it.
 .TP
 .B ENCODER

@@ -52,8 +52,8 @@ For a package candidate:
 
 ~~~sh
 ./build-deb.sh
-dpkg-deb --info dist/tuxdisplay_0.4.26_all.deb
-dpkg-deb --contents dist/tuxdisplay_0.4.26_all.deb
+dpkg-deb --info dist/tuxdisplay_0.4.27_all.deb
+dpkg-deb --contents dist/tuxdisplay_0.4.27_all.deb
 ~~~
 
 The build replaces the package for the current version, normalizes the complete staging tree, stores Debian archive members without compressor-version variance, and regenerates `dist/SHA256SUMS`. Keep `SOURCE_DATE_EPOCH` equal to the newest Debian changelog timestamp. Build products are ignored and belong in GitHub Releases, never source control.
@@ -74,13 +74,14 @@ For GNOME Wayland changes:
 10. Exercise update checking with valid, expired, malformed, wrong-key, and digest-mismatched manifests; verify the root helper independently re-downloads and rejects every mismatch.
 11. On Android, test unauthorized and authorized ADB states, receiver launch after service start, cable reconnect, and cleanup with `adb forward --list`.
 12. In Mirror mode, verify the current primary physical monitor is captured, no `Meta-0` is created, and tap/drag/scroll land correctly with both matching and mismatched aspect ratios.
-13. At 15, 30, and 60 FPS, compare distinct PipeWire rate, paced encode rate, `source_fps`, `sent_fps`, and receiver FPS after at least ten seconds of sustained motion. Confirm 0.4.26+ reaches the selected cadence during motion, enters `adaptive-idle` after quiet content, and keeps `drops` and `recoveries` at zero in the supported baseline.
+13. At 15, 30, and 60 FPS, compare distinct PipeWire rate, paced encode rate, `source_fps`, `sent_fps`, and receiver FPS after at least ten seconds of sustained motion. Confirm 0.4.27+ reaches the selected cadence during motion, enters `adaptive-idle` after quiet content, wakes after a long idle, and keeps `drops` and prediction-chain `recoveries` at zero in the supported baseline.
 14. After the receiver has reported health, stop only its statistics while leaving control traffic and active video running. Confirm the data is marked stale and a keyframe is requested near eight seconds, then the receiver reconnects near fifteen seconds. Confirm a receiver that never sends statistics and a connected receiver during intentional video idle are not disconnected by this watchdog.
 15. Stop the encoded-frame callback and receiver statistics together. Confirm 0.4.17+ requests one service recycle near eight seconds, records a 24-hour software fallback after a hardware stall, and suppresses a third automatic recycle within ten minutes.
 16. Exercise both automatic and software encoding. If VA-API is available, confirm Automatic selects it; if initialization fails, confirm the service falls back once to x264 without a restart loop.
 17. Move the pointer across the tablet without changing desktop content. Confirm `Cursor transport` reports `xwayland-poll`, its update count rises smoothly, and capture/source rates remain near the quiet-screen cadence.
 18. Confirm AVNC is off by default. Select exactly one authorized device, use the fresh session password at Android `127.0.0.1:5900`, reject a second client, test throttling, and confirm no mapping is created for another authorized tablet.
 19. With **Keep awake with lid closed** disabled, close the lid on a safe test machine and confirm the receiver disconnects, the user service stops, and `Meta-0` is removed before sleep. Reopen the lid and confirm TuxDisplay remains stopped. Enable the option and confirm the service instead remains active while lid sleep is inhibited.
+20. Leave the tablet on a static desktop until `wake_state=idle`, then interact on the tablet. Confirm a frame arrives immediately and the wake state clears. With a deliberately blocked encoder in a test environment, confirm one keyframe request near 0.5 seconds, one capture-only refresh near 1.5 seconds, no virtual-monitor or USB recreation, and no second local refresh inside 15 seconds.
 
 For fallback changes:
 

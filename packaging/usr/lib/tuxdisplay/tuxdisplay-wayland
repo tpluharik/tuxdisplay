@@ -57,6 +57,9 @@ CURSOR_MODE_EMBEDDED = 1
 CURSOR_MODE_METADATA = 2
 CURSOR_POLL_INTERVAL_MS = 16
 PACING_CHECK_INTERVAL_MS = 100
+WAKE_KEYFRAME_SECONDS = 0.5
+WAKE_CAPTURE_REFRESH_SECONDS = 1.5
+WAKE_CAPTURE_REFRESH_COOLDOWN_SECONDS = 15.0
 
 
 def unpack(value: Any) -> Any:
@@ -407,9 +410,14 @@ class WaylandDisplay:
         self.pacing_active = False
         self.pacing_started_monotonic = 0.0
         self.last_pacing_activity_monotonic = 0.0
+        self.wake_started_monotonic = 0.0
+        self.wake_stage = ""
+        self.last_wake_refresh_monotonic = 0.0
+        self.wake_keyframe_requests = 0
+        self.wake_pipeline_recoveries = 0
         self.last_source_monotonic = 0.0
         self.pacing_source = 0
-        self.activity_valve: Gst.Element | None = None
+        self.activity_gate_pad: Gst.Pad | None = None
         self.cursor_visible = False
         self.cursor_metadata_updates = 0
         self.cursor_only_updates = 0
@@ -840,7 +848,11 @@ class WaylandDisplay:
 
     def refresh_capture_after_layout_change(self) -> None:
         """Reopen the PipeWire node without recreating Meta-0 or USB."""
-        print("TuxDisplay monitor arrangement changed; refreshing the video stream", file=sys.stderr, flush=True)
+        self.refresh_capture_pipeline("monitor arrangement changed")
+
+    def refresh_capture_pipeline(self, reason: str) -> bool:
+        """Reopen capture without recreating the virtual monitor or USB session."""
+        print(f"TuxDisplay {reason}; refreshing the video stream", file=sys.stderr, flush=True)
         previous_pipeline = self.pipeline
         if previous_pipeline is not None:
             previous_pipeline.get_bus().remove_signal_watch()
@@ -852,9 +864,9 @@ class WaylandDisplay:
                     file=sys.stderr,
                     flush=True,
                 )
-                return
+                return False
             self.pipeline = None
-            self.activity_valve = None
+            self.activity_gate_pad = None
         try:
             self.start_pipeline()
         except (GLib.Error, RuntimeError) as error:
@@ -866,12 +878,13 @@ class WaylandDisplay:
                 file=sys.stderr,
                 flush=True,
             )
-            return
+            return False
         if self.opendisp is not None:
             self.opendisp.recover_video()
         else:
             self.force_keyframe()
         self.refresh_cursor_tracking_geometry()
+        return True
 
     def refresh_cursor_tracking_geometry(self) -> None:
         connector = self.source_connector if self.display_mode == "mirror" else "Meta-0"
@@ -954,33 +967,36 @@ class WaylandDisplay:
         h264_sink = pipeline.get_by_name("h264_sink")
         source_probe = pipeline.get_by_name("source_probe")
         capture_probe = pipeline.get_by_name("capture_probe")
-        activity_valve = pipeline.get_by_name("activity_valve")
+        activity_gate = pipeline.get_by_name("activity_gate")
         if (
             jpeg_sink is None
             or h264_sink is None
             or source_probe is None
             or capture_probe is None
-            or activity_valve is None
+            or activity_gate is None
         ):
             pipeline.set_state(Gst.State.NULL)
             raise RuntimeError("Could not create the encoded video sinks")
         source_pad = source_probe.get_static_pad("sink")
         capture_pad = capture_probe.get_static_pad("sink")
-        if source_pad is None or capture_pad is None:
+        activity_gate_pad = activity_gate.get_static_pad("src")
+        if source_pad is None or capture_pad is None or activity_gate_pad is None:
             pipeline.set_state(Gst.State.NULL)
             raise RuntimeError("Could not inspect PipeWire cursor metadata")
         source_pad.add_probe(Gst.PadProbeType.BUFFER, self.on_source_buffer)
         capture_pad.add_probe(Gst.PadProbeType.BUFFER, self.on_capture_buffer)
+        activity_gate_pad.add_probe(Gst.PadProbeType.BUFFER, self.on_activity_buffer)
         jpeg_sink.connect("new-sample", self.on_sample)
         h264_sink.connect("new-sample", self.on_h264_sample)
-        self.activity_valve = activity_valve
+        self.activity_gate_pad = activity_gate_pad
         self.pipeline_started_monotonic = time.monotonic()
         self.last_video_monotonic = 0.0
         self.last_source_monotonic = 0.0
         self.pacing_started_monotonic = 0.0
         self.last_pacing_activity_monotonic = 0.0
         self.pacing_active = False
-        self.activity_valve.set_property("drop", True)
+        self.wake_started_monotonic = 0.0
+        self.wake_stage = ""
         with self.capture_frame_lock:
             self.pipewire_frame_times.clear()
             self.capture_frame_times.clear()
@@ -995,7 +1011,7 @@ class WaylandDisplay:
                 error, debug = failure.parse_error()
                 detail = f": {error.message}; {debug}"
             pipeline.set_state(Gst.State.NULL)
-            self.activity_valve = None
+            self.activity_gate_pad = None
             raise RuntimeError(f"PipeWire video pipeline could not start{detail}")
         state_result, _state, _pending = pipeline.get_state(Gst.SECOND)
         if state_result == Gst.StateChangeReturn.FAILURE:
@@ -1005,7 +1021,7 @@ class WaylandDisplay:
                 error, debug = failure.parse_error()
                 detail = f": {error.message}; {debug}"
             pipeline.set_state(Gst.State.NULL)
-            self.activity_valve = None
+            self.activity_gate_pad = None
             raise RuntimeError(f"PipeWire video pipeline did not become ready{detail}")
         messages.add_signal_watch()
         messages.connect("message", self.on_pipeline_message)
@@ -1038,7 +1054,17 @@ class WaylandDisplay:
     def force_keyframe(self) -> None:
         if self.pipeline is None:
             return
-        self.activate_adaptive_pacing()
+        # Receiver maintenance requests are not evidence that pixels or tablet
+        # input changed. Open the gate briefly, but do not arm capture recovery;
+        # otherwise a quiet receiver asking for cached video could refresh the
+        # whole capture graph every cooldown interval.
+        self.activate_adaptive_pacing(verify_wake=False)
+        self._send_force_keyframe()
+
+    def _send_force_keyframe(self) -> None:
+        """Request an IDR without resetting the adaptive-wake deadline."""
+        if self.pipeline is None:
+            return
         try:
             event = GstVideo.video_event_new_upstream_force_key_unit(Gst.CLOCK_TIME_NONE, True, 0)
             encoder = self.pipeline.get_by_name("h264_encoder")
@@ -1089,31 +1115,71 @@ class WaylandDisplay:
             self.activate_adaptive_pacing()
         return Gst.PadProbeReturn.OK
 
-    def activate_adaptive_pacing(self) -> None:
+    def on_activity_buffer(self, _pad: Gst.Pad, _info: Gst.PadProbeInfo) -> Gst.PadProbeReturn:
+        """Drop paced idle buffers without changing live GStreamer element state."""
+        with self.pacing_lock:
+            active = self.pacing_active
+        return Gst.PadProbeReturn.OK if active else Gst.PadProbeReturn.DROP
+
+    def activate_adaptive_pacing(self, verify_wake: bool = True) -> None:
         """Pace only while pixels or input are changing, then return to idle."""
         now = time.monotonic()
         with self.pacing_lock:
             if not self.pacing_active:
                 self.pacing_started_monotonic = now
+                if verify_wake:
+                    self.wake_started_monotonic = now
+                    self.wake_stage = "waiting"
             self.last_pacing_activity_monotonic = now
             self.pacing_active = True
-            valve = self.activity_valve
-        if valve is not None:
-            valve.set_property("drop", False)
 
     def refresh_adaptive_pacing(self) -> bool:
         if self.stopping:
             return GLib.SOURCE_REMOVE
         now = time.monotonic()
+        request_keyframe = False
+        refresh_capture = False
         with self.pacing_lock:
-            should_idle = self.pacing_active and (
+            wake_age = now - self.wake_started_monotonic if self.wake_stage else 0.0
+            if self.wake_stage == "waiting" and wake_age >= WAKE_KEYFRAME_SECONDS:
+                self.wake_stage = "keyframe"
+                self.wake_keyframe_requests += 1
+                request_keyframe = True
+            if self.wake_stage == "keyframe" and wake_age >= WAKE_CAPTURE_REFRESH_SECONDS:
+                if self.last_wake_refresh_monotonic == 0.0 or (
+                    now - self.last_wake_refresh_monotonic >= WAKE_CAPTURE_REFRESH_COOLDOWN_SECONDS
+                ):
+                    self.wake_stage = "recovering"
+                    self.last_wake_refresh_monotonic = now
+                    self.wake_pipeline_recoveries += 1
+                    refresh_capture = True
+                else:
+                    # Keep the buffer gate open so the existing bounded liveness
+                    # watchdog can take over if the local refresh also stalls.
+                    self.wake_stage = "watchdog"
+            wake_pending = bool(self.wake_stage)
+            should_idle = self.pacing_active and not wake_pending and (
                 now - self.last_pacing_activity_monotonic >= ACTIVE_PACING_TAIL_MS / 1000.0
             )
             if should_idle:
                 self.pacing_active = False
-            valve = self.activity_valve
-        if should_idle and valve is not None:
-            valve.set_property("drop", True)
+        if request_keyframe:
+            self._send_force_keyframe()
+        if refresh_capture:
+            refreshed = self.refresh_capture_pipeline("adaptive wake produced no encoded frame")
+            with self.pacing_lock:
+                if not refreshed:
+                    self.wake_stage = "watchdog"
+                self.pipeline_health = dict(self.pipeline_health)
+                if not refreshed:
+                    self.pipeline_health["wake_recovery"] = "capture refresh failed"
+                elif self.wake_stage:
+                    self.pipeline_health["wake_recovery"] = "capture refreshed"
+                else:
+                    # The new pipeline may already have delivered its first
+                    # encoded frame before start_pipeline() returned.
+                    self.pipeline_health.pop("wake_recovery", None)
+            self.write_client_state()
         return GLib.SOURCE_CONTINUE
 
     def on_capture_buffer(self, _pad: Gst.Pad, info: Gst.PadProbeInfo) -> Gst.PadProbeReturn:
@@ -1177,7 +1243,16 @@ class WaylandDisplay:
         self._record_frame(self.encoded_frame_times)
         self.last_video_at = time.time()
         self.last_video_monotonic = time.monotonic()
+        self.complete_adaptive_wake()
         return Gst.FlowReturn.OK
+
+    def complete_adaptive_wake(self) -> None:
+        """Mark the current wake healthy after the encoder produces a frame."""
+        with self.pacing_lock:
+            if self.wake_stage:
+                self.wake_stage = ""
+                self.pipeline_health = dict(self.pipeline_health)
+                self.pipeline_health.pop("wake_recovery", None)
 
     def on_pipeline_message(self, _bus: Gst.Bus, message: Gst.Message) -> None:
         if message.type == Gst.MessageType.ERROR:
@@ -1212,7 +1287,7 @@ class WaylandDisplay:
             previous_pipeline.get_bus().remove_signal_watch()
             previous_pipeline.set_state(Gst.State.NULL)
             self.pipeline = None
-            self.activity_valve = None
+            self.activity_gate_pad = None
         try:
             self.start_pipeline(force_software=True)
         except (GLib.Error, RuntimeError) as error:
@@ -1524,6 +1599,21 @@ class WaylandDisplay:
 
     def write_client_state(self) -> None:
         directory = self.state_directory
+        now = time.monotonic()
+        with self.pacing_lock:
+            pacing_active = self.pacing_active
+            wake_stage = self.wake_stage
+            wake_started = self.wake_started_monotonic
+        pipeline_health = dict(self.pipeline_health)
+        pipeline_health.update(
+            {
+                "wake_state": wake_stage or ("active" if pacing_active else "idle"),
+                "wake_keyframes": self.wake_keyframe_requests,
+                "wake_recoveries": self.wake_pipeline_recoveries,
+            }
+        )
+        if wake_stage:
+            pipeline_health["wake_age_seconds"] = round(max(0.0, now - wake_started), 1)
         payload = json.dumps(
             {
                 "pid": os.getpid(),
@@ -1545,7 +1635,7 @@ class WaylandDisplay:
                 "display_mode": self.display_mode,
                 "source_connector": self.source_connector,
                 "video_encoder": self.video_encoder,
-                "frame_pacing": "adaptive-active" if self.pacing_active else "adaptive-idle",
+                "frame_pacing": "adaptive-active" if pacing_active else "adaptive-idle",
                 "pipewire_fps": self.pipewire_fps(),
                 "capture_fps": self.capture_fps(),
                 "encoded_fps": self.encoded_fps(),
@@ -1565,7 +1655,7 @@ class WaylandDisplay:
                     "video_frames_avoided": self.cursor_only_updates,
                 },
                 "receiver": self.receiver_stats,
-                "pipeline": self.pipeline_health,
+                "pipeline": pipeline_health,
             }
         ) + "\n"
         with self.state_write_lock:
@@ -1654,7 +1744,7 @@ class WaylandDisplay:
         if self.pipeline is not None:
             pipeline = self.pipeline
             self.pipeline = None
-            self.activity_valve = None
+            self.activity_gate_pad = None
 
             def stop_pipeline() -> None:
                 pipeline.set_state(Gst.State.NULL)

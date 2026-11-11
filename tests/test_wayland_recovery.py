@@ -48,6 +48,25 @@ class WaylandPipelineRecoveryTests(unittest.TestCase):
         display.write_client_state = mock.Mock()
         return display
 
+    def make_pacing_display(self) -> object:
+        display = MODULE.WaylandDisplay.__new__(MODULE.WaylandDisplay)
+        display.stopping = False
+        display.pacing_lock = threading.Lock()
+        display.pacing_active = False
+        display.pacing_started_monotonic = 0.0
+        display.last_pacing_activity_monotonic = 0.0
+        display.wake_started_monotonic = 0.0
+        display.wake_stage = ""
+        display.last_wake_refresh_monotonic = 0.0
+        display.wake_keyframe_requests = 0
+        display.wake_pipeline_recoveries = 0
+        display.pipeline = object()
+        display.pipeline_health = {}
+        display._send_force_keyframe = mock.Mock()
+        display.refresh_capture_pipeline = mock.Mock(return_value=True)
+        display.write_client_state = mock.Mock()
+        return display
+
     def test_intentionally_idle_pipeline_does_not_request_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             display = self.make_display(Path(temporary))
@@ -90,17 +109,14 @@ class WaylandPipelineRecoveryTests(unittest.TestCase):
             display.request_pipeline_service_recovery.assert_not_called()
 
     def test_adaptive_pacing_closes_after_the_activity_tail(self) -> None:
-        display = MODULE.WaylandDisplay.__new__(MODULE.WaylandDisplay)
-        display.stopping = False
-        display.pacing_lock = threading.Lock()
-        display.pacing_active = False
-        display.pacing_started_monotonic = 0.0
-        display.last_pacing_activity_monotonic = 0.0
-        display.activity_valve = mock.Mock()
+        display = self.make_pacing_display()
 
         with mock.patch.object(MODULE.time, "monotonic", return_value=10.0):
             display.activate_adaptive_pacing()
-        display.activity_valve.set_property.assert_called_once_with("drop", False)
+
+        # A frame proves that opening the gate succeeded. Only then may the
+        # ordinary 500 ms quiet tail close it again.
+        display.complete_adaptive_wake()
 
         with mock.patch.object(MODULE.time, "monotonic", return_value=10.4):
             display.refresh_adaptive_pacing()
@@ -110,7 +126,75 @@ class WaylandPipelineRecoveryTests(unittest.TestCase):
             result = display.refresh_adaptive_pacing()
         self.assertEqual(result, MODULE.GLib.SOURCE_CONTINUE)
         self.assertFalse(display.pacing_active)
-        display.activity_valve.set_property.assert_called_with("drop", True)
+
+    def test_failed_idle_wake_requests_keyframe_without_closing_gate(self) -> None:
+        display = self.make_pacing_display()
+        with mock.patch.object(MODULE.time, "monotonic", return_value=10.0):
+            display.activate_adaptive_pacing()
+
+        with mock.patch.object(MODULE.time, "monotonic", return_value=10.5):
+            result = display.refresh_adaptive_pacing()
+
+        self.assertEqual(result, MODULE.GLib.SOURCE_CONTINUE)
+        self.assertTrue(display.pacing_active)
+        self.assertEqual(display.wake_stage, "keyframe")
+        self.assertEqual(display.wake_keyframe_requests, 1)
+        display._send_force_keyframe.assert_called_once_with()
+
+    def test_receiver_keyframe_request_does_not_arm_capture_recovery(self) -> None:
+        display = self.make_pacing_display()
+
+        with mock.patch.object(MODULE.time, "monotonic", return_value=10.0):
+            display.force_keyframe()
+
+        self.assertTrue(display.pacing_active)
+        self.assertEqual(display.wake_stage, "")
+        display._send_force_keyframe.assert_called_once_with()
+
+        with mock.patch.object(MODULE.time, "monotonic", return_value=10.5):
+            display.refresh_adaptive_pacing()
+        self.assertFalse(display.pacing_active)
+        display.refresh_capture_pipeline.assert_not_called()
+
+    def test_failed_keyframe_wake_refreshes_capture_once(self) -> None:
+        display = self.make_pacing_display()
+        with mock.patch.object(MODULE.time, "monotonic", return_value=10.0):
+            display.activate_adaptive_pacing()
+        with mock.patch.object(MODULE.time, "monotonic", return_value=10.5):
+            display.refresh_adaptive_pacing()
+
+        with mock.patch.object(MODULE.time, "monotonic", return_value=11.5):
+            display.refresh_adaptive_pacing()
+
+        display.refresh_capture_pipeline.assert_called_once_with("adaptive wake produced no encoded frame")
+        self.assertEqual(display.wake_pipeline_recoveries, 1)
+        self.assertEqual(display.last_wake_refresh_monotonic, 11.5)
+        self.assertEqual(display.pipeline_health["wake_recovery"], "capture refreshed")
+
+    def test_wake_refresh_cooldown_prevents_a_pipeline_loop(self) -> None:
+        display = self.make_pacing_display()
+        display.pacing_active = True
+        display.last_pacing_activity_monotonic = 10.0
+        display.wake_started_monotonic = 10.0
+        display.wake_stage = "keyframe"
+        display.last_wake_refresh_monotonic = 10.0
+
+        with mock.patch.object(MODULE.time, "monotonic", return_value=11.5):
+            display.refresh_adaptive_pacing()
+
+        display.refresh_capture_pipeline.assert_not_called()
+        self.assertEqual(display.wake_stage, "watchdog")
+        self.assertTrue(display.pacing_active)
+
+    def test_encoded_frame_completes_pending_wake(self) -> None:
+        display = self.make_pacing_display()
+        display.wake_stage = "keyframe"
+        display.pipeline_health = {"wake_recovery": "capture refreshed", "fallback": "software"}
+
+        display.complete_adaptive_wake()
+
+        self.assertEqual(display.wake_stage, "")
+        self.assertEqual(display.pipeline_health, {"fallback": "software"})
 
     def test_stalled_encoded_frame_callback_requests_service_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

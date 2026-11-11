@@ -2,10 +2,10 @@
 set -eu
 
 td_project_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
-td_version=0.4.26
+td_version=0.4.27
 # Keep archive metadata stable across repeated builds. Update this epoch from
 # the newest Debian changelog entry whenever the package version changes.
-SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-1794416400}
+SOURCE_DATE_EPOCH=${SOURCE_DATE_EPOCH:-1794417062}
 export SOURCE_DATE_EPOCH
 td_build_dir="$td_project_dir/build"
 td_package_root="$td_build_dir/tuxdisplay_${td_version}_all"

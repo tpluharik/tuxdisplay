@@ -98,7 +98,7 @@ AVNC/Tight-JPEG, Safari/MJPEG, and X11/noVNC are not as efficient as the OpenDis
 
 ### 5. The sender exposes the performance path
 
-TuxDisplay reports the selected encoder, measured PipeWire source rate, post-queue rate, completed encode rate, tablet-input rate, adaptive pacing state, cable send rate, queue depth, dropped access units, chain recoveries, cursor-control updates, and receiver telemetry. Version 0.4.26 clocks the newest changed frame at the selected rate during activity but closes the video path after 500 ms of quiet, avoiding both sparse-motion playback and permanent static-frame encoding. Version 0.4.18 moved the cursor through OpenDisplay's overlay control path; version 0.4.19 independently tracks physical pointer movement and directly echoes tablet input, preventing pointer-only motion from requiring a full monitor encode. Version 0.4.20 added stage-by-stage telemetry and bypassed inactive browser conversion work; version 0.4.21 wakes that branch only for an AVNC or browser viewer. These diagnostics distinguish a slow compositor capture from an encoder, USB, receiver, or cursor-path bottleneck without claiming a universal latency advantage.
+TuxDisplay reports the selected encoder, measured PipeWire source rate, post-queue rate, completed encode rate, tablet-input rate, adaptive pacing and wake state, cable send rate, queue depth, dropped access units, chain recoveries, cursor-control updates, and receiver telemetry. Version 0.4.26 clocks the newest changed frame at the selected rate during activity but closes the video path after 500 ms of quiet, avoiding both sparse-motion playback and permanent static-frame encoding. Version 0.4.27 verifies the next wake, escalates from a keyframe request to one rate-limited capture-only refresh, and exposes both counters without recreating the monitor or cable session. Version 0.4.18 moved the cursor through OpenDisplay's overlay control path; version 0.4.19 independently tracks physical pointer movement and directly echoes tablet input, preventing pointer-only motion from requiring a full monitor encode. Version 0.4.20 added stage-by-stage telemetry and bypassed inactive browser conversion work; version 0.4.21 wakes that branch only for an AVNC or browser viewer. These diagnostics distinguish a slow compositor capture from an encoder, USB, receiver, or cursor-path bottleneck without claiming a universal latency advantage.
 
 ## Where alternatives are stronger
 
@@ -138,7 +138,7 @@ This statement is specific and supportable. TuxDisplay should not claim universa
 5. Design crash-safe multi-touch and Pencil pressure/tilt around explicit contact identities.
 6. Evaluate encrypted browser and VeNCrypt transport without weakening the simple offline USB workflow; per-device AVNC authentication and browser interface binding shipped in 0.4.25.
 7. Publish signed, reproducible packages and a supported GNOME/distribution matrix.
-8. Benchmark the adaptive 0.4.26 active-motion pacing against open-source alternatives on several GPUs, tablet generations, and cables.
+8. Benchmark the adaptive 0.4.27 active-motion pacing and bounded idle-wake recovery against open-source alternatives on several GPUs, tablet generations, and cables.
 
 ## Bottom line
 
