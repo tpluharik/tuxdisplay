@@ -56,7 +56,7 @@ dpkg-deb --info dist/tuxdisplay_0.4.26_all.deb
 dpkg-deb --contents dist/tuxdisplay_0.4.26_all.deb
 ~~~
 
-The build replaces the package for the current version, normalizes the complete staging tree, and regenerates `dist/SHA256SUMS`. Keep `SOURCE_DATE_EPOCH` equal to the newest Debian changelog timestamp. Build products are ignored and belong in GitHub Releases, never source control.
+The build replaces the package for the current version, normalizes the complete staging tree, stores Debian archive members without compressor-version variance, and regenerates `dist/SHA256SUMS`. Keep `SOURCE_DATE_EPOCH` equal to the newest Debian changelog timestamp. Build products are ignored and belong in GitHub Releases, never source control.
 
 ## Manual test checklist
 

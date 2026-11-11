@@ -63,7 +63,7 @@ The optional USB gadget helper and signed update helper are the only PolicyKit e
 
 ## Build and release integrity
 
-The build fixes `SOURCE_DATE_EPOCH`, normalizes every staged file and directory mtime, uses deterministic gzip, and writes `SHA256SUMS` for only the current package. Historical `.deb` files are release assets, not source-controlled build inputs. CI runs the test suite and builds twice to detect non-reproducible output. The tag workflow verifies the signed manifest/package digest before publishing and requests GitHub artifact provenance.
+The build fixes `SOURCE_DATE_EPOCH`, normalizes every staged file and directory mtime, uses deterministic gzip for documentation, stores Debian archive members without compressor-version variance, and writes `SHA256SUMS` for only the current package. Historical `.deb` files are release assets, not source-controlled build inputs. CI runs the test suite and builds twice to detect non-reproducible output. The tag workflow verifies the signed manifest/package digest before publishing and requests GitHub artifact provenance.
 
 Release signatures improve the update path but do not prove runtime behavior on every graphics stack. A release is not considered end-user validated until it has also been installed and exercised on the target GNOME/Wayland/receiver combination.
 

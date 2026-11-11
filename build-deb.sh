@@ -57,6 +57,10 @@ chmod 0644 "$td_package_root/DEBIAN/control" "$td_package_root/DEBIAN/md5sums"
 # a fresh clone and a long-lived checkout produce byte-identical packages.
 find "$td_package_root" -print0 | xargs -0 touch --no-dereference --date="@$SOURCE_DATE_EPOCH"
 
-dpkg-deb --build --root-owner-group "$td_package_root" "$td_output"
+# Store the Debian archive members without compression. Compression output can
+# vary between the dpkg/xz versions used by developer machines and Ubuntu CI;
+# the staged bytes and metadata are already normalized, so uncompressed members
+# make the signed package reproducible across those environments as well.
+dpkg-deb --root-owner-group --uniform-compression -Znone --build "$td_package_root" "$td_output"
 (cd "$td_output_dir" && sha256sum "$(basename "$td_output")" > SHA256SUMS)
 echo "$td_output"
