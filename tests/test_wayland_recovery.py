@@ -13,6 +13,10 @@ import threading
 import unittest
 from unittest import mock
 
+from gi_stub import ensure_gi
+
+
+ensure_gi()
 
 MODULE_DIR = Path(__file__).parents[1] / "packaging" / "usr" / "lib" / "tuxdisplay"
 sys.path.insert(0, str(MODULE_DIR))

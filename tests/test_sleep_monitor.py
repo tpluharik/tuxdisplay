@@ -10,6 +10,10 @@ import tempfile
 import unittest
 from unittest import mock
 
+from gi_stub import ensure_gi
+
+
+ensure_gi()
 
 MODULE_PATH = Path(__file__).parents[1] / "packaging" / "usr" / "lib" / "tuxdisplay" / "sleep_monitor.py"
 SPEC = importlib.util.spec_from_file_location("sleep_monitor", MODULE_PATH)

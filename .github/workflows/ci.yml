@@ -14,18 +14,17 @@ jobs:
     steps:
       - name: Check out source
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
+        with:
+          python-version: '3.12'
       - name: Install test dependencies
         timeout-minutes: 5
-        env:
-          DEBIAN_FRONTEND: noninteractive
-        run: |
-          if python3 -c 'import gi; gi.require_version("Gst", "1.0"); from gi.repository import Gst; import cryptography'; then
-            exit 0
-          fi
-          sudo apt-get -o DPkg::Lock::Timeout=60 install --yes --no-install-recommends \
-            gir1.2-gst-plugins-base-1.0 gir1.2-gstreamer-1.0 python3-cryptography python3-gi
+        run: >-
+          python -m pip install --disable-pip-version-check --only-binary=:all:
+          --retries 3 --timeout 30 cryptography==49.0.0
       - name: Run tests
-        run: python3 -m unittest discover -s tests -v
+        run: python -m unittest discover -s tests -v
       - name: Build twice and compare
         shell: bash
         run: |
