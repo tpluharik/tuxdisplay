@@ -1,4 +1,4 @@
-.TH TUXDISPLAY 1 "October 2026" "TuxDisplay 0.4.25" "User Commands"
+.TH TUXDISPLAY 1 "November 2026" "TuxDisplay 0.4.26" "User Commands"
 .SH NAME
 tuxdisplay \- use an iPad or Android tablet as a secondary Linux display
 .SH SYNOPSIS
@@ -31,7 +31,7 @@ that workspace is not an extension of the current desktop.
 Version 0.4.0 must not be used on GNOME Wayland because its touch path could
 abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions, 0.4.9 can
 stall capture while rearranging displays, and 0.4.11 can restart-loop a virtual
-monitor after capture failure. Use 0.4.25 or newer for all documented stability,
+monitor after capture failure. Use 0.4.26 or newer for all documented stability,
 input, rendering, compatibility-path security, and updater fixes.
 .PP
 The GTK manager and three-state indicator are one single-instance application.
@@ -111,10 +111,10 @@ Android ADB authorization, and USB gadget capability.
 Mutter creates a real virtual output named
 .BR Meta-0 .
 PipeWire captures only that output. GStreamer supplies H.264 to OpenDisplay
-and demand-driven JPEG frames to AVNC or the browser fallback. Changed frames
-are encoded immediately;
-while the desktop is unchanged, one liveness frame per second replaces continuous
-duplicate-frame encoding.
+and adaptively paced JPEG frames to AVNC or the browser fallback. Changed frames
+are encoded immediately and the newest frame is paced at the configured rate
+while content or tablet input remains active. After 500 milliseconds of quiet,
+the encoder and USB video path return to idle.
 .PP
 TuxDisplay remembers the complete logical arrangement under stable physical
 monitor identities because Mutter gives each new virtual output a different
@@ -186,7 +186,7 @@ DISPLAY_MODE=extend
 RESOLUTION=1920x1080
 FPS=30
 ENCODER=auto
-CURSOR_MODE=embedded
+CURSOR_MODE=overlay
 KEEP_AWAKE_WITH_LID_CLOSED=0
 BROWSER_ENABLED=0
 AVNC_DEVICE=
@@ -208,20 +208,21 @@ sets the virtual-monitor mode in Extend mode and the encoded raster in Mirror
 mode.
 .TP
 .B FPS
-accepts 15, 30, or 60 and controls the virtual-monitor and advertised receiver
-ceiling. The default is 30. Version 0.4.17 encodes damage-driven frames up to this
-limit and uses only a one-frame-per-second liveness pulse while content is static.
-Use 60 only when capture, sender, and receiver telemetry show that the host and
-tablet sustain it.
+accepts 15, 30, or 60 and controls the virtual-monitor and active receiver
+ceiling. The default is 30. Version 0.4.26 paces the newest changed frame at this
+rate while content or input remains active, then idles the video path after 500
+milliseconds of quiet. Use 60 only when encoded, sender, and receiver telemetry
+show that the host and tablet sustain it.
 .TP
 .B ENCODER
 accepts auto or software. Auto prefers VA-API H.264 acceleration and falls back
 to the tuned x264 path when the required elements or driver are unavailable.
 .TP
 .B CURSOR_MODE
-accepts embedded or overlay. Embedded is the compatible default and keeps the
-pointer in captured video. Overlay avoids full-frame work for pointer-only
-motion but requires a receiver that renders OpenDisplay cursor controls.
+accepts embedded or overlay. Overlay is the smooth default for new
+configurations and avoids full-frame work for pointer-only motion. Embedded
+keeps the pointer in captured video for receivers that do not render
+OpenDisplay cursor controls. Existing explicit selections are preserved.
 .TP
 .B KEEP_AWAKE_WITH_LID_CLOSED
 accepts 0 or 1. The default 0 disconnects the tablet, removes the virtual

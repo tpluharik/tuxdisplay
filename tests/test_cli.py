@@ -40,6 +40,7 @@ class TuxDisplayTests(unittest.TestCase):
         config = MODULE.ensure_config()
         self.assertEqual(config["DISPLAY_MODE"], "extend")
         self.assertEqual(config["ENCODER"], "auto")
+        self.assertEqual(config["CURSOR_MODE"], "overlay")
         self.assertEqual(config["RESOLUTION"], "1920x1080")
         self.assertEqual(config["FPS"], "30")
         self.assertEqual(config["KEEP_AWAKE_WITH_LID_CLOSED"], "0")
@@ -66,7 +67,7 @@ class TuxDisplayTests(unittest.TestCase):
         validated = MODULE.validate_config(values)
         self.assertEqual(validated["DISPLAY_MODE"], "extend")
         self.assertEqual(validated["ENCODER"], "auto")
-        self.assertEqual(validated["CURSOR_MODE"], "embedded")
+        self.assertEqual(validated["CURSOR_MODE"], "overlay")
         self.assertEqual(validated["RESOLUTION"], "1920x1080")
         self.assertEqual(validated["FPS"], "30")
         self.assertEqual(validated["KEEP_AWAKE_WITH_LID_CLOSED"], "0")
@@ -162,16 +163,17 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertIn('(\"mirror\", \"Mirror main screen\")', manager)
         self.assertIn('configuration["DISPLAY_MODE"] = mode', manager)
 
-    def test_wayland_pipeline_encodes_damage_driven_frames_without_unbounded_queues(self) -> None:
+    def test_wayland_pipeline_adaptively_paces_active_frames_without_unbounded_queues(self) -> None:
         daemon = SCRIPT.parents[1] / 'lib' / 'tuxdisplay' / 'tuxdisplay-wayland'
         text = daemon.read_text(encoding='utf-8')
         pipeline = daemon.parent / "video_pipeline.py"
         pipeline_text = pipeline.read_text(encoding="utf-8")
-        self.assertIn('keepalive-time={STATIC_KEEPALIVE_MS}', pipeline_text)
+        self.assertIn('keepalive-time={PIPEWIRE_KEEPALIVE_MS}', pipeline_text)
         self.assertIn('identity name=source_probe silent=true', pipeline_text)
         self.assertIn('identity name=capture_probe silent=true', pipeline_text)
-        self.assertNotIn('imagefreeze', pipeline_text)
-        self.assertNotIn('video/x-raw,framerate=', pipeline_text)
+        self.assertIn('imagefreeze name=frame_pacer', pipeline_text)
+        self.assertIn('video/x-raw,framerate={frames_per_second}/1', pipeline_text)
+        self.assertIn('valve name=activity_valve drop=true', pipeline_text)
         self.assertIn('max-size-buffers=1', pipeline_text)
         self.assertIn('valve name=jpeg_valve drop=true', pipeline_text)
         self.assertIn('drop-mode=transform-to-gap', pipeline_text)
@@ -180,10 +182,18 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertIn('appsink name=h264_sink emit-signals=true max-buffers=1 drop=false', pipeline_text)
         self.assertNotIn('limit_frame_rate', text)
         self.assertIn('"capture_fps": self.capture_fps()', text)
+        self.assertIn('"input_fps": self.input_fps()', text)
+        self.assertIn('"frame_pacing": "adaptive-active" if self.pacing_active else "adaptive-idle"', text)
+        self.assertLess(
+            text.index('self.activity_valve.set_property("drop", True)'),
+            text.index('result = pipeline.set_state(Gst.State.PLAYING)'),
+        )
         manager_text = SCRIPT.read_text(encoding="utf-8")
         self.assertIn('PipeWire source: {pipewire_fps} FPS', manager_text)
         self.assertIn('Pipeline input: {capture_fps} FPS', manager_text)
         self.assertIn('Encoded video: {encoded_fps} FPS', manager_text)
+        self.assertIn('Tablet input: {input_fps} events/s', manager_text)
+        self.assertIn('Frame pacing: {frame_pacing}', manager_text)
         service = SCRIPT.parents[1] / "lib" / "systemd" / "user" / "tuxdisplay.service"
         self.assertIn("Environment=TUXDISPLAY_MANAGED_SERVICE=1", service.read_text(encoding="utf-8"))
         self.assertIn('os.environ.get("TUXDISPLAY_MANAGED_SERVICE") != "1"', text)
@@ -207,8 +217,8 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertIn("self.opendisp.submit_cursor(cursor_x, cursor_y, True)", text)
         self.assertIn("position == self.last_physical_cursor_position", text)
         manager = SCRIPT.read_text(encoding="utf-8")
-        self.assertIn('(\"embedded\", \"Visible in video (compatible)\")', manager)
-        self.assertIn('(\"overlay\", \"Low-power OpenDisplay overlay\")', manager)
+        self.assertIn('(\"overlay\", \"Smooth OpenDisplay overlay (recommended)\")', manager)
+        self.assertIn('(\"embedded\", \"Visible in video (compatibility)\")', manager)
 
     def test_video_acceleration_has_automatic_fallback_and_gui_control(self) -> None:
         daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"

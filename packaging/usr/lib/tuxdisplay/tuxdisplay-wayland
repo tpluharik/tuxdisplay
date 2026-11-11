@@ -32,7 +32,7 @@ from display_source import map_letterboxed_point, primary_monitor_connector, str
 from cursor_tracking import MonitorGeometry, X11PointerTracker, monitor_geometry  # noqa: E402
 from opendisplay_usb import OpenDisplayPointerTranslator, OpenDisplayUSB, list_android_devices  # noqa: E402
 from tightvnc_usb import AndroidReverseManager, TightVNCServer  # noqa: E402
-from video_pipeline import encoder_candidates, pipeline_description  # noqa: E402
+from video_pipeline import ACTIVE_PACING_TAIL_MS, encoder_candidates, pipeline_description  # noqa: E402
 
 
 REMOTE_DEST = "org.gnome.Mutter.RemoteDesktop"
@@ -56,6 +56,7 @@ HARDWARE_FALLBACK_SECONDS = 86_400.0
 CURSOR_MODE_EMBEDDED = 1
 CURSOR_MODE_METADATA = 2
 CURSOR_POLL_INTERVAL_MS = 16
+PACING_CHECK_INTERVAL_MS = 100
 
 
 def unpack(value: Any) -> Any:
@@ -69,7 +70,7 @@ def read_config() -> tuple[str, str, str, int, int, int, int, int, bool, str]:
     values = {
         "DISPLAY_MODE": "extend",
         "ENCODER": "auto",
-        "CURSOR_MODE": "embedded",
+        "CURSOR_MODE": "overlay",
         "RESOLUTION": "1920x1080",
         "WEB_PORT": "6080",
         "VNC_PORT": "5900",
@@ -91,10 +92,10 @@ def read_config() -> tuple[str, str, str, int, int, int, int, int, bool, str]:
         vnc_port = int(values["VNC_PORT"])
         frames_per_second = int(values["FPS"])
     except (ValueError, TypeError):
-        return "extend", "auto", "embedded", 1920, 1080, 6080, 5900, 30, False, ""
+        return "extend", "auto", "overlay", 1920, 1080, 6080, 5900, 30, False, ""
     display_mode = values["DISPLAY_MODE"] if values["DISPLAY_MODE"] in {"extend", "mirror"} else "extend"
     encoder = values["ENCODER"] if values["ENCODER"] in {"auto", "software"} else "auto"
-    cursor_mode = values["CURSOR_MODE"] if values["CURSOR_MODE"] in {"embedded", "overlay"} else "embedded"
+    cursor_mode = values["CURSOR_MODE"] if values["CURSOR_MODE"] in {"embedded", "overlay"} else "overlay"
     if not (320 <= width <= 8192 and 240 <= height <= 8192):
         width, height = 1920, 1080
     if not 1024 <= port <= 65535:
@@ -400,7 +401,15 @@ class WaylandDisplay:
         self.pipewire_frame_times: deque[float] = deque()
         self.capture_frame_times: deque[float] = deque()
         self.encoded_frame_times: deque[float] = deque()
+        self.input_event_times: deque[float] = deque()
         self.capture_frame_lock = threading.Lock()
+        self.pacing_lock = threading.Lock()
+        self.pacing_active = False
+        self.pacing_started_monotonic = 0.0
+        self.last_pacing_activity_monotonic = 0.0
+        self.last_source_monotonic = 0.0
+        self.pacing_source = 0
+        self.activity_valve: Gst.Element | None = None
         self.cursor_visible = False
         self.cursor_metadata_updates = 0
         self.cursor_only_updates = 0
@@ -550,11 +559,15 @@ class WaylandDisplay:
         if self.pipeline is None or self.pipeline_recovery_requested:
             return GLib.SOURCE_CONTINUE
         now = time.monotonic()
+        if not self.pacing_active:
+            # A final source buffer can race with the closing activity valve.
+            # Quiet means intentional idle rather than a stalled encoder.
+            return GLib.SOURCE_CONTINUE
         if self.last_video_monotonic > 0:
-            age = now - self.last_video_monotonic
+            age = now - max(self.last_video_monotonic, self.pacing_started_monotonic)
             threshold = PIPELINE_STALL_SECONDS
         else:
-            age = now - self.pipeline_started_monotonic
+            age = now - max(self.pipeline_started_monotonic, self.pacing_started_monotonic)
             threshold = PIPELINE_START_GRACE_SECONDS
         if age >= threshold:
             self.request_pipeline_service_recovery(age)
@@ -841,6 +854,7 @@ class WaylandDisplay:
                 )
                 return
             self.pipeline = None
+            self.activity_valve = None
         try:
             self.start_pipeline()
         except (GLib.Error, RuntimeError) as error:
@@ -940,7 +954,14 @@ class WaylandDisplay:
         h264_sink = pipeline.get_by_name("h264_sink")
         source_probe = pipeline.get_by_name("source_probe")
         capture_probe = pipeline.get_by_name("capture_probe")
-        if jpeg_sink is None or h264_sink is None or source_probe is None or capture_probe is None:
+        activity_valve = pipeline.get_by_name("activity_valve")
+        if (
+            jpeg_sink is None
+            or h264_sink is None
+            or source_probe is None
+            or capture_probe is None
+            or activity_valve is None
+        ):
             pipeline.set_state(Gst.State.NULL)
             raise RuntimeError("Could not create the encoded video sinks")
         source_pad = source_probe.get_static_pad("sink")
@@ -952,6 +973,19 @@ class WaylandDisplay:
         capture_pad.add_probe(Gst.PadProbeType.BUFFER, self.on_capture_buffer)
         jpeg_sink.connect("new-sample", self.on_sample)
         h264_sink.connect("new-sample", self.on_h264_sample)
+        self.activity_valve = activity_valve
+        self.pipeline_started_monotonic = time.monotonic()
+        self.last_video_monotonic = 0.0
+        self.last_source_monotonic = 0.0
+        self.pacing_started_monotonic = 0.0
+        self.last_pacing_activity_monotonic = 0.0
+        self.pacing_active = False
+        self.activity_valve.set_property("drop", True)
+        with self.capture_frame_lock:
+            self.pipewire_frame_times.clear()
+            self.capture_frame_times.clear()
+            self.encoded_frame_times.clear()
+            self.input_event_times.clear()
         messages = pipeline.get_bus()
         result = pipeline.set_state(Gst.State.PLAYING)
         if result == Gst.StateChangeReturn.FAILURE:
@@ -961,6 +995,7 @@ class WaylandDisplay:
                 error, debug = failure.parse_error()
                 detail = f": {error.message}; {debug}"
             pipeline.set_state(Gst.State.NULL)
+            self.activity_valve = None
             raise RuntimeError(f"PipeWire video pipeline could not start{detail}")
         state_result, _state, _pending = pipeline.get_state(Gst.SECOND)
         if state_result == Gst.StateChangeReturn.FAILURE:
@@ -970,16 +1005,11 @@ class WaylandDisplay:
                 error, debug = failure.parse_error()
                 detail = f": {error.message}; {debug}"
             pipeline.set_state(Gst.State.NULL)
+            self.activity_valve = None
             raise RuntimeError(f"PipeWire video pipeline did not become ready{detail}")
         messages.add_signal_watch()
         messages.connect("message", self.on_pipeline_message)
         self.pipeline = pipeline
-        self.pipeline_started_monotonic = time.monotonic()
-        self.last_video_monotonic = 0.0
-        with self.capture_frame_lock:
-            self.pipewire_frame_times.clear()
-            self.capture_frame_times.clear()
-            self.encoded_frame_times.clear()
         self.video_encoder = encoder
         if encoder == "software" and self.hardware_unavailable:
             print(
@@ -1008,6 +1038,7 @@ class WaylandDisplay:
     def force_keyframe(self) -> None:
         if self.pipeline is None:
             return
+        self.activate_adaptive_pacing()
         try:
             event = GstVideo.video_event_new_upstream_force_key_unit(Gst.CLOCK_TIME_NONE, True, 0)
             encoder = self.pipeline.get_by_name("h264_encoder")
@@ -1053,8 +1084,37 @@ class WaylandDisplay:
     def on_source_buffer(self, _pad: Gst.Pad, info: Gst.PadProbeInfo) -> Gst.PadProbeReturn:
         buffer = info.get_buffer()
         if buffer is not None and buffer.get_size() > 0:
+            self.last_source_monotonic = time.monotonic()
             self._record_frame(self.pipewire_frame_times)
+            self.activate_adaptive_pacing()
         return Gst.PadProbeReturn.OK
+
+    def activate_adaptive_pacing(self) -> None:
+        """Pace only while pixels or input are changing, then return to idle."""
+        now = time.monotonic()
+        with self.pacing_lock:
+            if not self.pacing_active:
+                self.pacing_started_monotonic = now
+            self.last_pacing_activity_monotonic = now
+            self.pacing_active = True
+            valve = self.activity_valve
+        if valve is not None:
+            valve.set_property("drop", False)
+
+    def refresh_adaptive_pacing(self) -> bool:
+        if self.stopping:
+            return GLib.SOURCE_REMOVE
+        now = time.monotonic()
+        with self.pacing_lock:
+            should_idle = self.pacing_active and (
+                now - self.last_pacing_activity_monotonic >= ACTIVE_PACING_TAIL_MS / 1000.0
+            )
+            if should_idle:
+                self.pacing_active = False
+            valve = self.activity_valve
+        if should_idle and valve is not None:
+            valve.set_property("drop", True)
+        return GLib.SOURCE_CONTINUE
 
     def on_capture_buffer(self, _pad: Gst.Pad, info: Gst.PadProbeInfo) -> Gst.PadProbeReturn:
         buffer = info.get_buffer()
@@ -1096,6 +1156,9 @@ class WaylandDisplay:
 
     def encoded_fps(self) -> float:
         return self._recent_fps(self.encoded_frame_times)
+
+    def input_fps(self) -> float:
+        return self._recent_fps(self.input_event_times)
 
     def on_h264_sample(self, sink: Any) -> Gst.FlowReturn:
         sample = sink.emit("pull-sample")
@@ -1149,6 +1212,7 @@ class WaylandDisplay:
             previous_pipeline.get_bus().remove_signal_watch()
             previous_pipeline.set_state(Gst.State.NULL)
             self.pipeline = None
+            self.activity_valve = None
         try:
             self.start_pipeline(force_software=True)
         except (GLib.Error, RuntimeError) as error:
@@ -1165,6 +1229,8 @@ class WaylandDisplay:
 
     def handle_input(self, event: dict[str, Any]) -> None:
         kind = str(event.get("type", ""))
+        self._record_frame(self.input_event_times)
+        self.activate_adaptive_pacing()
         x = min(float(self.width), max(0.0, float(event.get("x", 0))))
         y = min(float(self.height), max(0.0, float(event.get("y", 0))))
         cursor_x = x / max(1, self.width)
@@ -1479,10 +1545,11 @@ class WaylandDisplay:
                 "display_mode": self.display_mode,
                 "source_connector": self.source_connector,
                 "video_encoder": self.video_encoder,
-                "frame_pacing": "damage-driven",
+                "frame_pacing": "adaptive-active" if self.pacing_active else "adaptive-idle",
                 "pipewire_fps": self.pipewire_fps(),
                 "capture_fps": self.capture_fps(),
                 "encoded_fps": self.encoded_fps(),
+                "input_fps": self.input_fps(),
                 "last_video_at": self.last_video_at,
                 "sender": self.opendisp.performance_stats() if self.opendisp is not None else {},
                 "cursor": {
@@ -1558,6 +1625,9 @@ class WaylandDisplay:
         if self.pipeline_watchdog_source:
             GLib.source_remove(self.pipeline_watchdog_source)
             self.pipeline_watchdog_source = 0
+        if self.pacing_source:
+            GLib.source_remove(self.pacing_source)
+            self.pacing_source = 0
         if self.telemetry_source:
             GLib.source_remove(self.telemetry_source)
             self.telemetry_source = 0
@@ -1584,6 +1654,7 @@ class WaylandDisplay:
         if self.pipeline is not None:
             pipeline = self.pipeline
             self.pipeline = None
+            self.activity_valve = None
 
             def stop_pipeline() -> None:
                 pipeline.set_state(Gst.State.NULL)
@@ -1626,6 +1697,7 @@ class WaylandDisplay:
             self.prepare_opendisplay()
             self.start_pipeline()
             self.pipeline_watchdog_source = GLib.timeout_add_seconds(2, self.check_video_pipeline_liveness)
+            self.pacing_source = GLib.timeout_add(PACING_CHECK_INTERVAL_MS, self.refresh_adaptive_pacing)
             self.start_vnc()
             self.start_opendisplay()
             self.start_cursor_tracking()

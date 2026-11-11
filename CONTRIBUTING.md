@@ -52,8 +52,8 @@ For a package candidate:
 
 ~~~sh
 ./build-deb.sh
-dpkg-deb --info dist/tuxdisplay_0.4.25_all.deb
-dpkg-deb --contents dist/tuxdisplay_0.4.25_all.deb
+dpkg-deb --info dist/tuxdisplay_0.4.26_all.deb
+dpkg-deb --contents dist/tuxdisplay_0.4.26_all.deb
 ~~~
 
 The build replaces the package for the current version, normalizes the complete staging tree, and regenerates `dist/SHA256SUMS`. Keep `SOURCE_DATE_EPOCH` equal to the newest Debian changelog timestamp. Build products are ignored and belong in GitHub Releases, never source control.
@@ -74,8 +74,8 @@ For GNOME Wayland changes:
 10. Exercise update checking with valid, expired, malformed, wrong-key, and digest-mismatched manifests; verify the root helper independently re-downloads and rejects every mismatch.
 11. On Android, test unauthorized and authorized ADB states, receiver launch after service start, cable reconnect, and cleanup with `adb forward --list`.
 12. In Mirror mode, verify the current primary physical monitor is captured, no `Meta-0` is created, and tap/drag/scroll land correctly with both matching and mismatched aspect ratios.
-13. At 15, 30, and 60 FPS, compare measured capture rate, `source_fps`, `sent_fps`, and receiver FPS after at least ten seconds of sustained motion. Confirm 0.4.17+ falls toward the one-frame-per-second liveness cadence and low bitrate on static content, and confirm `drops` and `recoveries` remain zero in the supported baseline.
-14. After the receiver has reported health, stop only its statistics while leaving control traffic and active video running. Confirm 0.4.16+ marks the data stale and requests a keyframe near eight seconds, then reconnects near fifteen seconds. Confirm a receiver that never sends statistics is not disconnected by this watchdog.
+13. At 15, 30, and 60 FPS, compare distinct PipeWire rate, paced encode rate, `source_fps`, `sent_fps`, and receiver FPS after at least ten seconds of sustained motion. Confirm 0.4.26+ reaches the selected cadence during motion, enters `adaptive-idle` after quiet content, and keeps `drops` and `recoveries` at zero in the supported baseline.
+14. After the receiver has reported health, stop only its statistics while leaving control traffic and active video running. Confirm the data is marked stale and a keyframe is requested near eight seconds, then the receiver reconnects near fifteen seconds. Confirm a receiver that never sends statistics and a connected receiver during intentional video idle are not disconnected by this watchdog.
 15. Stop the encoded-frame callback and receiver statistics together. Confirm 0.4.17+ requests one service recycle near eight seconds, records a 24-hour software fallback after a hardware stall, and suppresses a third automatic recycle within ten minutes.
 16. Exercise both automatic and software encoding. If VA-API is available, confirm Automatic selects it; if initialization fails, confirm the service falls back once to x264 without a restart loop.
 17. Move the pointer across the tablet without changing desktop content. Confirm `Cursor transport` reports `xwayland-poll`, its update count rises smoothly, and capture/source rates remain near the quiet-screen cadence.

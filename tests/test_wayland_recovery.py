@@ -31,6 +31,9 @@ class WaylandPipelineRecoveryTests(unittest.TestCase):
         display.pipeline = object()
         display.pipeline_started_monotonic = 90.0
         display.last_video_monotonic = 100.0
+        display.last_source_monotonic = 100.0
+        display.pacing_active = True
+        display.pacing_started_monotonic = 90.0
         display.pipeline_health = {}
         display.receiver_stats = {"fps": 15, "stale": False}
         display.client_lock = threading.Lock()
@@ -40,6 +43,70 @@ class WaylandPipelineRecoveryTests(unittest.TestCase):
         display.pipeline_recovery_path = directory / "pipeline-recovery.json"
         display.write_client_state = mock.Mock()
         return display
+
+    def test_intentionally_idle_pipeline_does_not_request_recovery(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            display = self.make_display(Path(temporary))
+            display.pacing_active = False
+            display.last_source_monotonic = 150.0
+            display.request_pipeline_service_recovery = mock.Mock()
+
+            with mock.patch.object(MODULE.time, "monotonic", return_value=200.0):
+                result = display.check_video_pipeline_liveness()
+
+            self.assertEqual(result, MODULE.GLib.SOURCE_CONTINUE)
+            display.request_pipeline_service_recovery.assert_not_called()
+
+    def test_pipeline_that_never_encodes_while_activity_continues_recovers(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            display = self.make_display(Path(temporary))
+            display.pacing_active = True
+            display.last_video_monotonic = 0.0
+            display.last_source_monotonic = 100.0
+            display.pacing_started_monotonic = 100.0
+            display.request_pipeline_service_recovery = mock.Mock()
+
+            with mock.patch.object(MODULE.time, "monotonic", return_value=112.1):
+                result = display.check_video_pipeline_liveness()
+
+            self.assertEqual(result, MODULE.GLib.SOURCE_CONTINUE)
+            display.request_pipeline_service_recovery.assert_called_once_with(mock.ANY)
+
+    def test_new_activity_after_long_idle_gets_a_fresh_watchdog_window(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            display = self.make_display(Path(temporary))
+            display.last_video_monotonic = 100.0
+            display.pacing_started_monotonic = 200.0
+            display.request_pipeline_service_recovery = mock.Mock()
+
+            with mock.patch.object(MODULE.time, "monotonic", return_value=202.0):
+                result = display.check_video_pipeline_liveness()
+
+            self.assertEqual(result, MODULE.GLib.SOURCE_CONTINUE)
+            display.request_pipeline_service_recovery.assert_not_called()
+
+    def test_adaptive_pacing_closes_after_the_activity_tail(self) -> None:
+        display = MODULE.WaylandDisplay.__new__(MODULE.WaylandDisplay)
+        display.stopping = False
+        display.pacing_lock = threading.Lock()
+        display.pacing_active = False
+        display.pacing_started_monotonic = 0.0
+        display.last_pacing_activity_monotonic = 0.0
+        display.activity_valve = mock.Mock()
+
+        with mock.patch.object(MODULE.time, "monotonic", return_value=10.0):
+            display.activate_adaptive_pacing()
+        display.activity_valve.set_property.assert_called_once_with("drop", False)
+
+        with mock.patch.object(MODULE.time, "monotonic", return_value=10.4):
+            display.refresh_adaptive_pacing()
+        self.assertTrue(display.pacing_active)
+
+        with mock.patch.object(MODULE.time, "monotonic", return_value=10.5):
+            result = display.refresh_adaptive_pacing()
+        self.assertEqual(result, MODULE.GLib.SOURCE_CONTINUE)
+        self.assertFalse(display.pacing_active)
+        display.activity_valve.set_property.assert_called_with("drop", True)
 
     def test_stalled_encoded_frame_callback_requests_service_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

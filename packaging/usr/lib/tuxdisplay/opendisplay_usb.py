@@ -31,6 +31,7 @@ MAX_USBMUX_MESSAGE_SIZE = 1 << 20
 ADB_TIMEOUT = 8
 RECEIVER_STATS_RECOVERY_SECONDS = 8.0
 RECEIVER_STATS_RECONNECT_SECONDS = 15.0
+RECEIVER_VIDEO_ACTIVE_SECONDS = 2.0
 CURSOR_WIDTH = 24
 CURSOR_HEIGHT = 32
 
@@ -370,7 +371,7 @@ def list_usb_devices() -> list[dict[str, Any]]:
             connection,
             {
                 "MessageType": "ListDevices",
-                "ClientVersionString": "tuxdisplay-0.4.25",
+                "ClientVersionString": "tuxdisplay-0.4.26",
                 "ProgName": "tuxdisplay",
                 "kLibUSBMuxVersion": 3,
             },
@@ -398,7 +399,7 @@ def connect_usb_device(device_id: int, port: int = OPENDISPLAY_PORT) -> socket.s
             connection,
             {
                 "MessageType": "Connect",
-                "ClientVersionString": "tuxdisplay-0.4.25",
+                "ClientVersionString": "tuxdisplay-0.4.26",
                 "ProgName": "tuxdisplay",
                 "DeviceID": int(device_id),
                 # usbmuxd's plist protocol carries the TCP port in network order.
@@ -534,12 +535,16 @@ class OpenDisplayUSB:
 
     def performance_stats(self) -> dict[str, int | float]:
         with self.video_state_lock:
+            active = (
+                self.last_video_submitted > 0
+                and time.monotonic() - self.last_video_submitted < RECEIVER_VIDEO_ACTIVE_SECONDS
+            )
             return {
                 "queued": self.video_queue.qsize(),
                 "drops": self.dropped_frames,
                 "recoveries": self.queue_recoveries,
-                "source_fps": round(self.source_fps, 1),
-                "sent_fps": round(self.sent_fps, 1),
+                "source_fps": round(self.source_fps, 1) if active else 0.0,
+                "sent_fps": round(self.sent_fps, 1) if active else 0.0,
             }
 
     def reported_capture_fps(self) -> float:
@@ -574,7 +579,16 @@ class OpenDisplayUSB:
         with self.connection_lock:
             connected = self.connection is not None
         with self.video_state_lock:
+            was_idle = (
+                self.last_video_submitted <= 0
+                or now - self.last_video_submitted >= RECEIVER_VIDEO_ACTIVE_SECONDS
+            )
             self.last_video_submitted = now
+            if was_idle and self.stats_watchdog_armed:
+                # A receiver may stop reporting health while no video exists.
+                # Give it a fresh reporting window when active video resumes.
+                self.last_stats_received = now
+                self.stats_recovery_requested = False
             if is_idr:
                 self.latest_keyframe = normalized
             if not connected:
@@ -670,6 +684,12 @@ class OpenDisplayUSB:
         age = 0.0
         with self.video_state_lock:
             if not self.stats_watchdog_armed:
+                return True
+            if (
+                self.last_video_submitted <= 0
+                or now - self.last_video_submitted >= RECEIVER_VIDEO_ACTIVE_SECONDS
+            ):
+                self.stats_recovery_requested = False
                 return True
             age = max(0.0, now - self.last_stats_received)
             if age >= RECEIVER_STATS_RECONNECT_SECONDS:
@@ -780,8 +800,8 @@ class OpenDisplayUSB:
             self.sent_fps = sent_frames / elapsed
         # OpenDisplay's `stalls` field is non-normative receiver telemetry and
         # is not itself evidence of a broken USB session. Compare the receiver
-        # with the measured damage-driven source rate, not the configured
-        # ceiling, and only after at least two source frames per second.
+        # with the measured paced sender rate, not the configured ceiling, and
+        # only after at least two source frames per second.
         source_active = queued_frames >= max(3, int(elapsed * 2))
         unhealthy = lost > 0 or (source_active and receiver_fps < max(1.0, self.source_fps * 0.25))
         if not unhealthy:

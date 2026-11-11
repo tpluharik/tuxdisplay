@@ -26,14 +26,14 @@ from update_security import UpdateSecurityError, fetch_manifest  # noqa: E402
 
 
 APP_NAME = "TuxDisplay"
-VERSION = "0.4.25"
+VERSION = "0.4.26"
 SERVICE = "tuxdisplay.service"
 USB_GADGET_ADDRESS = "10.55.0.1"
 UPDATE_HELPER = "/usr/lib/tuxdisplay/update-helper"
 DEFAULTS = {
     "DISPLAY_MODE": "extend",
     "ENCODER": "auto",
-    "CURSOR_MODE": "embedded",
+    "CURSOR_MODE": "overlay",
     "RESOLUTION": "1920x1080",
     "FPS": "30",
     "KEEP_AWAKE_WITH_LID_CLOSED": "0",
@@ -52,8 +52,8 @@ ENCODER_MODES = (
     ("software", "Software compatibility"),
 )
 CURSOR_MODES = (
-    ("embedded", "Visible in video (compatible)"),
-    ("overlay", "Low-power OpenDisplay overlay"),
+    ("overlay", "Smooth OpenDisplay overlay (recommended)"),
+    ("embedded", "Visible in video (compatibility)"),
 )
 RESOLUTIONS = (
     "1024x768",
@@ -1440,12 +1440,18 @@ def print_status() -> int:
     pipewire_fps = client_state.get("pipewire_fps")
     capture_fps = client_state.get("capture_fps")
     encoded_fps = client_state.get("encoded_fps")
+    input_fps = client_state.get("input_fps")
+    frame_pacing = client_state.get("frame_pacing")
     if isinstance(pipewire_fps, (int, float)):
         print(f"PipeWire source: {pipewire_fps} FPS (fresh compositor frames)")
     if isinstance(capture_fps, (int, float)):
         print(f"Pipeline input: {capture_fps} FPS (after latest-frame queue)")
     if isinstance(encoded_fps, (int, float)):
         print(f"Encoded video: {encoded_fps} FPS (ready for USB)")
+    if isinstance(input_fps, (int, float)):
+        print(f"Tablet input: {input_fps} events/s")
+    if isinstance(frame_pacing, str) and frame_pacing:
+        print(f"Frame pacing: {frame_pacing}")
     if isinstance(sender, dict) and sender:
         print("Sender health: " + ", ".join(f"{key}={value}" for key, value in sender.items()))
     cursor = client_state.get("cursor", {})

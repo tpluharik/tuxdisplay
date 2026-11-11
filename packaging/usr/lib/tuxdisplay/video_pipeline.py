@@ -9,7 +9,8 @@ from collections.abc import Collection
 ENCODER_AUTO = "auto"
 ENCODER_SOFTWARE = "software"
 HARDWARE_ELEMENTS = frozenset({"vah264enc", "vapostproc"})
-STATIC_KEEPALIVE_MS = 1000
+PIPEWIRE_KEEPALIVE_MS = 0
+ACTIVE_PACING_TAIL_MS = 500
 
 
 def encoder_candidates(preference: str, available_elements: Collection[str]) -> list[str]:
@@ -37,7 +38,7 @@ def pipeline_description(
     frames_per_second: int,
     encoder: str,
 ) -> str:
-    """Build a damage-driven, bounded-latency capture and encoding graph."""
+    """Build an adaptively paced, bounded-latency capture and encoding graph."""
     bitrate_kbps = target_bitrate_kbps(width, height, frames_per_second)
     key_int_max = keyframe_interval(frames_per_second)
     queue = "queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream"
@@ -74,11 +75,14 @@ def pipeline_description(
         raise ValueError(f"unsupported video encoder: {encoder}")
 
     return (
-        f"pipewiresrc path={node_id} do-timestamp=true keepalive-time={STATIC_KEEPALIVE_MS} "
+        f"pipewiresrc path={node_id} do-timestamp=true keepalive-time={PIPEWIRE_KEEPALIVE_MS} "
         "min-buffers=2 max-buffers=8 "
         "! identity name=source_probe silent=true "
         f"! {queue} name=capture_queue "
         "! identity name=capture_probe silent=true "
+        "! imagefreeze name=frame_pacer is-live=true allow-replace=true "
+        f"! video/x-raw,framerate={frames_per_second}/1 "
+        "! valve name=activity_valve drop=true drop-mode=transform-to-gap "
         "! tee name=displaytee "
         + browser_branch
         + h264_branch

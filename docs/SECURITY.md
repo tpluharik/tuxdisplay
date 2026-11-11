@@ -2,9 +2,9 @@
 
 TuxDisplay captures a desktop and can inject input. Treat every receiver path as remote-desktop access even when the tablet is beside the computer.
 
-## Secure defaults in 0.4.25
+## Secure defaults in 0.4.26
 
-- Direct OpenDisplay remains the default and the H.264 capture/rendering path is unchanged.
+- Direct OpenDisplay remains the default; its H.264 path now adaptively paces active motion and idles on a static desktop.
 - Browser fallback is disabled until explicitly enabled.
 - AVNC compatibility is disabled until one authorized Android serial is explicitly selected.
 - No browser or VNC service listens on a LAN wildcard address.

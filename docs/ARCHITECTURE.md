@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes TuxDisplay 0.4.25. The project has two display backends and five receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor; compatibility receivers are opt-in.
+This document describes TuxDisplay 0.4.26. The project has two display backends and five receiver paths. The GNOME Wayland backend can either extend the current desktop or mirror its primary physical monitor; compatibility receivers are opt-in.
 
 ## GNOME Wayland data flow
 
@@ -21,8 +21,8 @@ Selected monitor
                  └─ authenticated HTTP/MJPEG → tablet browser
 
 Pointer rendering
-  ├─ default: embedded by Mutter → H.264 video → every receiver
-  └─ optional: XWayland position → cursor + cursorImg → OpenDisplay overlay
+  ├─ default: XWayland position → cursor + cursorImg → OpenDisplay overlay
+  └─ compatibility: embedded by Mutter → H.264 video → every receiver
 
 OpenDisplay touch / Pencil / scroll or AVNC pointer / keyboard
   └─ guarded input translation
@@ -50,7 +50,7 @@ Switching between Extend and Mirror performs one explicit service restart. The p
 
 ### Capture and encoding
 
-Mutter provides a damage-driven PipeWire stream for the selected virtual or physical monitor. One GStreamer pipeline accepts each changed frame immediately, emits the most recent buffer only once per second while the source is otherwise quiet as a liveness probe, scales it into the configured stream raster, and splits the frames:
+Mutter provides a damage-driven PipeWire stream for the selected virtual or physical monitor. One GStreamer pipeline accepts each changed frame immediately. An `imagefreeze` pacer repeats that newest buffer at the configured 15, 30, or 60 FPS while changed pixels, tablet input, or a keyframe request keep the activity valve open. A 100 ms controller closes the valve 500 ms after the last activity. PipeWire keepalive frames are disabled, so the encoder and USB sender return to true idle on an unchanged desktop. Active frames are scaled into the configured stream raster and split into these branches:
 
 - the preferred OpenDisplay branch uses VA-API H.264 plus GPU post-processing when `vah264enc` and `vapostproc` are available;
 - the fallback branch uses zero-latency, sliced, multi-threaded x264;
@@ -58,9 +58,9 @@ Mutter provides a damage-driven PipeWire stream for the selected virtual or phys
 - VA-API uses variable bitrate so static or simple content does not consume the configured ceiling continuously;
 - the compatibility branch produces JPEG frames for the authenticated MJPEG endpoint and Tight/JPEG AVNC server, and closes its valve while neither receiver is viewing.
 
-Raw-frame queues hold at most one frame and leak downstream, so a slow encoder skips obsolete raw images instead of increasing latency. Encoded frames are never dropped independently because doing so would break the H.264 prediction chain: an encoded-queue overflow atomically discards the chain, gates transmission, and requests a fresh IDR. The selected 15, 30, or 60 FPS value caps the virtual monitor and advertised receiver cadence; it does not cause duplicate unchanged frames to be encoded at that rate. TuxDisplay caches the most recent keyframe to show a static desktop, but keeps later delta frames gated until a fresh session IDR arrives.
+Raw-frame queues hold at most one frame and leak downstream, so a slow encoder skips obsolete raw images instead of increasing latency. Encoded frames are never dropped independently because doing so would break the H.264 prediction chain: an encoded-queue overflow atomically discards the chain, gates transmission, and requests a fresh IDR. The selected 15, 30, or 60 FPS value caps the virtual monitor and active receiver cadence. Repeating the latest changed buffer during the short activity window prevents sparse compositor damage from appearing as 5–10 FPS motion without permanently encoding duplicate static frames. TuxDisplay caches the most recent keyframe to show a static desktop, but keeps later delta frames gated until a fresh session IDR arrives.
 
-The default screen-cast asks Mutter to embed the cursor, ensuring it is visible even on receivers that implement only video. The optional low-power overlay asks for cursor metadata instead. On GNOME's XWayland session, TuxDisplay then polls the pointer position every 16 ms, maps it through the selected monitor's XRandR geometry, deduplicates unchanged samples, and sends the OpenDisplay `cursor` control message. A generated compact PNG arrow is sent once per connection as `cursorImg`. This optional mode keeps a static desktop at the low-rate liveness cadence during pointer movement, but it is suitable only for receivers that implement the optional cursor controls.
+New configurations ask Mutter for cursor metadata and use the OpenDisplay cursor overlay. On GNOME's XWayland session, TuxDisplay polls the pointer position every 16 ms, maps it through the selected monitor's XRandR geometry, deduplicates unchanged samples, and sends the OpenDisplay `cursor` control message. A generated compact PNG arrow is sent once per connection as `cursorImg`. This keeps pointer motion independent from full-frame encoding. Embedded mode remains available for receivers that implement only video; existing explicit selections survive upgrades.
 
 Annex-B start-code inspection uses native byte search and leaves already-normalized access units untouched. The OpenDisplay writer sends framing, telemetry, and the encoded access unit without concatenating another full-frame copy. Recent PipeWire capture rate, sender source rate, sent rate, pending frames, drops, and chain recoveries are saved beside receiver telemetry for `tuxdisplay status`. The sender advertises measured capture rate in its health ping rather than repeating the configured ceiling as if it were observed performance.
 
@@ -76,7 +76,7 @@ Receiver telemetry drives staged recovery: first request a fresh IDR, then rebui
 
 The transport also tracks telemetry liveness separately from general control traffic. Once a receiver has sent a valid statistics report, eight seconds without another report during active video marks the saved counters stale, primes the cached keyframe, and requests a fresh IDR. At fifteen seconds the socket is shut down so both transport threads wake and the discovery loop establishes a new session. A receiver that never implements statistics does not arm this watchdog.
 
-A GLib timer independently watches the encoded-frame callback. This covers a whole-pipeline hang where GStreamer and receiver telemetry stop simultaneously, because transport-only evidence cannot distinguish that failure. After eight seconds without an encoded frame, TuxDisplay records the stale pipeline and asks systemd for one non-blocking service recycle. A hardware-pipeline hang records a 24-hour software fallback. The state file retains a rolling ten-minute recovery window; two automatic recycles are allowed and a third is suppressed, preventing a persistent driver failure from turning into a virtual-monitor restart loop.
+A GLib timer independently watches the encoded-frame callback only while adaptive pacing remains active. It deliberately ignores an unchanged desktop in `adaptive-idle`, including a final source buffer that races with the closing valve, and starts a fresh watchdog window whenever new activity wakes an idle stream. This covers a whole-pipeline hang during sustained activity, including a stream that never produces its first encoded frame, without treating intentional sleep or a single wake-up frame as failure. After eight seconds without an expected active frame, or the longer startup grace without a first frame while activity continues, TuxDisplay records the stale pipeline and asks systemd for one non-blocking service recycle. A hardware-pipeline hang records a 24-hour software fallback. The state file retains a rolling ten-minute recovery window; two automatic recycles are allowed and a third is suppressed, preventing a persistent driver failure from turning into a virtual-monitor restart loop.
 
 ### AVNC compatibility transport
 
@@ -164,7 +164,7 @@ The helper is privileged and launched through PolicyKit or its disabled-by-defau
 | `tuxdisplay-wayland` | Virtual-monitor or primary-monitor capture, encoding, browser server, and input |
 | `display_source.py` | Primary physical-monitor selection and aspect-aware mirrored input mapping |
 | `opendisplay_usb.py` | usbmuxd and ADB transports, OpenDisplay framing, reconnect, keyframe cache, and input translation |
-| `video_pipeline.py` | Latest-frame pacing, bounded GStreamer branches, bitrate selection, and VA-API/x264 graphs |
+| `video_pipeline.py` | Adaptive active/idle frame pacing, bounded GStreamer branches, bitrate selection, and VA-API/x264 graphs |
 | `tuxdisplay-session` | X11/Xvfb compatibility workspace |
 | `/usr/sbin/tuxdisplay-usb` | Privileged optional USB Ethernet gadget |
 

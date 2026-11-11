@@ -16,8 +16,9 @@ SPEC.loader.exec_module(MODULE)
 
 
 class VideoPipelineTests(unittest.TestCase):
-    def test_static_keepalive_is_low_rate(self) -> None:
-        self.assertEqual(MODULE.STATIC_KEEPALIVE_MS, 1000)
+    def test_idle_capture_does_not_create_keepalive_frames(self) -> None:
+        self.assertEqual(MODULE.PIPEWIRE_KEEPALIVE_MS, 0)
+        self.assertEqual(MODULE.ACTIVE_PACING_TAIL_MS, 500)
 
     def test_periodic_keyframes_are_rare_and_bounded(self) -> None:
         self.assertEqual(MODULE.keyframe_interval(15), 900)
@@ -36,14 +37,18 @@ class VideoPipelineTests(unittest.TestCase):
         self.assertEqual(MODULE.target_bitrate_kbps(2048, 1536, 60), 15099)
         self.assertEqual(MODULE.target_bitrate_kbps(8192, 8192, 60), 20000)
 
-    def test_hardware_graph_uses_damage_driven_frames_and_gpu_postprocessing(self) -> None:
+    def test_hardware_graph_adaptively_paces_changed_frames_and_uses_gpu_postprocessing(self) -> None:
         graph = MODULE.pipeline_description(42, 2048, 1536, 60, "hardware")
         self.assertIn("path=42", graph)
-        self.assertIn("keepalive-time=1000", graph)
+        self.assertIn("keepalive-time=0", graph)
         self.assertIn("identity name=source_probe silent=true", graph)
         self.assertIn("identity name=capture_probe silent=true", graph)
-        self.assertNotIn("imagefreeze", graph)
-        self.assertNotIn("video/x-raw,framerate=", graph)
+        self.assertIn("imagefreeze name=frame_pacer is-live=true allow-replace=true", graph)
+        self.assertIn("video/x-raw,framerate=60/1", graph)
+        self.assertIn("valve name=activity_valve drop=true drop-mode=transform-to-gap", graph)
+        self.assertLess(graph.index("capture_probe"), graph.index("frame_pacer"))
+        self.assertLess(graph.index("frame_pacer"), graph.index("activity_valve"))
+        self.assertLess(graph.index("activity_valve"), graph.index("displaytee"))
         self.assertIn("vapostproc add-borders=true", graph)
         self.assertIn("vah264enc name=h264_encoder", graph)
         self.assertIn("rate-control=vbr", graph)

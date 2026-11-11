@@ -21,6 +21,16 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.26" date="2026-11-11">
+      <description>
+        <ul>
+          <li>Pace active motion at the configured rate instead of exposing sparse compositor damage frames.</li>
+          <li>Return the video pipeline to idle after activity to preserve low static-screen GPU and USB use.</li>
+          <li>Use the smooth OpenDisplay cursor overlay by default for new configurations.</li>
+          <li>Report adaptive pacing and tablet-input rates in live diagnostics.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.25" date="2026-10-20">
       <description>
         <ul>

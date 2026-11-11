@@ -14,39 +14,39 @@ The first three commands are safe to paste into a bug report only after review. 
 
 ## Do not run 0.4.0 on GNOME Wayland
 
-TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. Older releases also had display-refresh and restart-loop failures. Upgrade to 0.4.25 or newer for the current stability and hardened compatibility/update paths:
+TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. Older releases also had display-refresh and restart-loop failures. Upgrade to 0.4.26 or newer for the current stability, active-motion pacing, and hardened compatibility/update paths:
 
 ~~~sh
-sudo apt install ./tuxdisplay_0.4.25_all.deb
+sudo apt install ./tuxdisplay_0.4.26_all.deb
 tuxdisplay restart
 ~~~
 
-Version 0.4.1 introduced guarded pointer translation. Versions 0.4.2–0.4.17 added cached-keyframe, receiver-health, layout-refresh, and bounded pipeline recovery. Versions 0.4.18–0.4.20 separated cursor work from video and added detailed performance telemetry. Version 0.4.21 added AVNC, 0.4.23 added safe lid-close cleanup, and 0.4.24 added guarded native single-finger touch. Version 0.4.25 disables browser/AVNC compatibility by default, scopes them to USB/one selected device, adds throttled authenticated sessions, and replaces the updater's user-owned staging path with an independently signed root-side download.
+Version 0.4.1 introduced guarded pointer translation. Versions 0.4.2–0.4.17 added cached-keyframe, receiver-health, layout-refresh, and bounded pipeline recovery. Versions 0.4.18–0.4.20 separated cursor work from video and added detailed performance telemetry. Version 0.4.21 added AVNC, 0.4.23 added safe lid-close cleanup, and 0.4.24 added guarded native single-finger touch. Version 0.4.25 hardened the opt-in compatibility and updater paths. Version 0.4.26 restores smooth configured-rate output during activity while returning the video path to idle after 500 ms of quiet.
 
 ## Motion on the tablet is jumpy
 
-Open the manager and leave **Video acceleration** on **Automatic (hardware preferred)**. Then run `tuxdisplay status` while moving a window or scrolling on the tablet. `Capture rate` is recent PipeWire output, `source_fps` is encoded H.264 entering the USB sender, `sent_fps` is the rate written to the cable, and the receiver line is OpenDisplay's own non-normative telemetry. Version 0.4.17 reports these separately so repeated or quiet frames cannot be mistaken for fresh desktop updates.
+Open the manager and leave **Video acceleration** on **Automatic (hardware preferred)**. Then run `tuxdisplay status` while moving a window or scrolling on the tablet. `PipeWire source` and `Pipeline input` count distinct compositor updates, `Encoded video` counts the adaptive paced output, `source_fps` is H.264 entering the USB sender, `sent_fps` is the rate written to the cable, and the receiver line is OpenDisplay's own non-normative telemetry.
 
-At a configured 30 FPS, values around 29–30 FPS during sustained motion are normal because the sender and receiver sample over independent time windows. The rates intentionally fall toward the one-frame-per-second liveness cadence while the desktop is static. A healthy session normally has `queued` near zero and keeps `drops=0` and `recoveries=0`.
+At a configured 30 FPS, encoded, cable, and receiver values around 29–30 FPS during sustained motion are normal because the sender and receiver sample over independent time windows. PipeWire may report fewer distinct damage frames; TuxDisplay repeats the newest one only during the active window so the tablet renderer remains regularly clocked. After 500 ms without changed pixels or input, rates intentionally fall to zero and `frame_pacing=adaptive-idle` confirms this is not a freeze. A healthy session normally has `queued` near zero and keeps `drops=0` and `recoveries=0`.
 
-Version 0.4.20 defaults to **Visible in video (compatible)** because OpenDisplay cursor controls are optional and some receiver builds ignore them. If the pointer is missing, select that mode in the manager or run `tuxdisplay configure --cursor-mode embedded --restart`. The optional **Low-power OpenDisplay overlay** should show `Cursor transport: mode=xwayland-poll`; its update count should rise while the pointer moves over the tablet even when video rates stay near the static cadence. If it reports `pipewire-metadata`, XWayland cursor polling was unavailable. For smoother full-window motion on a 4:3 iPad, select `1536x1152` in the manager or run `tuxdisplay configure --resolution 1536x1152 --restart`.
+Version 0.4.26 defaults new configurations to **Smooth OpenDisplay overlay**. It should show `Cursor transport: mode=xwayland-poll`; its update count should rise while the pointer moves over the tablet without forcing full-frame encoding. If it reports `pipewire-metadata`, XWayland cursor polling was unavailable. If the pointer is missing because the receiver ignores OpenDisplay cursor messages, select **Visible in video (compatibility)** or run `tuxdisplay configure --cursor-mode embedded --restart`. For smoother full-window motion on a 4:3 iPad, select `1536x1152` in the manager or run `tuxdisplay configure --resolution 1536x1152 --restart`.
 
 If receiver health changes to `stale=True`, TuxDisplay has stopped trusting the displayed receiver counters. It first sends a cached frame and requests a fresh IDR. If a valid report does not return within roughly seven more seconds, the USB session reconnects automatically; manually restarting the whole display service should no longer be necessary.
 
 If sender and receiver health both stop updating, version 0.4.17 treats the encoded-frame callback as stalled after eight seconds and recycles the service. When this happens on the hardware encoder, the restarted service uses software encoding for 24 hours. If diagnostics show `recovery=suppressed`, two automatic pipeline recoveries already occurred in ten minutes; TuxDisplay leaves the service stable instead of entering a restart loop. Stop it, collect the service log, and investigate PipeWire or the graphics driver before retrying.
 
 - If `drops=0`, `recoveries=0`, and sender and receiver rates agree during motion, the USB transport is healthy.
-- If `source_fps` is low during motion, select 30 FPS or a smaller resolution such as 1024×768.
+- If `encoded_fps` is low during continuous motion while `frame_pacing=adaptive-active`, select 30 FPS or a smaller resolution such as 1024×768.
 - If `source_fps` is healthy but `sent_fps` is lower or recoveries rise, reconnect with another data-capable cable or USB port.
 - If automatic acceleration falls back to software, confirm the VA-API GStreamer elements are installed and usable; `tuxdisplay doctor` and the service log identify the active encoder.
 
-The 60 FPS option is deliberately not the default. At 2048×1536 it requires roughly twice the encode work and bitrate of 30 FPS; use it only when live sender telemetry remains stable. If the manager says 60 FPS but `source_fps` remains much lower during sustained motion, the host encoder cannot maintain that preset. Use 30 FPS or reduce the resolution rather than accepting inconsistent motion.
+The 60 FPS option is deliberately not the default. At 2048×1536 it requires roughly twice the active encode work and bitrate of 30 FPS; use it only when live sender telemetry remains stable. If the manager says 60 FPS but `encoded_fps` and `source_fps` remain much lower during sustained motion, the host encoder cannot maintain that preset. Use 30 FPS or reduce the resolution rather than accepting inconsistent motion.
 
 ## OpenDisplay shows a black screen
 
 1. Confirm `tuxdisplay status` reports GNOME Wayland mode and a running service.
 2. Confirm the package version is at least 0.4.8 when using Android.
-3. Check that `Capture rate` and `Sender health` appear after the receiver connects. On 0.4.17 or newer, a static desktop produces a low-rate liveness frame instead of continuously consuming the configured FPS ceiling.
+3. Check that pipeline and sender telemetry appear after the receiver connects. On 0.4.26 or newer, a static desktop reports `frame_pacing=adaptive-idle`; move a window to reopen the active video path.
 4. Close and reopen OpenDisplay so the sender performs a new handshake.
 5. Run `tuxdisplay restart` if the app does not reconnect.
 
@@ -172,7 +172,7 @@ journalctl --user -u tuxdisplay.service --since "5 minutes ago"
 
 The selected device state must be `device`, and the reverse list should contain `tcp:5900 tcp:5900` only for that serial. If absent, unlock Android, approve USB debugging, reselect the device, and restart TuxDisplay. If another application owns Android port 5900, set a different `VNC_PORT`, restart, and use the same port in AVNC.
 
-If AVNC connects but remains black, confirm `tuxdisplay status` reports `AVNC USB: connected` and move a window on the selected monitor. The JPEG branch starts only after the RFB handshake and is damage-driven. Disconnect and reconnect AVNC after a TuxDisplay resolution change.
+If AVNC connects but remains black, confirm `tuxdisplay status` reports `AVNC USB: connected` and move a window on the selected monitor. The JPEG branch starts only after the RFB handshake and follows adaptive active/idle pacing. Disconnect and reconnect AVNC after a TuxDisplay resolution change.
 
 AVNC is a compatibility path. At high resolutions its JPEG conversion may use more CPU and run below OpenDisplay's hardware-H.264 frame rate. Tight/JPEG limits each encoded rectangle to 2048 pixels wide, so use `2048x1536` or a smaller preset; `2160x1620` is OpenDisplay-only. Start with 1280×800 for a 16:10 Android tablet or 1024×768 for diagnosis. Use OpenDisplay when smooth motion and power efficiency are more important than installing from F-Droid.
 

@@ -258,6 +258,7 @@ class OpenDisplayProtocolTests(unittest.TestCase):
         )
         sender.stats_watchdog_armed = True
         sender.last_stats_received = 100.0
+        sender.last_video_submitted = 108.0
 
         # Pings, pongs, pointer events, or other control messages do not refresh
         # receiver video statistics, so they cannot hide a frozen renderer.
@@ -266,8 +267,54 @@ class OpenDisplayProtocolTests(unittest.TestCase):
         self.assertEqual(controls, [{"type": "receiverStatsStale", "age": 8.1}])
         self.assertTrue(sender.stats_recovery_requested)
 
+        sender.last_video_submitted = 115.0
         self.assertFalse(sender._check_receiver_stats_watchdog(115.1))
         self.assertTrue(sender.session_failed.is_set())
+
+    def test_missing_receiver_stats_are_ignored_while_video_is_intentionally_idle(self) -> None:
+        recoveries = []
+        sender = MODULE.OpenDisplayUSB(
+            1920,
+            1080,
+            30,
+            lambda _message: None,
+            lambda _connected, _status: None,
+            lambda: recoveries.append("idr"),
+        )
+        sender.stats_watchdog_armed = True
+        sender.last_stats_received = 100.0
+        sender.last_video_submitted = 100.0
+        sender.source_fps = 55.0
+        sender.sent_fps = 54.0
+
+        with mock.patch.object(MODULE.time, "monotonic", return_value=120.0):
+            self.assertTrue(sender._check_receiver_stats_watchdog())
+            performance = sender.performance_stats()
+        self.assertEqual(recoveries, [])
+        self.assertFalse(sender.session_failed.is_set())
+        self.assertEqual(performance["source_fps"], 0.0)
+        self.assertEqual(performance["sent_fps"], 0.0)
+
+    def test_video_resuming_after_idle_gets_a_fresh_stats_window(self) -> None:
+        sender = MODULE.OpenDisplayUSB(
+            1920,
+            1080,
+            30,
+            lambda _message: None,
+            lambda _connected, _status: None,
+            lambda: None,
+        )
+        sender.connection = object()
+        sender.waiting_for_idr = False
+        sender.stats_watchdog_armed = True
+        sender.last_stats_received = 90.0
+        sender.last_video_submitted = 90.0
+
+        with mock.patch.object(MODULE.time, "monotonic", return_value=100.0):
+            sender.submit_video(b"\x00\x00\x00\x01\x41payload", 1)
+
+        self.assertEqual(sender.last_stats_received, 100.0)
+        self.assertFalse(sender.stats_recovery_requested)
 
     def test_fresh_stats_clear_missing_stats_recovery_state(self) -> None:
         sender = MODULE.OpenDisplayUSB(
@@ -315,6 +362,7 @@ class OpenDisplayProtocolTests(unittest.TestCase):
         sender.queued_video_since_stats = 120
         sender.sent_video_since_stats = 118
         sender.stats_window_started -= 4
+        sender.last_video_submitted = MODULE.time.monotonic()
 
         self.assertTrue(sender._handle_stats({"fps": 29, "curLost": 0}))
 

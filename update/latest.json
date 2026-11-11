@@ -1,10 +1,10 @@
 {
-  "expires_at": "2027-10-21T18:38:55Z",
-  "notes": "Security hardening: opt-in USB-only browser, authenticated device-scoped AVNC, signed root-side updates, reproducible packaging.",
-  "package_name": "tuxdisplay_0.4.25_all.deb",
-  "package_url": "https://github.com/tpluharik/tuxdisplay/releases/download/v0.4.25/tuxdisplay_0.4.25_all.deb",
-  "release_url": "https://github.com/tpluharik/tuxdisplay/releases/tag/v0.4.25",
-  "sha256": "9b63fc39571c1f648580bb29a76b488bd2f0c702ea4955a2e9302370d0623771",
-  "signature": "xXWz5MJudv8Sci03LPde/p6LqZ1E8QusWPpN7Ew22xBow6W75Tg+4uyZJdgWgRVtW2+mmyAhFJAltG2OkdNBDQ==",
-  "version": "0.4.25"
+  "expires_at": "2027-11-12T15:52:23Z",
+  "notes": "Adaptive active-motion pacing for smooth tablet rendering, true static-screen idle, independent cursor overlay, and idle-safe receiver health.",
+  "package_name": "tuxdisplay_0.4.26_all.deb",
+  "package_url": "https://github.com/tpluharik/tuxdisplay/releases/download/v0.4.26/tuxdisplay_0.4.26_all.deb",
+  "release_url": "https://github.com/tpluharik/tuxdisplay/releases/tag/v0.4.26",
+  "sha256": "bd13a34e7d1f53b286ec712f35d83651cc1f2aa1989b5bf1b6903eee1e23402e",
+  "signature": "47GbsukHU7l2PhKJxsKo1AQAdjuVuDJ4hLIR4gdYW0GPgsUXbhiXcAk7E4i3fgIMAaVkmRuufN2Q4/vePymWBQ==",
+  "version": "0.4.26"
 }

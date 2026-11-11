@@ -48,7 +48,7 @@ TuxDisplay is an independent Linux sender for that public protocol. The separate
 
 [MultiVNC](https://github.com/bk138/multivnc) is another open-source Android VNC viewer and remains a useful compatibility option. AVNC was selected as TuxDisplay's documented default because its current F-Droid package, focused Android interface, gesture controls, and explicit Tight support fit the embedded Tight/JPEG server directly. TuxDisplay implements standard RFB rather than an AVNC-private protocol, so other Tight-capable viewers may work, but only AVNC is documented and covered by protocol tests.
 
-The AVNC path is not expected to outperform OpenDisplay: it reuses the CPU JPEG compatibility branch rather than the VA-API H.264 stream and lacks receiver-specific health telemetry. TuxDisplay 0.4.25 makes it opt-in for one selected ADB serial and adds a fresh VNC-authenticated, rate-limited, single-client session on loopback. Tight/JPEG also limits an individual encoded rectangle to 2048 pixels wide. Its value is availability, conventional protocol support, and easy open-source installation—not maximum frame rate.
+The AVNC path is not expected to outperform OpenDisplay: it reuses the CPU JPEG compatibility branch rather than the VA-API H.264 stream and lacks receiver-specific health telemetry. TuxDisplay 0.4.25 made it opt-in for one selected ADB serial and added a fresh VNC-authenticated, rate-limited, single-client session on loopback. Version 0.4.26 applies the same bounded active/idle pacing before the JPEG branch, but OpenDisplay remains the performance path. Tight/JPEG also limits an individual encoded rectangle to 2048 pixels wide. Its value is availability, conventional protocol support, and easy open-source installation—not maximum frame rate.
 
 ### Weylus
 
@@ -98,7 +98,7 @@ AVNC/Tight-JPEG, Safari/MJPEG, and X11/noVNC are not as efficient as the OpenDis
 
 ### 5. The sender exposes the performance path
 
-TuxDisplay reports the selected encoder, measured PipeWire source rate, post-queue rate, completed encode rate, cable send rate, queue depth, dropped access units, chain recoveries, cursor-control updates, and receiver telemetry. Version 0.4.17 encodes changed frames immediately, reduces a static desktop to a low-rate liveness pulse, and uses variable bitrate on VA-API. Version 0.4.18 moves the cursor through OpenDisplay's overlay control path; version 0.4.19 independently tracks physical pointer movement and directly echoes tablet input, preventing pointer-only motion from requiring a full monitor encode. Version 0.4.20 refreshes stage-by-stage telemetry once per second and bypasses inactive browser conversion work. Version 0.4.21 wakes that conversion branch only for an AVNC or browser viewer. These diagnostics distinguish a slow compositor capture from an encoder, USB, receiver, or cursor-path bottleneck without claiming a universal latency advantage.
+TuxDisplay reports the selected encoder, measured PipeWire source rate, post-queue rate, completed encode rate, tablet-input rate, adaptive pacing state, cable send rate, queue depth, dropped access units, chain recoveries, cursor-control updates, and receiver telemetry. Version 0.4.26 clocks the newest changed frame at the selected rate during activity but closes the video path after 500 ms of quiet, avoiding both sparse-motion playback and permanent static-frame encoding. Version 0.4.18 moved the cursor through OpenDisplay's overlay control path; version 0.4.19 independently tracks physical pointer movement and directly echoes tablet input, preventing pointer-only motion from requiring a full monitor encode. Version 0.4.20 added stage-by-stage telemetry and bypassed inactive browser conversion work; version 0.4.21 wakes that branch only for an AVNC or browser viewer. These diagnostics distinguish a slow compositor capture from an encoder, USB, receiver, or cursor-path bottleneck without claiming a universal latency advantage.
 
 ## Where alternatives are stronger
 
@@ -138,7 +138,7 @@ This statement is specific and supportable. TuxDisplay should not claim universa
 5. Design crash-safe multi-touch and Pencil pressure/tilt around explicit contact identities.
 6. Evaluate encrypted browser and VeNCrypt transport without weakening the simple offline USB workflow; per-device AVNC authentication and browser interface binding shipped in 0.4.25.
 7. Publish signed, reproducible packages and a supported GNOME/distribution matrix.
-8. Benchmark the measured 0.4.15 frame-pacing baseline against open-source alternatives on several GPUs, tablet generations, and cables.
+8. Benchmark the adaptive 0.4.26 active-motion pacing against open-source alternatives on several GPUs, tablet generations, and cables.
 
 ## Bottom line
 

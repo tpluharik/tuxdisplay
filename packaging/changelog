@@ -1,3 +1,19 @@
+tuxdisplay (0.4.26) unstable; urgency=high
+
+  * Restore smooth configured-rate output while pixels or tablet input are
+    active instead of exposing Mutter's sparse damage cadence to the receiver.
+  * Close the paced encoder path after 500 ms of inactivity and disable
+    PipeWire keepalive frames so a static desktop does not consume sustained
+    GPU or USB bandwidth.
+  * Pause receiver-health timeouts during intentional video idle and grant a
+    fresh reporting window when activity resumes.
+  * Make the independent OpenDisplay cursor overlay the default for new
+    configurations while retaining embedded-cursor compatibility on request.
+  * Report tablet input rate and adaptive active/idle pacing state alongside
+    existing source, encoded, cable, and receiver telemetry.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Wed, 11 Nov 2026 18:00:00 +0100
+
 tuxdisplay (0.4.25) unstable; urgency=high
 
   * Disable browser and AVNC compatibility by default without changing the
