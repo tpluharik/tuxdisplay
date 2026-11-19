@@ -16,9 +16,14 @@ SPEC.loader.exec_module(MODULE)
 
 
 class VideoPipelineTests(unittest.TestCase):
-    def test_idle_capture_does_not_create_keepalive_frames(self) -> None:
-        self.assertEqual(MODULE.PIPEWIRE_KEEPALIVE_MS, 0)
-        self.assertEqual(MODULE.ACTIVE_PACING_TAIL_MS, 500)
+    def test_capture_clock_is_bounded_and_activity_tail_absorbs_sparse_updates(self) -> None:
+        self.assertEqual(MODULE.PIPEWIRE_KEEPALIVE_MAX_FPS, 30)
+        self.assertEqual(MODULE.pipewire_keepalive_interval_ms(15), 66)
+        self.assertEqual(MODULE.pipewire_keepalive_interval_ms(30), 33)
+        self.assertEqual(MODULE.pipewire_keepalive_interval_ms(60), 33)
+        self.assertEqual(MODULE.SPARSE_PACING_TAIL_MS, 250)
+        self.assertEqual(MODULE.ACTIVE_PACING_TAIL_MS, 1250)
+        self.assertEqual(MODULE.ACTIVE_MOTION_INTERVAL_MS, 1000)
 
     def test_periodic_keyframes_are_rare_and_bounded(self) -> None:
         self.assertEqual(MODULE.keyframe_interval(15), 900)
@@ -40,7 +45,7 @@ class VideoPipelineTests(unittest.TestCase):
     def test_hardware_graph_adaptively_paces_changed_frames_and_uses_gpu_postprocessing(self) -> None:
         graph = MODULE.pipeline_description(42, 2048, 1536, 60, "hardware")
         self.assertIn("path=42", graph)
-        self.assertIn("keepalive-time=0", graph)
+        self.assertIn("keepalive-time=33", graph)
         self.assertIn("identity name=source_probe silent=true", graph)
         self.assertIn("identity name=capture_probe silent=true", graph)
         self.assertIn("imagefreeze name=frame_pacer is-live=true allow-replace=true", graph)

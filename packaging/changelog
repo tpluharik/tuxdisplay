@@ -1,3 +1,34 @@
+tuxdisplay (0.4.29) unstable; urgency=high
+
+  * Keep the PipeWire capture graph clocked at a bounded 30 Hz so Mutter and
+    the tablet decoder do not fall into an irregular low-rate cadence.
+  * Identify copied PipeWire keepalive buffers by sequence number and exclude
+    them from fresh-frame telemetry and encoder wake decisions.
+  * Use a short tail for isolated updates and extend it automatically during
+    sustained motion, keeping smooth output without periodic idle encode bursts.
+  * Preserve the 0.4.28 safe-disconnect, compositor-session, and monitor-layout
+    protections without adding capture rebuilds or service restart loops.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Thu, 19 Nov 2026 10:00:32 +0100
+
+tuxdisplay (0.4.28) unstable; urgency=high
+
+  * Stop immediately when Mutter closes the RemoteDesktop session instead of
+    leaving stale input, capture, and USB objects attached to the compositor.
+  * Replace automatic capture rebuilds and service restarts with one safe
+    disconnect so a failed wake cannot repeatedly remove and recreate Meta-0.
+  * Preserve the existing PipeWire stream across monitor rearrangements and
+    request a fresh keyframe without changing GStreamer state.
+  * Bound the OpenDisplay transport join to keep service shutdown inside the
+    compositor cleanup window even after a broken usbmuxd connection.
+  * Retain the 24-hour software fallback after a hardware encoder stall and
+    expose safe-disconnect wake telemetry for diagnosis.
+  * Match OpenDisplay's quiet-screen telemetry cadence and require sustained
+    transmitted video before requesting a recovery keyframe, avoiding periodic
+    idle-screen jolts and unnecessary encoder work.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Thu, 19 Nov 2026 09:25:11 +0100
+
 tuxdisplay (0.4.27) unstable; urgency=high
 
   * Detect an idle-to-active wake that produces no encoded frame instead of

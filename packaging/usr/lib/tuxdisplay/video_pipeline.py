@@ -9,8 +9,10 @@ from collections.abc import Collection
 ENCODER_AUTO = "auto"
 ENCODER_SOFTWARE = "software"
 HARDWARE_ELEMENTS = frozenset({"vah264enc", "vapostproc"})
-PIPEWIRE_KEEPALIVE_MS = 0
-ACTIVE_PACING_TAIL_MS = 500
+PIPEWIRE_KEEPALIVE_MAX_FPS = 30
+SPARSE_PACING_TAIL_MS = 250
+ACTIVE_PACING_TAIL_MS = 1250
+ACTIVE_MOTION_INTERVAL_MS = 1000
 
 
 def encoder_candidates(preference: str, available_elements: Collection[str]) -> list[str]:
@@ -31,6 +33,12 @@ def keyframe_interval(frames_per_second: int) -> int:
     return min(1024, max(1, frames_per_second) * 60)
 
 
+def pipewire_keepalive_interval_ms(frames_per_second: int) -> int:
+    """Keep the capture clock responsive without driving it above 30 Hz."""
+    keepalive_fps = min(PIPEWIRE_KEEPALIVE_MAX_FPS, max(1, frames_per_second))
+    return max(1, 1000 // keepalive_fps)
+
+
 def pipeline_description(
     node_id: int,
     width: int,
@@ -41,6 +49,7 @@ def pipeline_description(
     """Build an adaptively paced, bounded-latency capture and encoding graph."""
     bitrate_kbps = target_bitrate_kbps(width, height, frames_per_second)
     key_int_max = keyframe_interval(frames_per_second)
+    pipewire_keepalive_ms = pipewire_keepalive_interval_ms(frames_per_second)
     queue = "queue max-size-buffers=1 max-size-bytes=0 max-size-time=0 leaky=downstream"
     browser_branch = (
         "displaytee. ! valve name=jpeg_valve drop=true drop-mode=transform-to-gap "
@@ -75,7 +84,7 @@ def pipeline_description(
         raise ValueError(f"unsupported video encoder: {encoder}")
 
     return (
-        f"pipewiresrc path={node_id} do-timestamp=true keepalive-time={PIPEWIRE_KEEPALIVE_MS} "
+        f"pipewiresrc path={node_id} do-timestamp=true keepalive-time={pipewire_keepalive_ms} "
         "min-buffers=2 max-buffers=8 "
         "! identity name=source_probe silent=true "
         f"! {queue} name=capture_queue "

@@ -32,7 +32,13 @@ from display_source import map_letterboxed_point, primary_monitor_connector, str
 from cursor_tracking import MonitorGeometry, X11PointerTracker, monitor_geometry  # noqa: E402
 from opendisplay_usb import OpenDisplayPointerTranslator, OpenDisplayUSB, list_android_devices  # noqa: E402
 from tightvnc_usb import AndroidReverseManager, TightVNCServer  # noqa: E402
-from video_pipeline import ACTIVE_PACING_TAIL_MS, encoder_candidates, pipeline_description  # noqa: E402
+from video_pipeline import (  # noqa: E402
+    ACTIVE_MOTION_INTERVAL_MS,
+    ACTIVE_PACING_TAIL_MS,
+    SPARSE_PACING_TAIL_MS,
+    encoder_candidates,
+    pipeline_description,
+)
 
 
 REMOTE_DEST = "org.gnome.Mutter.RemoteDesktop"
@@ -50,16 +56,13 @@ DISPLAY_IFACE = "org.gnome.Mutter.DisplayConfig"
 PROPERTIES_IFACE = "org.freedesktop.DBus.Properties"
 PIPELINE_STALL_SECONDS = 8.0
 PIPELINE_START_GRACE_SECONDS = 12.0
-PIPELINE_RECOVERY_WINDOW_SECONDS = 600.0
-MAX_PIPELINE_RECOVERIES = 2
 HARDWARE_FALLBACK_SECONDS = 86_400.0
 CURSOR_MODE_EMBEDDED = 1
 CURSOR_MODE_METADATA = 2
 CURSOR_POLL_INTERVAL_MS = 16
 PACING_CHECK_INTERVAL_MS = 100
 WAKE_KEYFRAME_SECONDS = 0.5
-WAKE_CAPTURE_REFRESH_SECONDS = 1.5
-WAKE_CAPTURE_REFRESH_COOLDOWN_SECONDS = 15.0
+WAKE_SAFE_DISCONNECT_SECONDS = 4.0
 
 
 def unpack(value: Any) -> Any:
@@ -410,12 +413,15 @@ class WaylandDisplay:
         self.pacing_active = False
         self.pacing_started_monotonic = 0.0
         self.last_pacing_activity_monotonic = 0.0
+        self.pacing_tail_ms = SPARSE_PACING_TAIL_MS
         self.wake_started_monotonic = 0.0
         self.wake_stage = ""
-        self.last_wake_refresh_monotonic = 0.0
         self.wake_keyframe_requests = 0
-        self.wake_pipeline_recoveries = 0
+        self.wake_safe_disconnects = 0
         self.last_source_monotonic = 0.0
+        self.last_pipewire_sequence: int | None = None
+        self.last_capture_sequence: int | None = None
+        self.pipewire_keepalive_buffers = 0
         self.pacing_source = 0
         self.activity_gate_pad: Gst.Pad | None = None
         self.cursor_visible = False
@@ -456,7 +462,10 @@ class WaylandDisplay:
         self.http_servers: list[TuxDisplayServer] = []
         self.http_threads: list[threading.Thread] = []
         self.fatal_error: str | None = None
+        self.safe_disconnect_reason = ""
         self.remote_session = ""
+        self.remote_session_alive = False
+        self.remote_session_subscription = 0
         self.stream_path = ""
         self.mapping_id = ""
         self.node_id: int | None = None
@@ -487,79 +496,32 @@ class WaylandDisplay:
         temporary.chmod(0o600)
         temporary.replace(self.pipeline_recovery_path)
 
-    def request_pipeline_service_recovery(self, age: float) -> None:
+    def request_safe_disconnect(self, reason: str, health: dict[str, Any]) -> None:
+        """Stop once without asking systemd to recreate the virtual monitor."""
         if self.pipeline_recovery_requested or self.stopping:
             return
         self.pipeline_recovery_requested = True
-        if os.environ.get("TUXDISPLAY_MANAGED_SERVICE") != "1":
-            self.pipeline_health = {
-                "stale": True,
-                "age_seconds": round(age, 1),
-                "recovery": "manual restart required",
-            }
-            self.write_client_state()
-            print(
-                "TuxDisplay video recovery requires a manual restart outside the installed service",
-                file=sys.stderr,
-                flush=True,
-            )
-            return
-        now = time.time()
-        recovery_state = self.load_pipeline_recovery_state()
-        raw_restarts = recovery_state.get("restarts", [])
-        restarts: list[float] = []
-        if isinstance(raw_restarts, list):
-            for value in raw_restarts:
-                try:
-                    timestamp = float(value)
-                except (TypeError, ValueError, OverflowError):
-                    continue
-                if now - PIPELINE_RECOVERY_WINDOW_SECONDS < timestamp <= now:
-                    restarts.append(timestamp)
-        if len(restarts) >= MAX_PIPELINE_RECOVERIES:
-            self.pipeline_health = {
-                "stale": True,
-                "age_seconds": round(age, 1),
-                "recovery": "suppressed",
-            }
-            self.write_client_state()
-            print(
-                "TuxDisplay video recovery suppressed after two pipeline stalls in ten minutes",
-                file=sys.stderr,
-                flush=True,
-            )
-            return
-        restarts.append(now)
-        recovery_state["restarts"] = restarts
-        if self.video_encoder == "hardware" and self.encoder_preference == "auto":
-            recovery_state["force_software_until"] = now + HARDWARE_FALLBACK_SECONDS
-        self.save_pipeline_recovery_state(recovery_state)
-        self.pipeline_health = {
-            "stale": True,
-            "age_seconds": round(age, 1),
-            "recovery": "service restart",
-        }
+        self.pipeline_health = dict(health)
+        self.pipeline_health["recovery"] = "safe disconnect"
         with self.client_lock:
             self.receiver_stats = dict(self.receiver_stats)
             self.receiver_stats["stale"] = True
             self.write_client_state()
-        print(
-            f"TuxDisplay encoded video stopped for {age:.1f}s; restarting the service with bounded recovery",
-            file=sys.stderr,
-            flush=True,
+        self.safe_disconnect_reason = reason
+        print(f"TuxDisplay {reason}; disconnecting safely", file=sys.stderr, flush=True)
+        self.loop.quit()
+
+    def request_pipeline_safe_disconnect(self, age: float) -> None:
+        if self.pipeline_recovery_requested or self.stopping:
+            return
+        if self.video_encoder == "hardware" and self.encoder_preference == "auto":
+            recovery_state = self.load_pipeline_recovery_state()
+            recovery_state["force_software_until"] = time.time() + HARDWARE_FALLBACK_SECONDS
+            self.save_pipeline_recovery_state(recovery_state)
+        self.request_safe_disconnect(
+            f"encoded video stopped for {age:.1f}s",
+            {"stale": True, "age_seconds": round(age, 1)},
         )
-        try:
-            subprocess.Popen(
-                ["/usr/bin/systemctl", "--user", "--no-block", "restart", "tuxdisplay.service"],
-                stdin=subprocess.DEVNULL,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-                start_new_session=True,
-            )
-        except OSError as error:
-            self.pipeline_health["recovery"] = "failed"
-            self.write_client_state()
-            print(f"TuxDisplay could not request automatic video recovery: {error}", file=sys.stderr, flush=True)
 
     def check_video_pipeline_liveness(self) -> bool:
         if self.stopping:
@@ -568,7 +530,7 @@ class WaylandDisplay:
             return GLib.SOURCE_CONTINUE
         now = time.monotonic()
         if not self.pacing_active:
-            # A final source buffer can race with the closing activity valve.
+            # A final source buffer can race with the closing activity gate.
             # Quiet means intentional idle rather than a stalled encoder.
             return GLib.SOURCE_CONTINUE
         if self.last_video_monotonic > 0:
@@ -578,7 +540,7 @@ class WaylandDisplay:
             age = now - max(self.pipeline_started_monotonic, self.pacing_started_monotonic)
             threshold = PIPELINE_START_GRACE_SECONDS
         if age >= threshold:
-            self.request_pipeline_service_recovery(age)
+            self.request_pipeline_safe_disconnect(age)
         return GLib.SOURCE_CONTINUE
 
     def call(
@@ -606,6 +568,16 @@ class WaylandDisplay:
 
     def create_monitor(self) -> None:
         self.remote_session = self.call(REMOTE_DEST, REMOTE_ROOT, REMOTE_ROOT_IFACE, "CreateSession").unpack()[0]
+        self.remote_session_alive = True
+        self.remote_session_subscription = self.bus.signal_subscribe(
+            REMOTE_DEST,
+            REMOTE_SESSION_IFACE,
+            "Closed",
+            self.remote_session,
+            None,
+            Gio.DBusSignalFlags.NONE,
+            self.handle_remote_session_closed,
+        )
         session_id = self.get_property(REMOTE_DEST, self.remote_session, REMOTE_SESSION_IFACE, "SessionId")
         cast_session = self.call(
             CAST_DEST,
@@ -686,6 +658,27 @@ class WaylandDisplay:
         GLib.source_remove(timeout_id)
         if self.node_id is None:
             raise RuntimeError("Timed out waiting for Mutter's PipeWire stream")
+
+    def handle_remote_session_closed(
+        self,
+        _connection: Gio.DBusConnection,
+        _sender: str,
+        _path: str,
+        _interface: str,
+        _signal: str,
+        _values: GLib.Variant,
+    ) -> None:
+        self.mark_remote_session_closed()
+
+    def mark_remote_session_closed(self) -> None:
+        """Record compositor ownership loss and leave the Wayland session alone."""
+        self.remote_session_alive = False
+        if self.stopping:
+            return
+        self.request_safe_disconnect(
+            "GNOME closed the virtual display session",
+            {"session": "closed", "stale": True},
+        )
 
     def get_display_state(self) -> tuple[int, Any, Any, Any]:
         serial, monitors, logical_monitors, properties = self.call(
@@ -847,44 +840,20 @@ class WaylandDisplay:
         return GLib.SOURCE_REMOVE
 
     def refresh_capture_after_layout_change(self) -> None:
-        """Reopen the PipeWire node without recreating Meta-0 or USB."""
-        self.refresh_capture_pipeline("monitor arrangement changed")
-
-    def refresh_capture_pipeline(self, reason: str) -> bool:
-        """Reopen capture without recreating the virtual monitor or USB session."""
-        print(f"TuxDisplay {reason}; refreshing the video stream", file=sys.stderr, flush=True)
-        previous_pipeline = self.pipeline
-        if previous_pipeline is not None:
-            previous_pipeline.get_bus().remove_signal_watch()
-            result = previous_pipeline.set_state(Gst.State.NULL)
-            if result == Gst.StateChangeReturn.FAILURE:
-                previous_pipeline.get_bus().add_signal_watch()
-                print(
-                    "TuxDisplay video refresh was skipped because the old pipeline did not stop",
-                    file=sys.stderr,
-                    flush=True,
-                )
-                return False
-            self.pipeline = None
-            self.activity_gate_pad = None
-        try:
-            self.start_pipeline()
-        except (GLib.Error, RuntimeError) as error:
-            # Keep the virtual monitor and service alive.  Exiting here used
-            # to trigger systemd's restart policy, repeatedly creating and
-            # removing Meta-0 and destabilizing the whole Wayland session.
-            print(
-                f"TuxDisplay video refresh failed; keeping the monitor alive: {error}",
-                file=sys.stderr,
-                flush=True,
-            )
-            return False
+        """Keep the existing PipeWire node alive across logical rearrangement."""
+        if not self.remote_session_alive or self.stopping:
+            return
+        print(
+            "TuxDisplay monitor arrangement changed; preserving the active video stream",
+            file=sys.stderr,
+            flush=True,
+        )
+        self.activate_adaptive_pacing(verify_wake=False, sustained=True)
         if self.opendisp is not None:
             self.opendisp.recover_video()
         else:
             self.force_keyframe()
         self.refresh_cursor_tracking_geometry()
-        return True
 
     def refresh_cursor_tracking_geometry(self) -> None:
         connector = self.source_connector if self.display_mode == "mirror" else "Meta-0"
@@ -992,8 +961,12 @@ class WaylandDisplay:
         self.pipeline_started_monotonic = time.monotonic()
         self.last_video_monotonic = 0.0
         self.last_source_monotonic = 0.0
+        self.last_pipewire_sequence = None
+        self.last_capture_sequence = None
+        self.pipewire_keepalive_buffers = 0
         self.pacing_started_monotonic = 0.0
         self.last_pacing_activity_monotonic = 0.0
+        self.pacing_tail_ms = SPARSE_PACING_TAIL_MS
         self.pacing_active = False
         self.wake_started_monotonic = 0.0
         self.wake_stage = ""
@@ -1058,7 +1031,7 @@ class WaylandDisplay:
         # input changed. Open the gate briefly, but do not arm capture recovery;
         # otherwise a quiet receiver asking for cached video could refresh the
         # whole capture graph every cooldown interval.
-        self.activate_adaptive_pacing(verify_wake=False)
+        self.activate_adaptive_pacing(verify_wake=False, sustained=True)
         self._send_force_keyframe()
 
     def _send_force_keyframe(self) -> None:
@@ -1107,12 +1080,34 @@ class WaylandDisplay:
             while frame_times and frame_times[0] < cutoff:
                 frame_times.popleft()
 
+    @staticmethod
+    def pipewire_sequence(buffer: Gst.Buffer) -> int | None:
+        """Return a stable PipeWire sequence, or None when unavailable."""
+        sequence = getattr(buffer, "offset", None)
+        invalid = getattr(Gst, "BUFFER_OFFSET_NONE", (1 << 64) - 1)
+        if not isinstance(sequence, int) or sequence < 0 or sequence == invalid:
+            return None
+        return sequence
+
     def on_source_buffer(self, _pad: Gst.Pad, info: Gst.PadProbeInfo) -> Gst.PadProbeReturn:
         buffer = info.get_buffer()
         if buffer is not None and buffer.get_size() > 0:
-            self.last_source_monotonic = time.monotonic()
+            sequence = self.pipewire_sequence(buffer)
+            if sequence is not None and sequence == self.last_pipewire_sequence:
+                # pipewiresrc copies its last GstBuffer for keepalive output and
+                # preserves the PipeWire sequence. Keep the graph clocked, but
+                # do not treat that copy as changed pixels or wake the encoder.
+                self.pipewire_keepalive_buffers += 1
+                return Gst.PadProbeReturn.OK
+            if sequence is not None:
+                self.last_pipewire_sequence = sequence
+            now = time.monotonic()
+            sustained = self.last_source_monotonic > 0.0 and (
+                now - self.last_source_monotonic <= ACTIVE_MOTION_INTERVAL_MS / 1000.0
+            )
+            self.last_source_monotonic = now
             self._record_frame(self.pipewire_frame_times)
-            self.activate_adaptive_pacing()
+            self.activate_adaptive_pacing(sustained=sustained)
         return Gst.PadProbeReturn.OK
 
     def on_activity_buffer(self, _pad: Gst.Pad, _info: Gst.PadProbeInfo) -> Gst.PadProbeReturn:
@@ -1121,15 +1116,18 @@ class WaylandDisplay:
             active = self.pacing_active
         return Gst.PadProbeReturn.OK if active else Gst.PadProbeReturn.DROP
 
-    def activate_adaptive_pacing(self, verify_wake: bool = True) -> None:
+    def activate_adaptive_pacing(self, verify_wake: bool = True, sustained: bool = False) -> None:
         """Pace only while pixels or input are changing, then return to idle."""
         now = time.monotonic()
         with self.pacing_lock:
             if not self.pacing_active:
                 self.pacing_started_monotonic = now
+                self.pacing_tail_ms = SPARSE_PACING_TAIL_MS
                 if verify_wake:
                     self.wake_started_monotonic = now
                     self.wake_stage = "waiting"
+            if sustained:
+                self.pacing_tail_ms = ACTIVE_PACING_TAIL_MS
             self.last_pacing_activity_monotonic = now
             self.pacing_active = True
 
@@ -1138,48 +1136,31 @@ class WaylandDisplay:
             return GLib.SOURCE_REMOVE
         now = time.monotonic()
         request_keyframe = False
-        refresh_capture = False
+        safe_disconnect = False
         with self.pacing_lock:
             wake_age = now - self.wake_started_monotonic if self.wake_stage else 0.0
             if self.wake_stage == "waiting" and wake_age >= WAKE_KEYFRAME_SECONDS:
                 self.wake_stage = "keyframe"
                 self.wake_keyframe_requests += 1
                 request_keyframe = True
-            if self.wake_stage == "keyframe" and wake_age >= WAKE_CAPTURE_REFRESH_SECONDS:
-                if self.last_wake_refresh_monotonic == 0.0 or (
-                    now - self.last_wake_refresh_monotonic >= WAKE_CAPTURE_REFRESH_COOLDOWN_SECONDS
-                ):
-                    self.wake_stage = "recovering"
-                    self.last_wake_refresh_monotonic = now
-                    self.wake_pipeline_recoveries += 1
-                    refresh_capture = True
-                else:
-                    # Keep the buffer gate open so the existing bounded liveness
-                    # watchdog can take over if the local refresh also stalls.
-                    self.wake_stage = "watchdog"
+            if self.wake_stage == "keyframe" and wake_age >= WAKE_SAFE_DISCONNECT_SECONDS:
+                self.wake_stage = "disconnecting"
+                self.wake_safe_disconnects += 1
+                safe_disconnect = True
             wake_pending = bool(self.wake_stage)
             should_idle = self.pacing_active and not wake_pending and (
-                now - self.last_pacing_activity_monotonic >= ACTIVE_PACING_TAIL_MS / 1000.0
+                now - self.last_pacing_activity_monotonic >= self.pacing_tail_ms / 1000.0
             )
             if should_idle:
                 self.pacing_active = False
+                self.pacing_tail_ms = SPARSE_PACING_TAIL_MS
         if request_keyframe:
             self._send_force_keyframe()
-        if refresh_capture:
-            refreshed = self.refresh_capture_pipeline("adaptive wake produced no encoded frame")
-            with self.pacing_lock:
-                if not refreshed:
-                    self.wake_stage = "watchdog"
-                self.pipeline_health = dict(self.pipeline_health)
-                if not refreshed:
-                    self.pipeline_health["wake_recovery"] = "capture refresh failed"
-                elif self.wake_stage:
-                    self.pipeline_health["wake_recovery"] = "capture refreshed"
-                else:
-                    # The new pipeline may already have delivered its first
-                    # encoded frame before start_pipeline() returned.
-                    self.pipeline_health.pop("wake_recovery", None)
-            self.write_client_state()
+        if safe_disconnect:
+            self.request_safe_disconnect(
+                "video did not resume after adaptive idle",
+                {"stale": True, "wake_age_seconds": round(wake_age, 1)},
+            )
         return GLib.SOURCE_CONTINUE
 
     def on_capture_buffer(self, _pad: Gst.Pad, info: Gst.PadProbeInfo) -> Gst.PadProbeReturn:
@@ -1202,6 +1183,11 @@ class WaylandDisplay:
         if buffer.get_size() == 0:
             self.cursor_only_updates += 1
             return Gst.PadProbeReturn.DROP
+        sequence = self.pipewire_sequence(buffer)
+        if sequence is not None and sequence == self.last_capture_sequence:
+            return Gst.PadProbeReturn.OK
+        if sequence is not None:
+            self.last_capture_sequence = sequence
         self._record_frame(self.capture_frame_times)
         return Gst.PadProbeReturn.OK
 
@@ -1300,12 +1286,20 @@ class WaylandDisplay:
         return GLib.SOURCE_REMOVE
 
     def remote_input(self, method: str, signature: str, values: tuple[Any, ...]) -> None:
-        self.call(REMOTE_DEST, self.remote_session, REMOTE_SESSION_IFACE, method, GLib.Variant(signature, values))
+        if not self.remote_session_alive:
+            return
+        try:
+            self.call(REMOTE_DEST, self.remote_session, REMOTE_SESSION_IFACE, method, GLib.Variant(signature, values))
+        except GLib.Error as error:
+            message = str(error)
+            if "UnknownMethod" in message or "Object does not exist" in message:
+                self.mark_remote_session_closed()
+            raise
 
     def handle_input(self, event: dict[str, Any]) -> None:
         kind = str(event.get("type", ""))
         self._record_frame(self.input_event_times)
-        self.activate_adaptive_pacing()
+        self.activate_adaptive_pacing(sustained=True)
         x = min(float(self.width), max(0.0, float(event.get("x", 0))))
         y = min(float(self.height), max(0.0, float(event.get("y", 0))))
         cursor_x = x / max(1, self.width)
@@ -1608,8 +1602,9 @@ class WaylandDisplay:
         pipeline_health.update(
             {
                 "wake_state": wake_stage or ("active" if pacing_active else "idle"),
+                "pacing_tail_ms": self.pacing_tail_ms,
                 "wake_keyframes": self.wake_keyframe_requests,
-                "wake_recoveries": self.wake_pipeline_recoveries,
+                "wake_safe_disconnects": self.wake_safe_disconnects,
             }
         )
         if wake_stage:
@@ -1637,6 +1632,7 @@ class WaylandDisplay:
                 "video_encoder": self.video_encoder,
                 "frame_pacing": "adaptive-active" if pacing_active else "adaptive-idle",
                 "pipewire_fps": self.pipewire_fps(),
+                "pipewire_keepalives": self.pipewire_keepalive_buffers,
                 "capture_fps": self.capture_fps(),
                 "encoded_fps": self.encoded_fps(),
                 "input_fps": self.input_fps(),
@@ -1730,6 +1726,9 @@ class WaylandDisplay:
         if self.display_signal_subscription:
             self.bus.signal_unsubscribe(self.display_signal_subscription)
             self.display_signal_subscription = 0
+        if self.remote_session_subscription:
+            self.bus.signal_unsubscribe(self.remote_session_subscription)
+            self.remote_session_subscription = 0
         # Close the socket first so an appsink callback cannot hold pipeline
         # shutdown while its writer is still inside a cable send.
         if self.opendisp is not None:
@@ -1767,11 +1766,12 @@ class WaylandDisplay:
             thread.join(timeout=1)
         self.http_servers.clear()
         self.http_threads.clear()
-        if self.remote_session:
+        if self.remote_session and self.remote_session_alive:
             try:
                 self.call(REMOTE_DEST, self.remote_session, REMOTE_SESSION_IFACE, "Stop", timeout_ms=2_000)
             except GLib.Error:
                 pass
+        self.remote_session_alive = False
         if pipeline_stop_thread is not None:
             pipeline_stop_thread.join(timeout=2)
             if pipeline_stop_thread.is_alive():
@@ -1821,6 +1821,8 @@ class WaylandDisplay:
 
             signal.signal(signal.SIGTERM, quit_loop)
             signal.signal(signal.SIGINT, quit_loop)
+            if self.safe_disconnect_reason:
+                return
             self.loop.run()
             if self.fatal_error is not None:
                 raise RuntimeError(self.fatal_error)

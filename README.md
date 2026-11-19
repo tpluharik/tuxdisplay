@@ -13,7 +13,7 @@ The Debian package also includes:
 - an optional USB Ethernet gadget helper for hardware with a device-capable USB controller.
 
 > [!IMPORTANT]
-> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its unguarded touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, 0.4.4 can unnecessarily reconnect a healthy low-FPS session, 0.4.9 can stall capture while displays are rearranged, 0.4.11 can enter a virtual-monitor restart loop, and 0.4.26 can remain on a cached frame after a failed idle wake. Install 0.4.27 or newer for the current stability, adaptive active-motion pacing, and hardened opt-in browser, AVNC, updater, and PolicyKit boundaries.
+> Do not use TuxDisplay 0.4.0 on GNOME Wayland. Its unguarded touch path could abort the compositor. Version 0.4.3 can fail PipeWire startup, 0.4.4 can unnecessarily reconnect a healthy low-FPS session, 0.4.9 can stall capture while displays are rearranged, 0.4.11 can enter a virtual-monitor restart loop, 0.4.26 can remain on a cached frame after a failed idle wake, 0.4.27 can keep running after Mutter removes its virtual session, and 0.4.28 can expose sparse compositor updates as an irregular tablet cadence. Install 0.4.29 or newer for the current pacing and compositor-lifecycle safeguards plus the hardened opt-in browser, AVNC, updater, and PolicyKit boundaries.
 
 ## Documentation
 
@@ -41,9 +41,9 @@ The packaged and tested target is Debian/Ubuntu. Direct OpenDisplay uses usbmuxd
 - A touch-controlled mirror of the current primary physical monitor, without creating `Meta-0`.
 - Direct OpenDisplay USB through Apple usbmuxd or an Android ADB tunnel.
 - Opt-in Open-source AVNC on one selected Android device through a loopback-only ADB reverse tunnel, including VNC password authentication, pointer, click, scroll, and keyboard input.
-- Adaptive low-latency H.264 that paces active motion at the selected rate, idles after 500 ms of quiet, and uses bounded keyframe and capture-only recovery if an idle wake produces no frame.
+- Adaptive low-latency H.264 that keeps capture clocked at no more than 30 Hz, paces active motion at the selected stream rate, uses a 250 ms tail for one isolated update and a 1.25-second tail for sustained motion, and disconnects safely rather than rebuilding compositor state after a failed wake.
 - A smooth OpenDisplay cursor overlay by default for new configurations, plus embedded-video compatibility mode for receivers that do not render protocol cursors.
-- Remembered tablet placement and in-place video refresh after GNOME display rearrangement.
+- Remembered tablet placement and keyframe-only video resynchronization after GNOME display rearrangement.
 - Native single-finger tap, direct manipulation, and one-finger scrolling from OpenDisplay, plus Apple Pencil-as-pointer on iPadOS.
 - Pointer, scroll, touch, and keyboard input in the browser fallback.
 - Gray stopped, amber waiting, and green connected tray states.
@@ -53,7 +53,7 @@ The packaged and tested target is Debian/Ubuntu. Direct OpenDisplay uses usbmuxd
 
 OpenDisplay protocol v3 models one finger stream but does not identify multiple touch contacts. TuxDisplay maps that finger stream to one guarded native GNOME touch slot, giving touch-capable applications direct touchscreen behavior while keeping Pencil and mouse paths unchanged. The receiver's explicit two-finger scroll message remains a bounded scroll-axis event. True pinch zoom, simultaneous touches, and Pencil pressure or tilt cannot be forwarded because the protocol supplies neither contact IDs nor magnification data.
 
-The 0.4.15 transport was validated on a real iPad USB session at 2048×1536 and 30 FPS with no reported frame drops or prediction-chain recoveries. Those counters included repeated unchanged frames and did not prove 30 distinct desktop updates per second. Version 0.4.17 reports the recent PipeWire capture rate separately and stops continuously encoding a static screen. Version 0.4.18 introduced separate OpenDisplay cursor control messages; version 0.4.19 added independent XWayland tracking and direct tablet-input echo. Version 0.4.26 adaptively repeats the newest changed frame at the configured cadence only while content or input remains active, then closes the encoder path after 500 ms of quiet. Version 0.4.27 verifies that an idle wake actually produces an encoded frame, requests one keyframe after 0.5 seconds, and performs one rate-limited capture-only refresh after 1.5 seconds if needed.
+The 0.4.15 transport was validated on a real iPad USB session at 2048×1536 and 30 FPS with no reported frame drops or prediction-chain recoveries. Those counters included repeated unchanged frames and did not prove 30 distinct desktop updates per second. Version 0.4.17 reports the recent PipeWire capture rate separately and stops continuously encoding a static screen. Version 0.4.18 introduced separate OpenDisplay cursor control messages; version 0.4.19 added independent XWayland tracking and direct tablet-input echo. Version 0.4.26 adaptively repeats the newest changed frame at the configured cadence only while content or input remains active. Version 0.4.28 verifies each idle wake and disconnects safely if video or the compositor session disappears. Version 0.4.29 adds a bounded 30 Hz PipeWire keepalive clock, filters copied keepalives by sequence number, and promotes a 250 ms isolated-update tail to 1.25 seconds once sustained motion is detected.
 
 ## Install a release
 
@@ -61,7 +61,7 @@ Download the current `.deb` and `SHA256SUMS` from [GitHub Releases](https://gith
 
 ~~~sh
 sha256sum --ignore-missing --check SHA256SUMS
-sudo apt install ./tuxdisplay_0.4.27_all.deb
+sudo apt install ./tuxdisplay_0.4.29_all.deb
 ~~~
 
 The checksum file can include packages from several releases. The checksum for the package being installed must report `OK`.
@@ -117,7 +117,7 @@ The manager checks GitHub Releases after it starts and shows **Install update** 
 
 TuxDisplay trusts an Ed25519-signed, expiring manifest whose public key is embedded in the package. After PolicyKit authentication, a fixed root-owned helper independently downloads that manifest and package, verifies the signature and SHA-256 digest again, stages the package in a root-owned private directory, checks Debian name/version/architecture metadata, and only then invokes APT. No user-owned temporary package path crosses the privilege boundary. Restart TuxDisplay from the offered button after installation.
 
-Change the monitor arrangement in **Settings → Displays** if the virtual output is not on the expected edge. TuxDisplay remembers the complete logical layout using stable physical-monitor identities and reapplies it when Mutter creates a new `Meta-0` identity. Rearranging screens reopens capture on the same PipeWire node without recreating the virtual monitor or disconnecting the tablet.
+Change the monitor arrangement in **Settings → Displays** if the virtual output is not on the expected edge. TuxDisplay remembers the complete logical layout using stable physical-monitor identities and reapplies it when Mutter creates a new `Meta-0` identity. Rearranging screens preserves the existing PipeWire node and requests a fresh keyframe without recreating the virtual monitor or disconnecting the tablet.
 
 ## Extend or mirror
 
@@ -225,13 +225,13 @@ WEB_PORT=6080
 VNC_PORT=5900
 ~~~
 
-`DISPLAY_MODE` accepts `extend` or `mirror`. `FPS` accepts `15`, `30`, or `60`; it caps the virtual monitor and the adaptive active-motion stream. `30` is the balanced default and `60` is intended for systems whose encoder and tablet can sustain it. The newest changed frame is paced at that rate while content or input is active, then the encoder path idles after 500 ms of quiet. `ENCODER=auto` prefers VA-API and falls back to tuned x264. `CURSOR_MODE=overlay` is the smooth default for new configurations; select `embedded` if a receiver does not render the pointer. Existing explicit cursor choices are preserved during upgrade. `BROWSER_ENABLED=1` explicitly enables the loopback/USB-only browser listener; it is off by default. `AVNC_DEVICE` must be one authorized ADB serial and is empty by default. The GUI is the recommended way to set both compatibility options. The default `KEEP_AWAKE_WITH_LID_CLOSED=0` disconnects cleanly before lid-triggered sleep. Restart TuxDisplay after changing a value.
+`DISPLAY_MODE` accepts `extend` or `mirror`. `FPS` accepts `15`, `30`, or `60`; it caps the virtual monitor and the adaptive active-motion stream. `30` is the balanced default and `60` is intended for systems whose encoder and tablet can sustain it. The newest changed frame is paced at that rate while content or input is active. One isolated update gets a 250 ms tail; sustained updates and tablet input keep the path open for 1.25 seconds after the latest activity. `ENCODER=auto` prefers VA-API and falls back to tuned x264. `CURSOR_MODE=overlay` is the smooth default for new configurations; select `embedded` if a receiver does not render the pointer. Existing explicit cursor choices are preserved during upgrade. `BROWSER_ENABLED=1` explicitly enables the loopback/USB-only browser listener; it is off by default. `AVNC_DEVICE` must be one authorized ADB serial and is empty by default. The GUI is the recommended way to set both compatibility options. The default `KEEP_AWAKE_WITH_LID_CLOSED=0` disconnects cleanly before lid-triggered sleep. Restart TuxDisplay after changing a value.
 
 For a 4:3 iPad, `1536x1152` is the balanced preset: it still fills the panel but processes 44% fewer pixels than `2048x1536`. Use the manager or `tuxdisplay configure --resolution 1536x1152 --restart`. Keep `2048x1536` when text sharpness matters more than motion and power use.
 
-For a healthy direct session, `encoded_fps`, `source_fps`, `sent_fps`, and receiver FPS should broadly agree with the selected ceiling during sustained motion. `pipewire_fps` and `capture_fps` count distinct compositor updates and can be lower because adaptive pacing repeats the newest changed frame briefly rather than waiting for another damage event. All video rates are expected to fall to zero while the desktop is quiet; `frame_pacing=adaptive-idle` and `wake_state=idle` confirm intentional sleep. On interaction, the wake state briefly becomes `waiting`; it returns to `active` after the first encoded frame. `wake_keyframes` and `wake_recoveries` count bounded corrective actions rather than cable drops. `queued` should remain small, and `drops` and prediction-chain `recoveries` should remain at zero. OpenDisplay's receiver counters are diagnostic rather than a formal performance contract; compare them with the sender rates and visible motion before treating an isolated counter as a failure. If a receiver that previously supplied health reports stops doing so, TuxDisplay 0.4.16 marks those counters stale, requests a fresh keyframe after about eight seconds, and reconnects the cable session after about fifteen seconds if rendering does not recover.
+For a healthy direct session, `encoded_fps`, `source_fps`, `sent_fps`, and receiver FPS should broadly agree with the selected ceiling during sustained motion. `pipewire_fps` and `capture_fps` count distinct compositor updates and can be lower because adaptive pacing repeats the newest changed frame briefly rather than waiting for another damage event. `pipewire_keepalives` counts lightweight copied buffers that keep capture responsive; these do not count as changed pixels or wake the encoder. Fresh-frame, encoded, and cable rates are expected to fall to zero while the desktop is quiet; `frame_pacing=adaptive-idle` and `wake_state=idle` confirm intentional sleep. On interaction, the wake state briefly becomes `waiting`; it returns to `active` after the first encoded frame. `wake_keyframes` counts IDR requests and `wake_safe_disconnects` counts sessions stopped before a stale pipeline can disturb the compositor. `queued` should remain small, and `drops` and prediction-chain `recoveries` should remain at zero. OpenDisplay's receiver counters are diagnostic rather than a formal performance contract; compare them with the sender rates and visible motion before treating an isolated counter as a failure. If a receiver that previously supplied health reports stops doing so during sustained video, TuxDisplay 0.4.28 and newer mark those counters stale and request a fresh keyframe after about twelve seconds, then reconnect the cable session after about twenty-four seconds if rendering does not recover. Sparse quiet-screen updates reset the observation window instead of waking the encoder for recovery.
 
-TuxDisplay 0.4.17 separately watches the host's encoded-frame callback. If both the sender and receiver stop together, it performs a bounded service recycle. A hardware-pipeline stall selects the software encoder for the next 24 hours. Automatic recovery is limited to two service recycles per ten minutes, so a persistent driver or PipeWire failure cannot recreate the old monitor restart loop. `tuxdisplay status` shows the active encoder and any pipeline fallback or suppressed recovery.
+TuxDisplay 0.4.28 separately watches the host's encoded-frame callback and Mutter's RemoteDesktop session. If capture stalls or the compositor closes the session, TuxDisplay exits once and leaves the service stopped instead of automatically recreating the virtual monitor. A hardware-pipeline stall selects the software encoder for the next manual start for 24 hours. `tuxdisplay status` shows the active encoder and `recovery=safe disconnect` when this protection was used.
 
 TuxDisplay 0.4.19 introduced an OpenDisplay pointer overlay that polls XWayland at up to 60 Hz, echoes tablet input immediately, and sends deduplicated `cursor` messages plus a small cursor sprite. Version 0.4.26 makes **Smooth OpenDisplay overlay** the default for new configurations so pointer motion stays off the full-frame video path. Select **Visible in video (compatibility)** if a receiver build does not display the pointer. Existing explicit choices are not overwritten during upgrade. `Cursor transport` in `tuxdisplay status` identifies the active path.
 
@@ -250,7 +250,7 @@ python3 -m unittest discover -s tests -v
 ./build-deb.sh
 ~~~
 
-The package is written to `dist/tuxdisplay_0.4.27_all.deb`. The build script normalizes staged mtimes and regenerates `dist/SHA256SUMS` for only that package.
+The package is written to `dist/tuxdisplay_0.4.29_all.deb`. The build script normalizes staged mtimes and regenerates `dist/SHA256SUMS` for only that package.
 
 Development and release conventions are in [CONTRIBUTING.md](CONTRIBUTING.md).
 

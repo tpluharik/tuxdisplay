@@ -1,4 +1,4 @@
-.TH TUXDISPLAY 1 "November 2026" "TuxDisplay 0.4.27" "User Commands"
+.TH TUXDISPLAY 1 "November 2026" "TuxDisplay 0.4.29" "User Commands"
 .SH NAME
 tuxdisplay \- use an iPad or Android tablet as a secondary Linux display
 .SH SYNOPSIS
@@ -31,7 +31,7 @@ that workspace is not an extension of the current desktop.
 Version 0.4.0 must not be used on GNOME Wayland because its touch path could
 abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions, 0.4.9 can
 stall capture while rearranging displays, and 0.4.11 can restart-loop a virtual
-monitor after capture failure. Use 0.4.27 or newer for all documented stability,
+monitor after capture failure. Use 0.4.29 or newer for all documented stability,
 input, rendering, compatibility-path security, and updater fixes.
 .PP
 The GTK manager and three-state indicator are one single-instance application.
@@ -113,8 +113,10 @@ Mutter creates a real virtual output named
 PipeWire captures only that output. GStreamer supplies H.264 to OpenDisplay
 and adaptively paced JPEG frames to AVNC or the browser fallback. Changed frames
 are encoded immediately and the newest frame is paced at the configured rate
-while content or tablet input remains active. After 500 milliseconds of quiet,
-the encoder and USB video path return to idle.
+while content or tablet input remains active. Version 0.4.29 keeps the capture
+graph clocked at a bounded rate and filters copied keepalives from activity.
+One isolated update gets a 250-millisecond tail; sustained motion or tablet
+input selects the 1.25-second tail before the encoder and USB path return idle.
 .PP
 TuxDisplay remembers the complete logical arrangement under stable physical
 monitor identities because Mutter gives each new virtual output a different
@@ -209,10 +211,11 @@ mode.
 .TP
 .B FPS
 accepts 15, 30, or 60 and controls the virtual-monitor and active receiver
-ceiling. The default is 30. Version 0.4.26 paces the newest changed frame at this
-rate while content or input remains active, then idles the video path after 500
-milliseconds of quiet. Version 0.4.27 detects a failed idle wake, requests a
-keyframe, and performs one rate-limited capture-only refresh if needed. Use 60
+ceiling. The default is 30. Version 0.4.29 keeps capture clocked at no more than
+30 Hz, filters copied PipeWire keepalives from activity, paces the newest real
+frame while content or input remains active, and promotes a 250-millisecond
+isolated-update tail to 1.25 seconds during sustained motion. Version 0.4.28 detects a failed idle wake, requests a
+keyframe, and disconnects safely rather than rebuilding capture if needed. Use 60
 only when encoded, sender, and receiver telemetry
 show that the host and tablet sustain it.
 .TP
@@ -285,18 +288,19 @@ sender rates and visible motion before diagnosing a transport failure. Redact
 the PIN, device labels, local addresses, and personal paths before publishing
 diagnostics.
 .PP
-After a receiver has begun reporting health, TuxDisplay treats eight seconds
-without another report during active video as stale. It marks the saved
-telemetry stale, primes the receiver with the cached keyframe, and requests a
-fresh IDR. If reports remain absent for fifteen seconds, it rebuilds the cable
-session. Receivers that never advertise health telemetry are not subject to
+After a receiver has begun reporting health, TuxDisplay treats twelve seconds
+without another report during sustained transmitted video as stale. It marks
+the saved telemetry stale, primes the receiver with the cached keyframe, and
+requests a fresh IDR. If reports remain absent for twenty-four seconds, it
+rebuilds the cable session. Sparse quiet-screen updates reset the observation
+window, and receivers that never advertise health telemetry are not subject to
 this watchdog.
 .PP
-Version 0.4.17 also watches the host encoded-frame callback. If it stops for
-eight seconds, TuxDisplay performs a bounded service recycle. A hardware
-pipeline stall enables the software encoder for 24 hours. No more than two
-automatic pipeline recoveries are allowed in ten minutes; further recovery is
-suppressed and shown in pipeline diagnostics instead of creating a restart loop.
+Version 0.4.28 watches the host encoded-frame callback and Mutter's
+RemoteDesktop session. If active video stops for eight seconds or Mutter closes
+the session, TuxDisplay records a safe disconnect and exits once without asking
+systemd to recreate the virtual monitor. A hardware pipeline stall enables the
+software encoder for 24 hours on the next manual start.
 .PP
 Version 0.4.20 defaults to embedding the cursor in captured video so it remains
 visible on every receiver. The manager can instead select the low-power

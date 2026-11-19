@@ -27,7 +27,7 @@ def ensure_gi() -> None:
 
     glib = types.SimpleNamespace(SOURCE_CONTINUE=True, Variant=Variant, Error=Exception)
     gio = types.SimpleNamespace()
-    gst = types.SimpleNamespace()
+    gst = types.SimpleNamespace(PadProbeReturn=types.SimpleNamespace(OK="ok", DROP="drop"))
     gst_video = types.SimpleNamespace()
 
     gi.require_version = lambda *_args: None  # type: ignore[attr-defined]

@@ -258,18 +258,47 @@ class OpenDisplayProtocolTests(unittest.TestCase):
         )
         sender.stats_watchdog_armed = True
         sender.last_stats_received = 100.0
-        sender.last_video_submitted = 108.0
+        sender.last_video_submitted = 112.0
+        sender.queued_video_since_stats = 360
+        sender.sent_video_since_stats = 355
 
         # Pings, pongs, pointer events, or other control messages do not refresh
         # receiver video statistics, so they cannot hide a frozen renderer.
-        self.assertTrue(sender._check_receiver_stats_watchdog(108.1))
+        self.assertTrue(sender._check_receiver_stats_watchdog(112.1))
         self.assertEqual(recoveries, ["idr"])
-        self.assertEqual(controls, [{"type": "receiverStatsStale", "age": 8.1}])
+        self.assertEqual(controls, [{"type": "receiverStatsStale", "age": 12.1}])
         self.assertTrue(sender.stats_recovery_requested)
 
-        sender.last_video_submitted = 115.0
-        self.assertFalse(sender._check_receiver_stats_watchdog(115.1))
+        sender.last_video_submitted = 124.0
+        self.assertFalse(sender._check_receiver_stats_watchdog(124.1))
         self.assertTrue(sender.session_failed.is_set())
+
+    def test_sparse_idle_updates_do_not_request_receiver_recovery(self) -> None:
+        recoveries = []
+        controls = []
+        sender = MODULE.OpenDisplayUSB(
+            1920,
+            1080,
+            30,
+            controls.append,
+            lambda _connected, _status: None,
+            lambda: recoveries.append("idr"),
+        )
+        sender.stats_watchdog_armed = True
+        sender.last_stats_received = 100.0
+        sender.last_video_submitted = 112.0
+        sender.stats_window_started = 100.0
+        sender.queued_video_since_stats = 12
+        sender.sent_video_since_stats = 12
+
+        self.assertTrue(sender._check_receiver_stats_watchdog(112.1))
+
+        self.assertEqual(recoveries, [])
+        self.assertEqual(controls, [])
+        self.assertEqual(sender.last_stats_received, 112.1)
+        self.assertEqual(sender.stats_window_started, 112.1)
+        self.assertEqual(sender.queued_video_since_stats, 0)
+        self.assertEqual(sender.sent_video_since_stats, 0)
 
     def test_missing_receiver_stats_are_ignored_while_video_is_intentionally_idle(self) -> None:
         recoveries = []

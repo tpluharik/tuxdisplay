@@ -29,9 +29,10 @@ FRAME_HEADER = struct.Struct("!I")
 MAX_CONTROL_SIZE = (1 << 20) - 1
 MAX_USBMUX_MESSAGE_SIZE = 1 << 20
 ADB_TIMEOUT = 8
-RECEIVER_STATS_RECOVERY_SECONDS = 8.0
-RECEIVER_STATS_RECONNECT_SECONDS = 15.0
+RECEIVER_STATS_RECOVERY_SECONDS = 12.0
+RECEIVER_STATS_RECONNECT_SECONDS = 24.0
 RECEIVER_VIDEO_ACTIVE_SECONDS = 2.0
+RECEIVER_STATS_ACTIVE_FPS = 2.0
 CURSOR_WIDTH = 24
 CURSOR_HEIGHT = 32
 
@@ -371,7 +372,7 @@ def list_usb_devices() -> list[dict[str, Any]]:
             connection,
             {
                 "MessageType": "ListDevices",
-                "ClientVersionString": "tuxdisplay-0.4.27",
+                "ClientVersionString": "tuxdisplay-0.4.29",
                 "ProgName": "tuxdisplay",
                 "kLibUSBMuxVersion": 3,
             },
@@ -399,7 +400,7 @@ def connect_usb_device(device_id: int, port: int = OPENDISPLAY_PORT) -> socket.s
             connection,
             {
                 "MessageType": "Connect",
-                "ClientVersionString": "tuxdisplay-0.4.27",
+                "ClientVersionString": "tuxdisplay-0.4.29",
                 "ProgName": "tuxdisplay",
                 "DeviceID": int(device_id),
                 # usbmuxd's plist protocol carries the TCP port in network order.
@@ -568,7 +569,9 @@ class OpenDisplayUSB:
                 pass
             connection.close()
         if self.thread:
-            self.thread.join(timeout=3)
+            # A dead usbmuxd peer must not hold service shutdown long enough
+            # for systemd to kill the process while Mutter still owns Meta-0.
+            self.thread.join(timeout=0.5)
 
     def submit_video(self, access_unit: bytes, captured_ms: int) -> None:
         normalized, is_idr = normalize_annex_b(access_unit)
@@ -692,6 +695,21 @@ class OpenDisplayUSB:
                 self.stats_recovery_requested = False
                 return True
             age = max(0.0, now - self.last_stats_received)
+            if age >= RECEIVER_STATS_RECOVERY_SECONDS:
+                # OpenDisplay reports less frequently when the screen is
+                # quiet. A cursor blink or clock tick must not turn that
+                # normal cadence into a keyframe/reconnect cycle. Arm the
+                # watchdog only after sustained video has actually crossed
+                # the USB link; a later activity burst receives a fresh
+                # reporting window from this quiet baseline.
+                minimum_frames = max(3, int(age * RECEIVER_STATS_ACTIVE_FPS))
+                if self.sent_video_since_stats < minimum_frames:
+                    self.last_stats_received = now
+                    self.stats_window_started = now
+                    self.queued_video_since_stats = 0
+                    self.sent_video_since_stats = 0
+                    self.stats_recovery_requested = False
+                    return True
             if age >= RECEIVER_STATS_RECONNECT_SECONDS:
                 reconnect = True
             elif age >= RECEIVER_STATS_RECOVERY_SECONDS and not self.stats_recovery_requested:

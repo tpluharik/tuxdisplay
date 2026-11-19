@@ -2,7 +2,7 @@
 
 TuxDisplay captures a desktop and can inject input. Treat every receiver path as remote-desktop access even when the tablet is beside the computer.
 
-## Secure defaults in 0.4.27
+## Secure defaults in 0.4.29
 
 - Direct OpenDisplay remains the default; its H.264 path adaptively paces active motion, idles on a static desktop, and rate-limits capture-only wake recovery.
 - Browser fallback is disabled until explicitly enabled.

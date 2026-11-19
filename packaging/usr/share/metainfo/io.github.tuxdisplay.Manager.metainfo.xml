@@ -21,6 +21,24 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.29" date="2026-11-19">
+      <description>
+        <ul>
+          <li>Keep PipeWire capture responsive with a bounded 30 Hz keepalive clock.</li>
+          <li>Exclude copied keepalive frames from activity, wake, and fresh-frame telemetry.</li>
+          <li>Smooth sparse compositor updates without reintroducing capture or service restart loops.</li>
+        </ul>
+      </description>
+    </release>
+    <release version="0.4.28" date="2026-11-19">
+      <description>
+        <ul>
+          <li>Disconnect safely when GNOME closes the compositor-owned virtual display session.</li>
+          <li>Avoid capture rebuilds and automatic service restarts that can churn the monitor topology.</li>
+          <li>Preserve the active stream across layout changes and bound USB transport shutdown.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.27" date="2026-11-11">
       <description>
         <ul>

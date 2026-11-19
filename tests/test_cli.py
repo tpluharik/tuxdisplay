@@ -168,7 +168,7 @@ class TuxDisplayTests(unittest.TestCase):
         text = daemon.read_text(encoding='utf-8')
         pipeline = daemon.parent / "video_pipeline.py"
         pipeline_text = pipeline.read_text(encoding="utf-8")
-        self.assertIn('keepalive-time={PIPEWIRE_KEEPALIVE_MS}', pipeline_text)
+        self.assertIn('keepalive-time={pipewire_keepalive_ms}', pipeline_text)
         self.assertIn('identity name=source_probe silent=true', pipeline_text)
         self.assertIn('identity name=capture_probe silent=true', pipeline_text)
         self.assertIn('imagefreeze name=frame_pacer', pipeline_text)
@@ -194,7 +194,8 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertIn('Frame pacing: {frame_pacing}', manager_text)
         service = SCRIPT.parents[1] / "lib" / "systemd" / "user" / "tuxdisplay.service"
         self.assertIn("Environment=TUXDISPLAY_MANAGED_SERVICE=1", service.read_text(encoding="utf-8"))
-        self.assertIn('os.environ.get("TUXDISPLAY_MANAGED_SERVICE") != "1"', text)
+        self.assertIn('self.pipeline_health["recovery"] = "safe disconnect"', text)
+        self.assertNotIn('systemctl", "--user", "--no-block", "restart"', text)
 
     def test_wayland_uses_cursor_metadata_without_encoding_cursor_only_buffers(self) -> None:
         daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"
@@ -242,13 +243,13 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertIn('self.receiver_stats["stale"] = True', text)
         self.assertIn('self.receiver_stats["age_seconds"]', text)
 
-    def test_wayland_restarts_a_stalled_video_pipeline_with_a_bounded_fallback(self) -> None:
+    def test_wayland_disconnects_a_stalled_video_pipeline_without_recreating_monitor(self) -> None:
         daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"
         text = daemon.read_text(encoding="utf-8")
         self.assertIn("PIPELINE_STALL_SECONDS = 8.0", text)
-        self.assertIn("MAX_PIPELINE_RECOVERIES = 2", text)
-        self.assertIn("self.request_pipeline_service_recovery(age)", text)
-        self.assertIn('["/usr/bin/systemctl", "--user", "--no-block", "restart", "tuxdisplay.service"]', text)
+        self.assertIn("self.request_pipeline_safe_disconnect(age)", text)
+        self.assertIn('self.pipeline_health["recovery"] = "safe disconnect"', text)
+        self.assertNotIn('["/usr/bin/systemctl", "--user", "--no-block", "restart", "tuxdisplay.service"]', text)
         self.assertIn('recovery_state["force_software_until"]', text)
 
     def test_wayland_layout_is_restored_before_capture_and_changes_refresh_video(self) -> None:
@@ -264,9 +265,9 @@ class TuxDisplayTests(unittest.TestCase):
         self.assertIn("self.opendisp.recover_video()", text)
         refresh = text[text.index("    def refresh_capture_after_layout_change(self) -> None:") :]
         refresh = refresh[: refresh.index("    def start_pipeline(self, force_software: bool = False) -> None:")]
-        self.assertIn("previous_pipeline.set_state(Gst.State.NULL)", refresh)
-        self.assertIn("self.start_pipeline()", refresh)
-        self.assertNotIn("Gst.State.PAUSED", refresh)
+        self.assertIn("self.opendisp.recover_video()", refresh)
+        self.assertNotIn("set_state(Gst.State.NULL)", refresh)
+        self.assertNotIn("self.start_pipeline()", refresh)
         self.assertNotIn("self.loop.quit()", refresh)
 
     def test_wayland_failure_cannot_restart_virtual_monitor_forever(self) -> None:

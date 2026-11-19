@@ -46,6 +46,9 @@ class WaylandPipelineRecoveryTests(unittest.TestCase):
         display.state_directory = directory
         display.pipeline_recovery_path = directory / "pipeline-recovery.json"
         display.write_client_state = mock.Mock()
+        display.loop = mock.Mock()
+        display.fatal_error = None
+        display.safe_disconnect_reason = ""
         return display
 
     def make_pacing_display(self) -> object:
@@ -55,30 +58,73 @@ class WaylandPipelineRecoveryTests(unittest.TestCase):
         display.pacing_active = False
         display.pacing_started_monotonic = 0.0
         display.last_pacing_activity_monotonic = 0.0
+        display.pacing_tail_ms = MODULE.SPARSE_PACING_TAIL_MS
         display.wake_started_monotonic = 0.0
         display.wake_stage = ""
-        display.last_wake_refresh_monotonic = 0.0
         display.wake_keyframe_requests = 0
-        display.wake_pipeline_recoveries = 0
+        display.wake_safe_disconnects = 0
         display.pipeline = object()
         display.pipeline_health = {}
+        display.pipewire_frame_times = MODULE.deque()
+        display.capture_frame_times = MODULE.deque()
+        display.capture_frame_lock = threading.Lock()
+        display.last_source_monotonic = 0.0
+        display.last_pipewire_sequence = None
+        display.last_capture_sequence = None
+        display.pipewire_keepalive_buffers = 0
         display._send_force_keyframe = mock.Mock()
-        display.refresh_capture_pipeline = mock.Mock(return_value=True)
+        display.request_safe_disconnect = mock.Mock()
         display.write_client_state = mock.Mock()
         return display
+
+    @staticmethod
+    def buffer_info(sequence: int, size: int = 1) -> object:
+        buffer = mock.Mock()
+        buffer.offset = sequence
+        buffer.get_size.return_value = size
+        info = mock.Mock()
+        info.get_buffer.return_value = buffer
+        return info
+
+    def test_pipewire_keepalive_does_not_wake_encoder_or_inflate_source_rate(self) -> None:
+        display = self.make_pacing_display()
+        display.activate_adaptive_pacing = mock.Mock()
+
+        with mock.patch.object(MODULE.time, "monotonic", return_value=10.0):
+            display.on_source_buffer(None, self.buffer_info(42))
+        with mock.patch.object(MODULE.time, "monotonic", return_value=10.1):
+            display.on_source_buffer(None, self.buffer_info(42))
+
+        self.assertEqual(len(display.pipewire_frame_times), 1)
+        self.assertEqual(display.pipewire_keepalive_buffers, 1)
+        display.activate_adaptive_pacing.assert_called_once_with(sustained=False)
+
+    def test_new_pipewire_sequence_still_wakes_encoder(self) -> None:
+        display = self.make_pacing_display()
+        display.activate_adaptive_pacing = mock.Mock()
+
+        display.on_source_buffer(None, self.buffer_info(42))
+        display.on_source_buffer(None, self.buffer_info(43))
+
+        self.assertEqual(len(display.pipewire_frame_times), 2)
+        self.assertEqual(display.pipewire_keepalive_buffers, 0)
+        self.assertEqual(display.activate_adaptive_pacing.call_args_list, [
+            mock.call(sustained=False),
+            mock.call(sustained=True),
+        ])
 
     def test_intentionally_idle_pipeline_does_not_request_recovery(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             display = self.make_display(Path(temporary))
             display.pacing_active = False
             display.last_source_monotonic = 150.0
-            display.request_pipeline_service_recovery = mock.Mock()
+            display.request_pipeline_safe_disconnect = mock.Mock()
 
             with mock.patch.object(MODULE.time, "monotonic", return_value=200.0):
                 result = display.check_video_pipeline_liveness()
 
             self.assertEqual(result, MODULE.GLib.SOURCE_CONTINUE)
-            display.request_pipeline_service_recovery.assert_not_called()
+            display.request_pipeline_safe_disconnect.assert_not_called()
 
     def test_pipeline_that_never_encodes_while_activity_continues_recovers(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -87,45 +133,63 @@ class WaylandPipelineRecoveryTests(unittest.TestCase):
             display.last_video_monotonic = 0.0
             display.last_source_monotonic = 100.0
             display.pacing_started_monotonic = 100.0
-            display.request_pipeline_service_recovery = mock.Mock()
+            display.request_pipeline_safe_disconnect = mock.Mock()
 
             with mock.patch.object(MODULE.time, "monotonic", return_value=112.1):
                 result = display.check_video_pipeline_liveness()
 
             self.assertEqual(result, MODULE.GLib.SOURCE_CONTINUE)
-            display.request_pipeline_service_recovery.assert_called_once_with(mock.ANY)
+            display.request_pipeline_safe_disconnect.assert_called_once_with(mock.ANY)
 
     def test_new_activity_after_long_idle_gets_a_fresh_watchdog_window(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             display = self.make_display(Path(temporary))
             display.last_video_monotonic = 100.0
             display.pacing_started_monotonic = 200.0
-            display.request_pipeline_service_recovery = mock.Mock()
+            display.request_pipeline_safe_disconnect = mock.Mock()
 
             with mock.patch.object(MODULE.time, "monotonic", return_value=202.0):
                 result = display.check_video_pipeline_liveness()
 
             self.assertEqual(result, MODULE.GLib.SOURCE_CONTINUE)
-            display.request_pipeline_service_recovery.assert_not_called()
+            display.request_pipeline_safe_disconnect.assert_not_called()
 
     def test_adaptive_pacing_closes_after_the_activity_tail(self) -> None:
         display = self.make_pacing_display()
 
         with mock.patch.object(MODULE.time, "monotonic", return_value=10.0):
-            display.activate_adaptive_pacing()
+            display.activate_adaptive_pacing(sustained=True)
 
         # A frame proves that opening the gate succeeded. Only then may the
-        # ordinary 500 ms quiet tail close it again.
+        # ordinary quiet tail close it again.
         display.complete_adaptive_wake()
 
-        with mock.patch.object(MODULE.time, "monotonic", return_value=10.4):
+        with mock.patch.object(MODULE.time, "monotonic", return_value=11.24):
             display.refresh_adaptive_pacing()
         self.assertTrue(display.pacing_active)
 
-        with mock.patch.object(MODULE.time, "monotonic", return_value=10.5):
+        with mock.patch.object(MODULE.time, "monotonic", return_value=11.25):
             result = display.refresh_adaptive_pacing()
         self.assertEqual(result, MODULE.GLib.SOURCE_CONTINUE)
         self.assertFalse(display.pacing_active)
+        self.assertEqual(display.pacing_tail_ms, MODULE.SPARSE_PACING_TAIL_MS)
+
+    def test_isolated_frame_uses_short_tail_until_motion_is_sustained(self) -> None:
+        display = self.make_pacing_display()
+
+        with mock.patch.object(MODULE.time, "monotonic", return_value=10.0):
+            display.activate_adaptive_pacing()
+        display.complete_adaptive_wake()
+        self.assertEqual(display.pacing_tail_ms, MODULE.SPARSE_PACING_TAIL_MS)
+
+        with mock.patch.object(MODULE.time, "monotonic", return_value=10.25):
+            display.refresh_adaptive_pacing()
+        self.assertFalse(display.pacing_active)
+
+        with mock.patch.object(MODULE.time, "monotonic", return_value=11.0):
+            display.activate_adaptive_pacing(sustained=True)
+        display.complete_adaptive_wake()
+        self.assertEqual(display.pacing_tail_ms, MODULE.ACTIVE_PACING_TAIL_MS)
 
     def test_failed_idle_wake_requests_keyframe_without_closing_gate(self) -> None:
         display = self.make_pacing_display()
@@ -151,39 +215,40 @@ class WaylandPipelineRecoveryTests(unittest.TestCase):
         self.assertEqual(display.wake_stage, "")
         display._send_force_keyframe.assert_called_once_with()
 
-        with mock.patch.object(MODULE.time, "monotonic", return_value=10.5):
+        with mock.patch.object(MODULE.time, "monotonic", return_value=11.25):
             display.refresh_adaptive_pacing()
         self.assertFalse(display.pacing_active)
-        display.refresh_capture_pipeline.assert_not_called()
+        display.request_safe_disconnect.assert_not_called()
 
-    def test_failed_keyframe_wake_refreshes_capture_once(self) -> None:
+    def test_failed_keyframe_wake_disconnects_without_rebuilding_capture(self) -> None:
         display = self.make_pacing_display()
         with mock.patch.object(MODULE.time, "monotonic", return_value=10.0):
             display.activate_adaptive_pacing()
         with mock.patch.object(MODULE.time, "monotonic", return_value=10.5):
             display.refresh_adaptive_pacing()
 
-        with mock.patch.object(MODULE.time, "monotonic", return_value=11.5):
+        with mock.patch.object(MODULE.time, "monotonic", return_value=14.0):
             display.refresh_adaptive_pacing()
 
-        display.refresh_capture_pipeline.assert_called_once_with("adaptive wake produced no encoded frame")
-        self.assertEqual(display.wake_pipeline_recoveries, 1)
-        self.assertEqual(display.last_wake_refresh_monotonic, 11.5)
-        self.assertEqual(display.pipeline_health["wake_recovery"], "capture refreshed")
+        display.request_safe_disconnect.assert_called_once_with(
+            "video did not resume after adaptive idle",
+            {"stale": True, "wake_age_seconds": 4.0},
+        )
+        self.assertEqual(display.wake_safe_disconnects, 1)
+        self.assertEqual(display.wake_stage, "disconnecting")
 
-    def test_wake_refresh_cooldown_prevents_a_pipeline_loop(self) -> None:
+    def test_pending_wake_never_rebuilds_the_capture_pipeline(self) -> None:
         display = self.make_pacing_display()
         display.pacing_active = True
         display.last_pacing_activity_monotonic = 10.0
         display.wake_started_monotonic = 10.0
         display.wake_stage = "keyframe"
-        display.last_wake_refresh_monotonic = 10.0
 
         with mock.patch.object(MODULE.time, "monotonic", return_value=11.5):
             display.refresh_adaptive_pacing()
 
-        display.refresh_capture_pipeline.assert_not_called()
-        self.assertEqual(display.wake_stage, "watchdog")
+        display.request_safe_disconnect.assert_not_called()
+        self.assertEqual(display.wake_stage, "keyframe")
         self.assertTrue(display.pacing_active)
 
     def test_encoded_frame_completes_pending_wake(self) -> None:
@@ -196,67 +261,55 @@ class WaylandPipelineRecoveryTests(unittest.TestCase):
         self.assertEqual(display.wake_stage, "")
         self.assertEqual(display.pipeline_health, {"fallback": "software"})
 
-    def test_stalled_encoded_frame_callback_requests_service_recovery(self) -> None:
+    def test_stalled_encoded_frame_callback_requests_safe_disconnect(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             display = self.make_display(Path(temporary))
-            display.request_pipeline_service_recovery = mock.Mock()
+            display.request_pipeline_safe_disconnect = mock.Mock()
 
             with mock.patch.object(MODULE.time, "monotonic", return_value=108.1):
                 result = display.check_video_pipeline_liveness()
 
             self.assertEqual(result, MODULE.GLib.SOURCE_CONTINUE)
-            display.request_pipeline_service_recovery.assert_called_once_with(mock.ANY)
-            self.assertAlmostEqual(display.request_pipeline_service_recovery.call_args.args[0], 8.1)
+            display.request_pipeline_safe_disconnect.assert_called_once_with(mock.ANY)
+            self.assertAlmostEqual(display.request_pipeline_safe_disconnect.call_args.args[0], 8.1)
 
-    def test_hardware_stall_persists_software_fallback_and_restarts_service(self) -> None:
+    def test_hardware_stall_persists_software_fallback_and_disconnects(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
             display = self.make_display(directory)
-            with mock.patch.dict(MODULE.os.environ, {"TUXDISPLAY_MANAGED_SERVICE": "1"}), mock.patch.object(
-                MODULE.time, "time", return_value=1000.0
-            ), mock.patch.object(MODULE.subprocess, "Popen") as popen:
-                display.request_pipeline_service_recovery(8.5)
+            with mock.patch.object(MODULE.time, "time", return_value=1000.0):
+                display.request_pipeline_safe_disconnect(8.5)
 
             recovery = json.loads(display.pipeline_recovery_path.read_text(encoding="utf-8"))
-            self.assertEqual(recovery["restarts"], [1000.0])
             self.assertEqual(recovery["force_software_until"], 1000.0 + MODULE.HARDWARE_FALLBACK_SECONDS)
             self.assertTrue(display.receiver_stats["stale"])
-            self.assertEqual(display.pipeline_health["recovery"], "service restart")
-            popen.assert_called_once()
-            self.assertEqual(
-                popen.call_args.args[0],
-                ["/usr/bin/systemctl", "--user", "--no-block", "restart", "tuxdisplay.service"],
-            )
+            self.assertEqual(display.pipeline_health["recovery"], "safe disconnect")
+            self.assertIn("encoded video stopped", display.safe_disconnect_reason)
+            display.loop.quit.assert_called_once_with()
 
-    def test_recovery_budget_suppresses_a_restart_loop(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            directory = Path(temporary)
-            display = self.make_display(directory)
-            directory.mkdir(parents=True, exist_ok=True)
-            display.pipeline_recovery_path.write_text(
-                json.dumps({"restarts": [950.0, 975.0]}) + "\n",
-                encoding="utf-8",
-            )
-            with mock.patch.dict(MODULE.os.environ, {"TUXDISPLAY_MANAGED_SERVICE": "1"}), mock.patch.object(
-                MODULE.time, "time", return_value=1000.0
-            ), mock.patch.object(MODULE.subprocess, "Popen") as popen:
-                display.request_pipeline_service_recovery(9.0)
+    def test_remote_session_closed_disconnects_once(self) -> None:
+        display = self.make_pacing_display()
+        display.remote_session_alive = True
+        display.request_safe_disconnect = mock.Mock()
 
-            popen.assert_not_called()
-            self.assertEqual(display.pipeline_health["recovery"], "suppressed")
-            display.write_client_state.assert_called_once()
+        display.handle_remote_session_closed(None, "", "", "", "", None)
 
-    def test_standalone_diagnostic_cannot_restart_the_managed_service(self) -> None:
-        with tempfile.TemporaryDirectory() as temporary:
-            display = self.make_display(Path(temporary))
-            with mock.patch.dict(MODULE.os.environ, {}, clear=True), mock.patch.object(
-                MODULE.subprocess, "Popen"
-            ) as popen:
-                display.request_pipeline_service_recovery(8.5)
+        self.assertFalse(display.remote_session_alive)
+        display.request_safe_disconnect.assert_called_once_with(
+            "GNOME closed the virtual display session",
+            {"session": "closed", "stale": True},
+        )
 
-            popen.assert_not_called()
-            self.assertFalse(display.pipeline_recovery_path.exists())
-            self.assertEqual(display.pipeline_health["recovery"], "manual restart required")
+    def test_expected_remote_session_close_during_stop_is_ignored(self) -> None:
+        display = self.make_pacing_display()
+        display.remote_session_alive = True
+        display.stopping = True
+        display.request_safe_disconnect = mock.Mock()
+
+        display.handle_remote_session_closed(None, "", "", "", "", None)
+
+        self.assertFalse(display.remote_session_alive)
+        display.request_safe_disconnect.assert_not_called()
 
 
 if __name__ == "__main__":
