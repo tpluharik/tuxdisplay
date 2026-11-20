@@ -1,3 +1,16 @@
+tuxdisplay (0.4.30) unstable; urgency=high
+
+  * Require a genuinely new Mutter/PipeWire frame after a GNOME monitor-layout
+    change instead of accepting a cached paced frame as proof of recovery.
+  * Disconnect once if fresh capture does not resume after rearrangement,
+    without rebuilding capture, recreating the monitor, or restarting service.
+  * Wait for GNOME to remove the previous Meta-0 before a later manual start so
+    consecutive sessions cannot overlap stale virtual-monitor teardown.
+  * Preserve the 0.4.29 capture clock, adaptive pacing, USB transport, encoder,
+    cursor, and saved-layout paths while strengthening only lifecycle checks.
+
+ -- Tomas Pluharik <tpluharik@users.noreply.github.com>  Fri, 20 Nov 2026 09:06:32 +0100
+
 tuxdisplay (0.4.29) unstable; urgency=high
 
   * Keep the PipeWire capture graph clocked at a bounded 30 Hz so Mutter and

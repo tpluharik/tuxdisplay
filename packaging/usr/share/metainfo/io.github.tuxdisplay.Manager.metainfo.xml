@@ -21,6 +21,15 @@
     <binary>tuxdisplay</binary>
   </provides>
   <releases>
+    <release version="0.4.30" date="2026-11-20">
+      <description>
+        <ul>
+          <li>Verify that GNOME layout changes resume with a genuinely new PipeWire frame.</li>
+          <li>Disconnect safely once when rearrangement leaves capture attached to a stale node.</li>
+          <li>Wait for old Meta-0 teardown before a later manual start creates another monitor.</li>
+        </ul>
+      </description>
+    </release>
     <release version="0.4.29" date="2026-11-19">
       <description>
         <ul>

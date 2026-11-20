@@ -266,9 +266,13 @@ class TuxDisplayTests(unittest.TestCase):
         refresh = text[text.index("    def refresh_capture_after_layout_change(self) -> None:") :]
         refresh = refresh[: refresh.index("    def start_pipeline(self, force_software: bool = False) -> None:")]
         self.assertIn("self.opendisp.recover_video()", refresh)
+        self.assertIn("force_verify=True", refresh)
+        self.assertIn('reason="monitor layout change"', refresh)
+        self.assertIn("require_fresh_source=True", refresh)
         self.assertNotIn("set_state(Gst.State.NULL)", refresh)
         self.assertNotIn("self.start_pipeline()", refresh)
         self.assertNotIn("self.loop.quit()", refresh)
+        self.assertLess(run.index("self.wait_for_previous_virtual_monitor()"), run.index("self.create_monitor()"))
 
     def test_wayland_failure_cannot_restart_virtual_monitor_forever(self) -> None:
         daemon = SCRIPT.parents[1] / "lib" / "tuxdisplay" / "tuxdisplay-wayland"

@@ -63,6 +63,8 @@ CURSOR_POLL_INTERVAL_MS = 16
 PACING_CHECK_INTERVAL_MS = 100
 WAKE_KEYFRAME_SECONDS = 0.5
 WAKE_SAFE_DISCONNECT_SECONDS = 4.0
+VIRTUAL_MONITOR_SETTLE_SECONDS = 5.0
+VIRTUAL_MONITOR_POLL_SECONDS = 0.1
 
 
 def unpack(value: Any) -> Any:
@@ -416,6 +418,9 @@ class WaylandDisplay:
         self.pacing_tail_ms = SPARSE_PACING_TAIL_MS
         self.wake_started_monotonic = 0.0
         self.wake_stage = ""
+        self.wake_reason = ""
+        self.wake_requires_fresh_source = False
+        self.wake_fresh_source_seen = False
         self.wake_keyframe_requests = 0
         self.wake_safe_disconnects = 0
         self.last_source_monotonic = 0.0
@@ -689,6 +694,23 @@ class WaylandDisplay:
         ).unpack()
         return int(serial), monitors, logical_monitors, properties
 
+    def wait_for_previous_virtual_monitor(self) -> None:
+        """Do not create Meta-0 while Mutter is still removing its predecessor."""
+        if self.display_mode != "extend":
+            return
+        deadline = time.monotonic() + VIRTUAL_MONITOR_SETTLE_SECONDS
+        while True:
+            _serial, monitors, _logical_monitors, _properties = self.get_display_state()
+            present = any(str(monitor[0][0]) == "Meta-0" for monitor in monitors)
+            if not present:
+                return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise RuntimeError(
+                    "GNOME still owns the previous virtual monitor; wait a moment and start TuxDisplay again"
+                )
+            time.sleep(min(VIRTUAL_MONITOR_POLL_SECONDS, remaining))
+
     def load_monitor_layout(self) -> dict[str, Any] | None:
         try:
             value = json.loads(self.layout_path.read_text(encoding="utf-8"))
@@ -848,7 +870,17 @@ class WaylandDisplay:
             file=sys.stderr,
             flush=True,
         )
-        self.activate_adaptive_pacing(verify_wake=False, sustained=True)
+        # Mutter can keep the node alive while silently stopping changed-frame
+        # delivery after a topology update.  Verify this wake even if pacing
+        # was already active; otherwise the service can remain connected while
+        # the tablet is permanently showing its cached frame.
+        self.activate_adaptive_pacing(
+            verify_wake=True,
+            sustained=True,
+            force_verify=True,
+            reason="monitor layout change",
+            require_fresh_source=True,
+        )
         if self.opendisp is not None:
             self.opendisp.recover_video()
         else:
@@ -1101,6 +1133,9 @@ class WaylandDisplay:
                 return Gst.PadProbeReturn.OK
             if sequence is not None:
                 self.last_pipewire_sequence = sequence
+                with self.pacing_lock:
+                    if self.wake_stage and self.wake_requires_fresh_source:
+                        self.wake_fresh_source_seen = True
             now = time.monotonic()
             sustained = self.last_source_monotonic > 0.0 and (
                 now - self.last_source_monotonic <= ACTIVE_MOTION_INTERVAL_MS / 1000.0
@@ -1116,16 +1151,26 @@ class WaylandDisplay:
             active = self.pacing_active
         return Gst.PadProbeReturn.OK if active else Gst.PadProbeReturn.DROP
 
-    def activate_adaptive_pacing(self, verify_wake: bool = True, sustained: bool = False) -> None:
+    def activate_adaptive_pacing(
+        self,
+        verify_wake: bool = True,
+        sustained: bool = False,
+        force_verify: bool = False,
+        reason: str = "adaptive idle",
+        require_fresh_source: bool = False,
+    ) -> None:
         """Pace only while pixels or input are changing, then return to idle."""
         now = time.monotonic()
         with self.pacing_lock:
             if not self.pacing_active:
                 self.pacing_started_monotonic = now
                 self.pacing_tail_ms = SPARSE_PACING_TAIL_MS
-                if verify_wake:
-                    self.wake_started_monotonic = now
-                    self.wake_stage = "waiting"
+            if verify_wake and (not self.pacing_active or force_verify):
+                self.wake_started_monotonic = now
+                self.wake_stage = "waiting"
+                self.wake_reason = reason
+                self.wake_requires_fresh_source = require_fresh_source
+                self.wake_fresh_source_seen = not require_fresh_source
             if sustained:
                 self.pacing_tail_ms = ACTIVE_PACING_TAIL_MS
             self.last_pacing_activity_monotonic = now
@@ -1157,9 +1202,10 @@ class WaylandDisplay:
         if request_keyframe:
             self._send_force_keyframe()
         if safe_disconnect:
+            reason = self.wake_reason or "adaptive idle"
             self.request_safe_disconnect(
-                "video did not resume after adaptive idle",
-                {"stale": True, "wake_age_seconds": round(wake_age, 1)},
+                f"video did not resume after {reason}",
+                {"stale": True, "wake_age_seconds": round(wake_age, 1), "wake_reason": reason},
             )
         return GLib.SOURCE_CONTINUE
 
@@ -1235,8 +1281,11 @@ class WaylandDisplay:
     def complete_adaptive_wake(self) -> None:
         """Mark the current wake healthy after the encoder produces a frame."""
         with self.pacing_lock:
-            if self.wake_stage:
+            if self.wake_stage and (not self.wake_requires_fresh_source or self.wake_fresh_source_seen):
                 self.wake_stage = ""
+                self.wake_reason = ""
+                self.wake_requires_fresh_source = False
+                self.wake_fresh_source_seen = False
                 self.pipeline_health = dict(self.pipeline_health)
                 self.pipeline_health.pop("wake_recovery", None)
 
@@ -1780,6 +1829,7 @@ class WaylandDisplay:
     def run(self) -> None:
         try:
             self.write_client_state()
+            self.wait_for_previous_virtual_monitor()
             self.create_monitor()
             if self.display_mode == "extend":
                 self.restore_monitor_layout()

@@ -1,10 +1,10 @@
 {
-  "expires_at": "2027-11-20T09:16:49Z",
-  "notes": "Bounded PipeWire capture clock, duplicate-keepalive filtering, adaptive sparse-to-sustained pacing, and compositor-safe disconnects.",
-  "package_name": "tuxdisplay_0.4.29_all.deb",
-  "package_url": "https://github.com/tpluharik/tuxdisplay/releases/download/v0.4.29/tuxdisplay_0.4.29_all.deb",
-  "release_url": "https://github.com/tpluharik/tuxdisplay/releases/tag/v0.4.29",
-  "sha256": "f14811d7e551df6ec6c2d8c634438aa692eb6fd6bc225a18ca3489e3617cef3f",
-  "signature": "1dMYfBYWSrxorjSteV5he1dANRAzK1GDAOCAqqVKipmm8AnBP4dVXHmapkfrcuM64jI0MDEy94sNImqDRu2ECA==",
-  "version": "0.4.29"
+  "expires_at": "2027-11-21T08:15:10Z",
+  "notes": "Fresh PipeWire verification after GNOME layout changes, one-shot safe disconnect, and stale virtual-monitor teardown protection.",
+  "package_name": "tuxdisplay_0.4.30_all.deb",
+  "package_url": "https://github.com/tpluharik/tuxdisplay/releases/download/v0.4.30/tuxdisplay_0.4.30_all.deb",
+  "release_url": "https://github.com/tpluharik/tuxdisplay/releases/tag/v0.4.30",
+  "sha256": "c0125db761533db60a36d22401b24a2bac816034eb1144d89143d9651fb2b78d",
+  "signature": "XfZnA+3Vr65Syw8/Gk8avwFMuQMr7l6mtitysitANC9bQ7DIpMup+hVOhF6H+uZbymFEWtPoVjsAeXFkidxdCw==",
+  "version": "0.4.30"
 }

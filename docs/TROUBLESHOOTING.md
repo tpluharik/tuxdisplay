@@ -14,14 +14,14 @@ The first three commands are safe to paste into a bug report only after review. 
 
 ## Do not run 0.4.0 on GNOME Wayland
 
-TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. Older releases also had display-refresh and restart-loop failures, 0.4.26 could remain on a cached frame after a failed idle wake, 0.4.27 could keep operating after Mutter closed its session, and 0.4.28 could deliver sparse compositor updates in irregular bursts. Upgrade to 0.4.29 or newer for the current capture pacing, compositor-lifecycle safeguards, and hardened compatibility/update paths:
+TuxDisplay 0.4.0 could send invalid native touch state to Mutter and abort GNOME Shell. Older releases also had display-refresh and restart-loop failures, 0.4.26 could remain on a cached frame after a failed idle wake, 0.4.27 could keep operating after Mutter closed its session, 0.4.28 could deliver sparse compositor updates in irregular bursts, and 0.4.29 could accept a cached frame after a layout change while Mutter's capture node was stale. Upgrade to 0.4.30 or newer for the current capture pacing, compositor-lifecycle safeguards, and hardened compatibility/update paths:
 
 ~~~sh
-sudo apt install ./tuxdisplay_0.4.29_all.deb
+sudo apt install ./tuxdisplay_0.4.30_all.deb
 tuxdisplay restart
 ~~~
 
-Version 0.4.1 introduced guarded pointer translation. Versions 0.4.2–0.4.17 added cached-keyframe, receiver-health, layout-refresh, and bounded pipeline recovery. Versions 0.4.18–0.4.20 separated cursor work from video and added detailed performance telemetry. Version 0.4.21 added AVNC, 0.4.23 added safe lid-close cleanup, and 0.4.24 added guarded native single-finger touch. Version 0.4.25 hardened the opt-in compatibility and updater paths. Version 0.4.26 restored configured-rate output during activity. Version 0.4.28 replaced automatic capture rebuilds with one safe disconnect and listens for Mutter's session-close signal. Version 0.4.29 restores a bounded PipeWire capture clock while filtering its copied keepalives from activity and telemetry.
+Version 0.4.1 introduced guarded pointer translation. Versions 0.4.2–0.4.17 added cached-keyframe, receiver-health, layout-refresh, and bounded pipeline recovery. Versions 0.4.18–0.4.20 separated cursor work from video and added detailed performance telemetry. Version 0.4.21 added AVNC, 0.4.23 added safe lid-close cleanup, and 0.4.24 added guarded native single-finger touch. Version 0.4.25 hardened the opt-in compatibility and updater paths. Version 0.4.26 restored configured-rate output during activity. Version 0.4.28 replaced automatic capture rebuilds with one safe disconnect and listens for Mutter's session-close signal. Version 0.4.29 restores a bounded PipeWire capture clock while filtering its copied keepalives from activity and telemetry. Version 0.4.30 verifies a fresh PipeWire sequence after a layout change and waits for clean virtual-monitor teardown before the next manual start.
 
 ## Motion on the tablet is jumpy
 
@@ -80,9 +80,9 @@ If the default automatic disconnection does not occur, run `tuxdisplay status`, 
 
 ## The image freezes after rearranging displays
 
-Version 0.4.28 listens for GNOME monitor-topology changes, saves the complete logical layout under stable monitor identities, and keeps capture on the same Mutter PipeWire node. It ignores duplicate notifications and waits for a burst of real changes to settle before priming OpenDisplay with a cached frame and requesting a fresh H.264 keyframe. No pipeline state transition occurs during rearrangement. Upgrade if rearranging screens leaves the tablet on its previous frame.
+Version 0.4.30 listens for GNOME monitor-topology changes, saves the complete logical layout under stable monitor identities, and keeps capture on the same Mutter PipeWire node. It ignores duplicate notifications and waits for a burst of real changes to settle before priming OpenDisplay with a cached frame and requesting a fresh H.264 keyframe. No pipeline state transition occurs during rearrangement. The wake remains pending until a genuinely new PipeWire sequence is encoded; cached paced output cannot conceal a stale node. If no fresh frame arrives within four seconds, the service disconnects once and stays stopped. The next manual start waits for old `Meta-0` teardown before creating another monitor.
 
-On 0.4.12 or newer, wait about two seconds after pressing **Apply** in GNOME Displays. The log should contain one `monitor arrangement changed; refreshing the video stream` line. If the image remains frozen, stop TuxDisplay before collecting the service log; the service will not restart itself or recreate the virtual monitor.
+Wait about two seconds after pressing **Apply** in GNOME Displays. The log should contain one `monitor arrangement changed; refreshing the video stream` line. If capture recovers, fresh-frame telemetry rises and the wake state clears. If diagnostics report `recovery=safe disconnect` with `wake_reason=monitor layout change`, collect the service log and start TuxDisplay again only after GNOME remains responsive. The service will not restart itself or recreate the virtual monitor.
 
 ## The image pauses after changing TuxDisplay resolution
 

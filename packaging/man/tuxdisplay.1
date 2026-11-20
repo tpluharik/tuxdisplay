@@ -1,4 +1,4 @@
-.TH TUXDISPLAY 1 "November 2026" "TuxDisplay 0.4.29" "User Commands"
+.TH TUXDISPLAY 1 "November 2026" "TuxDisplay 0.4.30" "User Commands"
 .SH NAME
 tuxdisplay \- use an iPad or Android tablet as a secondary Linux display
 .SH SYNOPSIS
@@ -31,7 +31,7 @@ that workspace is not an extension of the current desktop.
 Version 0.4.0 must not be used on GNOME Wayland because its touch path could
 abort Mutter. Versions 0.4.3 and 0.4.4 have connection regressions, 0.4.9 can
 stall capture while rearranging displays, and 0.4.11 can restart-loop a virtual
-monitor after capture failure. Use 0.4.29 or newer for all documented stability,
+monitor after capture failure. Use 0.4.30 or newer for all documented stability,
 input, rendering, compatibility-path security, and updater fixes.
 .PP
 The GTK manager and three-state indicator are one single-instance application.
@@ -123,6 +123,12 @@ monitor identities because Mutter gives each new virtual output a different
 identity. Rearranging displays in GNOME saves that layout and refreshes
 capture on the same PipeWire node without recreating the monitor or USB
 connection.
+.PP
+Version 0.4.30 requires a genuinely new PipeWire frame after a GNOME display
+rearrangement. A cached paced frame cannot falsely mark stale capture healthy.
+If fresh capture does not resume within four seconds, TuxDisplay disconnects
+once without recreating compositor state. A later manual start waits for the
+old Meta-0 to disappear before asking Mutter for another virtual monitor.
 .SS GNOME Wayland Mirror
 Mutter captures the current primary physical monitor without creating or
 reconfiguring a virtual output. TuxDisplay preserves the source aspect ratio

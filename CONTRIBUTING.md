@@ -52,8 +52,8 @@ For a package candidate:
 
 ~~~sh
 ./build-deb.sh
-dpkg-deb --info dist/tuxdisplay_0.4.29_all.deb
-dpkg-deb --contents dist/tuxdisplay_0.4.29_all.deb
+dpkg-deb --info dist/tuxdisplay_0.4.30_all.deb
+dpkg-deb --contents dist/tuxdisplay_0.4.30_all.deb
 ~~~
 
 The build replaces the package for the current version, normalizes the complete staging tree, stores Debian archive members without compressor-version variance, and regenerates `dist/SHA256SUMS`. Keep `SOURCE_DATE_EPOCH` equal to the newest Debian changelog timestamp. Build products are ignored and belong in GitHub Releases, never source control.
@@ -82,6 +82,7 @@ For GNOME Wayland changes:
 18. Confirm AVNC is off by default. Select exactly one authorized device, use the fresh session password at Android `127.0.0.1:5900`, reject a second client, test throttling, and confirm no mapping is created for another authorized tablet.
 19. With **Keep awake with lid closed** disabled, close the lid on a safe test machine and confirm the receiver disconnects, the user service stops, and `Meta-0` is removed before sleep. Reopen the lid and confirm TuxDisplay remains stopped. Enable the option and confirm the service instead remains active while lid sleep is inhibited.
 20. Leave the tablet on a static desktop until `wake_state=idle`, then interact on the tablet. Confirm a frame arrives immediately and the wake state clears. With a deliberately blocked encoder in a test environment, confirm one keyframe request near 0.5 seconds, one safe disconnect near four seconds, and no capture rebuild, service restart, or repeated virtual-monitor creation.
+21. Rearrange the GNOME monitors while video is active. Confirm the layout wake clears only after a new PipeWire sequence is encoded. Simulate a stale capture node and confirm one safe disconnect after four seconds, then confirm a manual start waits for old `Meta-0` removal and never overlaps two virtual monitors.
 
 For fallback changes:
 

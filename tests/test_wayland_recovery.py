@@ -61,6 +61,9 @@ class WaylandPipelineRecoveryTests(unittest.TestCase):
         display.pacing_tail_ms = MODULE.SPARSE_PACING_TAIL_MS
         display.wake_started_monotonic = 0.0
         display.wake_stage = ""
+        display.wake_reason = ""
+        display.wake_requires_fresh_source = False
+        display.wake_fresh_source_seen = False
         display.wake_keyframe_requests = 0
         display.wake_safe_disconnects = 0
         display.pipeline = object()
@@ -232,7 +235,7 @@ class WaylandPipelineRecoveryTests(unittest.TestCase):
 
         display.request_safe_disconnect.assert_called_once_with(
             "video did not resume after adaptive idle",
-            {"stale": True, "wake_age_seconds": 4.0},
+            {"stale": True, "wake_age_seconds": 4.0, "wake_reason": "adaptive idle"},
         )
         self.assertEqual(display.wake_safe_disconnects, 1)
         self.assertEqual(display.wake_stage, "disconnecting")
@@ -254,12 +257,115 @@ class WaylandPipelineRecoveryTests(unittest.TestCase):
     def test_encoded_frame_completes_pending_wake(self) -> None:
         display = self.make_pacing_display()
         display.wake_stage = "keyframe"
+        display.wake_reason = "monitor layout change"
         display.pipeline_health = {"wake_recovery": "capture refreshed", "fallback": "software"}
 
         display.complete_adaptive_wake()
 
         self.assertEqual(display.wake_stage, "")
+        self.assertEqual(display.wake_reason, "")
         self.assertEqual(display.pipeline_health, {"fallback": "software"})
+
+    def test_layout_change_verifies_capture_even_if_pacing_is_active(self) -> None:
+        display = self.make_pacing_display()
+        display.remote_session_alive = True
+        display.pacing_active = True
+        display.opendisp = mock.Mock()
+        display.refresh_cursor_tracking_geometry = mock.Mock()
+
+        with mock.patch.object(MODULE.time, "monotonic", return_value=20.0):
+            display.refresh_capture_after_layout_change()
+
+        self.assertTrue(display.pacing_active)
+        self.assertEqual(display.wake_stage, "waiting")
+        self.assertEqual(display.wake_reason, "monitor layout change")
+        self.assertTrue(display.wake_requires_fresh_source)
+        self.assertFalse(display.wake_fresh_source_seen)
+        display.opendisp.recover_video.assert_called_once_with()
+
+    def test_cached_encoded_frame_cannot_satisfy_layout_verification(self) -> None:
+        display = self.make_pacing_display()
+        display.wake_stage = "waiting"
+        display.wake_reason = "monitor layout change"
+        display.wake_requires_fresh_source = True
+        display.wake_fresh_source_seen = False
+
+        display.complete_adaptive_wake()
+
+        self.assertEqual(display.wake_stage, "waiting")
+        self.assertEqual(display.wake_reason, "monitor layout change")
+
+    def test_fresh_pipewire_sequence_allows_layout_verification_to_complete(self) -> None:
+        display = self.make_pacing_display()
+        display.pacing_active = True
+        display.wake_stage = "waiting"
+        display.wake_reason = "monitor layout change"
+        display.wake_requires_fresh_source = True
+        display.wake_fresh_source_seen = False
+
+        with mock.patch.object(MODULE.time, "monotonic", return_value=20.1):
+            display.on_source_buffer(None, self.buffer_info(99))
+        display.complete_adaptive_wake()
+
+        self.assertEqual(display.wake_stage, "")
+        self.assertEqual(display.wake_reason, "")
+        self.assertFalse(display.wake_requires_fresh_source)
+
+    def test_missing_pipewire_sequence_cannot_satisfy_layout_verification(self) -> None:
+        display = self.make_pacing_display()
+        display.pacing_active = True
+        display.wake_stage = "waiting"
+        display.wake_reason = "monitor layout change"
+        display.wake_requires_fresh_source = True
+        display.wake_fresh_source_seen = False
+
+        display.on_source_buffer(None, self.buffer_info(MODULE.Gst.BUFFER_OFFSET_NONE))
+        display.complete_adaptive_wake()
+
+        self.assertEqual(display.wake_stage, "waiting")
+        self.assertFalse(display.wake_fresh_source_seen)
+
+    def test_failed_layout_change_wake_disconnects_without_restart(self) -> None:
+        display = self.make_pacing_display()
+        display.remote_session_alive = True
+        display.opendisp = mock.Mock()
+        display.refresh_cursor_tracking_geometry = mock.Mock()
+
+        with mock.patch.object(MODULE.time, "monotonic", return_value=20.0):
+            display.refresh_capture_after_layout_change()
+        with mock.patch.object(MODULE.time, "monotonic", return_value=20.5):
+            display.refresh_adaptive_pacing()
+        with mock.patch.object(MODULE.time, "monotonic", return_value=24.0):
+            display.refresh_adaptive_pacing()
+
+        display.request_safe_disconnect.assert_called_once_with(
+            "video did not resume after monitor layout change",
+            {"stale": True, "wake_age_seconds": 4.0, "wake_reason": "monitor layout change"},
+        )
+
+    def test_start_waits_until_previous_virtual_monitor_is_removed(self) -> None:
+        display = self.make_pacing_display()
+        display.display_mode = "extend"
+        virtual = [(('Meta-0', 'MetaVendor', 'Virtual remote monitor', '0x1'), [], {})]
+        display.get_display_state = mock.Mock(side_effect=[(1, virtual, [], {}), (2, [], [], {})])
+
+        with mock.patch.object(MODULE.time, "monotonic", side_effect=[10.0, 10.1]), mock.patch.object(
+            MODULE.time, "sleep"
+        ) as sleep:
+            display.wait_for_previous_virtual_monitor()
+
+        self.assertEqual(display.get_display_state.call_count, 2)
+        sleep.assert_called_once_with(MODULE.VIRTUAL_MONITOR_POLL_SECONDS)
+
+    def test_start_refuses_to_overlap_a_stale_virtual_monitor(self) -> None:
+        display = self.make_pacing_display()
+        display.display_mode = "extend"
+        virtual = [(('Meta-0', 'MetaVendor', 'Virtual remote monitor', '0x1'), [], {})]
+        display.get_display_state = mock.Mock(return_value=(1, virtual, [], {}))
+
+        with mock.patch.object(MODULE.time, "monotonic", side_effect=[10.0, 15.1]):
+            with self.assertRaisesRegex(RuntimeError, "previous virtual monitor"):
+                display.wait_for_previous_virtual_monitor()
 
     def test_stalled_encoded_frame_callback_requests_safe_disconnect(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
