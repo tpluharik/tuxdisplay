@@ -319,7 +319,7 @@ class WaylandPipelineRecoveryTests(unittest.TestCase):
         display.wake_requires_fresh_source = True
         display.wake_fresh_source_seen = False
 
-        display.on_source_buffer(None, self.buffer_info(MODULE.Gst.BUFFER_OFFSET_NONE))
+        display.on_source_buffer(None, self.buffer_info((1 << 64) - 1))
         display.complete_adaptive_wake()
 
         self.assertEqual(display.wake_stage, "waiting")
